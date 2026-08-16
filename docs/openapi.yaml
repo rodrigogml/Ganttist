@@ -1,0 +1,71 @@
+openapi: 3.1.0
+info: { title: Ganttist Internal API, version: 0.1.0 }
+servers: [{ url: /api/v1 }]
+paths:
+  /health:
+    get:
+      operationId: health
+      responses: { '200': { description: Aplicação disponível } }
+  /workspace:
+    get:
+      operationId: workspace
+      responses:
+        '200':
+          description: Snapshot calculado do Gantt
+          content: { application/json: { schema: { $ref: '#/components/schemas/Envelope' } } }
+  /schedule/simulate:
+    post:
+      operationId: simulateSchedule
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [today, tasks]
+              properties:
+                today: { type: string, format: date }
+                tasks: { type: array, maxItems: 5000, items: { $ref: '#/components/schemas/TaskInput' } }
+                dependencies: { type: array, items: { $ref: '#/components/schemas/Dependency' } }
+      responses:
+        '200': { description: Cenário não persistido }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /webhooks/todoist:
+    post:
+      operationId: todoistWebhook
+      parameters:
+        - { in: header, name: X-Todoist-Hmac-SHA256, required: true, schema: { type: string } }
+      responses:
+        '202': { description: Evento autenticado, deduplicado e aceito }
+        '401': { description: Assinatura inválida }
+components:
+  schemas:
+    Envelope:
+      type: object
+      required: [data]
+      properties: { data: { type: object }, meta: { type: object } }
+    TaskInput:
+      type: object
+      required: [id, title, duration]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        start: { type: [string, 'null'], format: date }
+        duration: { type: integer, minimum: 1, maximum: 3650 }
+        completed: { type: boolean, default: false }
+    Dependency:
+      type: object
+      required: [from, to, type]
+      properties:
+        from: { type: string }
+        to: { type: string }
+        type: { type: string, enum: [FS, SS, FF, SF] }
+  responses:
+    ValidationError:
+      description: Entrada inválida
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [message, errors]
+            properties: { message: { type: string }, errors: { type: object } }
