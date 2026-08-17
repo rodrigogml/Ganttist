@@ -11,6 +11,10 @@ return [
         'api_url' => env('TODOIST_API_URL', 'https://api.todoist.com/api/v1'),
     ],
 
+    'benchmark' => [
+        'enabled' => env('GANTTIST_BENCHMARK_ENABLED', false),
+    ],
+
     /*
     |--------------------------------------------------------------------------
     | Third Party Services

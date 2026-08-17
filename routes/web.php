@@ -9,5 +9,10 @@ Route::post('/auth/verify', [AuthController::class, 'verify'])->middleware('thro
 Route::post('/auth/logout', [AuthController::class, 'logout'])->middleware('auth');
 Route::get('/oauth/todoist/redirect', [TodoistOAuthController::class, 'redirect'])->middleware('auth');
 Route::get('/oauth/todoist/callback', [TodoistOAuthController::class, 'callback'])->middleware('auth');
+Route::get('/benchmark', function () {
+    abort_unless(config('services.benchmark.enabled'), 404);
+
+    return view('benchmark');
+});
 
 Route::view('/{path?}', 'app')->where('path', '^(?!api).*$');
