@@ -42,47 +42,57 @@ final class WorkspaceController extends Controller
     {
         $tasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'];
         $sections = $snapshot['sections']['results'] ?? $snapshot['sections'];
-        $bySection = [];
-        foreach ($sections as $section) $bySection[$section['id']] = $section['name'];
-        $mapped = [];
+        $nodes = [];
         foreach ($tasks as $task) {
+            $id = (string) $task['id'];
+            $nodes[$id] = ['task' => $task, 'parent_id' => ! empty($task['parent_id']) ? (string) $task['parent_id'] : null, 'section_id' => ! empty($task['section_id']) ? (string) $task['section_id'] : null];
+        }
+        $children = [];
+        $roots = [];
+        foreach ($nodes as $id => $node) {
+            if ($node['parent_id'] && isset($nodes[$node['parent_id']])) $children[$node['parent_id']][] = $id;
+            else $roots[] = $id;
+        }
+        $sortIds = function (array &$ids) use ($nodes): void {
+            usort($ids, fn (string $left, string $right): int => ((int) ($nodes[$left]['task']['child_order'] ?? $nodes[$left]['task']['order'] ?? 0)) <=> ((int) ($nodes[$right]['task']['child_order'] ?? $nodes[$right]['task']['order'] ?? 0)));
+        };
+        $sortIds($roots);
+        foreach ($children as &$ids) $sortIds($ids);
+        unset($ids);
+        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children): array {
+            $task = $nodes[$id]['task'];
             $start = $task['due']['date'] ?? null;
             $finish = $task['deadline_date'] ?? $start;
-            $mapped[] = [
-                'id' => (string) $task['id'], 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $task['parent_id'] ? 1 : 0,
-                'start' => $start, 'finish' => $finish, 'progress' => ($task['is_completed'] ?? false) ? 100 : 0,
-                'status' => ($task['is_completed'] ?? false) ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false,
-                'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null, 'section' => $bySection[$task['section_id'] ?? ''] ?? null,
-            ];
-        }
-        $completed = count(array_filter($mapped, fn (array $task): bool => $task['status'] === 'completed'));
-        $total = count($mapped);
-        $groups = [];
-        foreach (array_values(array_unique(array_filter(array_column($mapped, 'section')))) as $section) {
-            $members = array_values(array_filter($mapped, fn (array $task): bool => $task['section'] === $section));
-            $dates = array_values(array_filter(array_merge(array_column($members, 'start'), array_column($members, 'finish'))));
-            $groups[] = ['id' => 'section:'.sha1($section), 'title' => $section, 'kind' => 'group', 'level' => 0, 'start' => $dates ? min($dates) : null, 'finish' => $dates ? max($dates) : null, 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['status'] === 'completed')) / count($members) * 100) : 0, 'status' => 'running', 'critical' => false];
+            $item = ['id' => $id, 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'progress' => ($task['is_completed'] ?? false) ? 100 : 0, 'status' => ($task['is_completed'] ?? false) ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
+            $result = [$item];
+            foreach ($children[$id] ?? [] as $childId) $result = [...$result, ...$mapTask($childId, $level + 1, $id)];
+
+            return $result;
+        };
+        $rootsBySection = [];
+        $unsectionedRoots = [];
+        foreach ($roots as $id) {
+            $sectionId = $nodes[$id]['section_id'];
+            if ($sectionId) $rootsBySection[$sectionId][] = $id;
+            else $unsectionedRoots[] = $id;
         }
         $ordered = [];
-        foreach ($groups as $group) {
-            $ordered[] = $group;
-            foreach ($mapped as $task) {
-                if ($task['section'] === $group['title']) {
-                    $task['level'] = 1;
-                    unset($task['section']);
-                    $ordered[] = $task;
-                }
-            }
+        foreach ($sections as $section) {
+            $sectionId = (string) $section['id'];
+            $groupId = 'section:'.$sectionId;
+            $members = [];
+            foreach ($rootsBySection[$sectionId] ?? [] as $rootId) $members = [...$members, ...$mapTask($rootId, 0, $groupId)];
+            $dates = array_values(array_filter(array_merge(array_column($members, 'start'), array_column($members, 'finish'))));
+            $ordered[] = ['id' => $groupId, 'title' => (string) $section['name'], 'kind' => 'group', 'level' => 0, 'parent_id' => null, 'has_children' => $members !== [], 'start' => $dates ? min($dates) : null, 'finish' => $dates ? max($dates) : null, 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['status'] === 'completed')) / count($members) * 100) : 0, 'status' => 'running', 'critical' => false];
+            $ordered = [...$ordered, ...$members];
         }
-        foreach ($mapped as $task) {
-            if ($task['section'] === null) {
-                unset($task['section']);
-                $ordered[] = $task;
-            }
-        }
+        foreach ($unsectionedRoots as $rootId) $ordered = [...$ordered, ...$mapTask($rootId, 0, null)];
+        $leafTasks = array_values(array_filter($ordered, fn (array $task): bool => $task['kind'] === 'task'));
+        $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === 'completed'));
+        $total = count($leafTasks);
 
         $dependencies = DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('status', 'active')->get()->map(fn (object $dependency): array => ['id' => $dependency->id, 'from' => $dependency->predecessor_todoist_task_id, 'to' => $dependency->successor_todoist_task_id, 'type' => $dependency->type, 'critical' => false])->values()->all();
-        return ['data' => ['project' => ['id' => $project->id, 'name' => $project->display_name, 'source' => 'Todoist', 'sync_status' => 'synced', 'updated_at' => now()->toIso8601String()], 'calendar' => ['timezone' => 'America/Sao_Paulo', 'working_days' => [1, 2, 3, 4, 5], 'exceptions' => []], 'tasks' => $ordered, 'dependencies' => $dependencies, 'stats' => ['progress' => $total ? (int) round($completed / $total * 100) : 0, 'completed' => $completed, 'total' => $total, 'critical' => 0, 'unscheduled' => count(array_filter($mapped, fn (array $task): bool => $task['status'] === 'unscheduled'))]], 'meta' => ['demo' => false, 'message' => 'Dados sincronizados do Todoist.']];
+        return ['data' => ['project' => ['id' => $project->id, 'name' => $project->display_name, 'source' => 'Todoist', 'sync_status' => 'synced', 'updated_at' => now()->toIso8601String()], 'calendar' => ['timezone' => 'America/Sao_Paulo', 'working_days' => [1, 2, 3, 4, 5], 'exceptions' => []], 'tasks' => $ordered, 'dependencies' => $dependencies, 'stats' => ['progress' => $total ? (int) round($completed / $total * 100) : 0, 'completed' => $completed, 'total' => $total, 'critical' => 0, 'unscheduled' => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === 'unscheduled'))]], 'meta' => ['demo' => false, 'message' => 'Dados sincronizados do Todoist.']];
     }
 
     private function tasks(): array

@@ -14,7 +14,7 @@ final class EventStreamController extends Controller
 
         return response()->stream(function () use ($userId): void {
             set_time_limit(0);
-            $lastMarker = null;
+            $lastMarker = (string) (DB::table('todoist_integrations')->where('user_id', $userId)->value('updated_at') ?? '');
             for ($attempt = 0; $attempt < 24; $attempt++) {
                 $marker = (string) (DB::table('todoist_integrations')->where('user_id', $userId)->value('updated_at') ?? '');
                 if ($marker !== $lastMarker) {

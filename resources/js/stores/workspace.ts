@@ -11,7 +11,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (statusFilter.value !== 'all' && t.status !== statusFilter.value) return false
     return true
   }))
-  async function load() { loading.value=true; try { const r=await fetch('/api/v1/workspace'); if(!r.ok) throw new Error('Não foi possível carregar o projeto.'); workspace.value=(await r.json()).data } catch(e) { error.value=e instanceof Error?e.message:'Erro inesperado' } finally { loading.value=false } }
+  async function load() { const initialLoad=workspace.value===null; if(initialLoad)loading.value=true; error.value=''; try { const r=await fetch('/api/v1/workspace'); if(!r.ok) throw new Error('Não foi possível carregar o projeto.'); workspace.value=(await r.json()).data } catch(e) { error.value=e instanceof Error?e.message:'Erro inesperado' } finally { if(initialLoad)loading.value=false } }
   function toggleSelect(id:string, additive=false) { if(!additive) selected.value=[]; selected.value=selected.value.includes(id)?selected.value.filter(v=>v!==id):[...selected.value,id] }
   function toggleGroup(id:string) { const next=new Set(hiddenGroups.value); next.has(id)?next.delete(id):next.add(id); hiddenGroups.value=next }
   function updateTask(task:Task) { if(!workspace.value)return; workspace.value.tasks=workspace.value.tasks.map(t=>t.id===task.id?task:t) }

@@ -6,14 +6,15 @@ import { useAuthStore } from './stores/auth'
 import { useWorkspaceStore } from './stores/workspace'
 import type { Task } from './types'
 import { barWidth, civilDayOffset } from './utils/timeline'
-const store=useWorkspaceStore(); const auth=useAuthStore(); const needsTodoist=ref(false); let eventSource:EventSource|null=null; let eventReconnect:ReturnType<typeof setTimeout>|null=null
+const store=useWorkspaceStore(); const auth=useAuthStore(); const needsTodoist=ref(false); const appearance=ref(false), textScale=ref<'compact'|'comfortable'|'large'>('comfortable'), spacing=ref<'compact'|'comfortable'|'spacious'>('comfortable'); let eventSource:EventSource|null=null; let eventReconnect:ReturnType<typeof setTimeout>|null=null
 const csrfHeaders=()=>{const token=document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content;return token?{'X-CSRF-TOKEN':token}:{}}
 function connectEvents(){eventSource?.close();eventSource=new EventSource('/api/v1/events');eventSource.addEventListener('workspace.updated',()=>store.load());eventSource.onerror=()=>{eventSource?.close();eventReconnect=setTimeout(connectEvents,5000)}}
 let initializedUserId:string|null=null
 async function initializeWorkspace(){if(!auth.user||initializedUserId===auth.user.id)return;initializedUserId=auth.user.id;try{const response=await fetch('/api/v1/todoist/status',{headers:{Accept:'application/json'}});if(!response.ok)throw new Error('Não foi possível verificar a conexão com o Todoist.');const status=await response.json();needsTodoist.value=!status.connected||!status.project;if(!needsTodoist.value)await store.load();connectEvents()}catch(error){needsTodoist.value=true;toast.value=error instanceof Error?error.message:'Não foi possível carregar sua configuração.'}}
 watch(()=>auth.user?.id,()=>{if(auth.user)initializeWorkspace();else{initializedUserId=null;eventSource?.close()}})
-onMounted(async()=>{await auth.bootstrap();await initializeWorkspace()})
+onMounted(async()=>{const savedText=localStorage.getItem('ganttist.text-scale'),savedSpacing=localStorage.getItem('ganttist.spacing');if(savedText==='compact'||savedText==='comfortable'||savedText==='large')textScale.value=savedText;if(savedSpacing==='compact'||savedSpacing==='comfortable'||savedSpacing==='spacious')spacing.value=savedSpacing;await auth.bootstrap();await initializeWorkspace()})
 onUnmounted(()=>{eventSource?.close();if(eventReconnect)clearTimeout(eventReconnect)})
+watch([textScale,spacing],()=>{localStorage.setItem('ganttist.text-scale',textScale.value);localStorage.setItem('ganttist.spacing',spacing.value)})
 const drawer=ref(false), notices=ref(false), filters=ref(false), simulating=ref(false), toast=ref(''), simulation=ref<{changes:{task_id:string;start:string;finish:string}[]}|null>(null)
 const dependencyTarget=ref(''), dependencyType=ref<'FS'|'SS'|'FF'|'SF'>('FS')
 const drag=ref<{taskId:string;mode:'move'|'left'|'right';originX:number;start:string;finish:string}|null>(null)
@@ -21,11 +22,12 @@ const activeTask=computed(()=>store.workspace?.tasks.find(t=>t.id===store.select
 const start=new Date('2026-08-17T12:00:00'), end=new Date('2026-09-19T12:00:00')
 const days=computed(()=>{ const r:Date[]=[]; for(let d=new Date(start);d<end;d.setDate(d.getDate()+1))r.push(new Date(d)); return r })
 const dayWidth=computed(()=>store.zoom==='day'?64:store.zoom==='week'?42:24)
+const rowHeight=computed(()=>spacing.value==='compact'?44:spacing.value==='comfortable'?49:54)
 const px=(date:string|null)=>date?civilDayOffset(start,new Date(date+'T12:00:00'))*dayWidth.value:0
 const width=(task:Task)=>barWidth(task.start,task.finish,dayWidth.value)
-const visibleTasks=computed(()=>store.tasks.filter((task,i,all)=>{ if(task.level===0)return true; const group=[...all.slice(0,i)].reverse().find(t=>t.kind==='group'); return !group||!store.hiddenGroups.has(group.id) }))
+const visibleTasks=computed(()=>{const all=new Map(store.tasks.map(task=>[task.id,task]));return store.tasks.filter(task=>{let parentId=task.parent_id;while(parentId){if(store.hiddenGroups.has(parentId))return false;parentId=all.get(parentId)?.parent_id}return true})})
 const monthSegments=computed(()=>{const out:{label:string;span:number}[]=[];days.value.forEach(d=>{const label=d.toLocaleDateString('pt-BR',{month:'long',year:'numeric'});const last=out.at(-1);last?.label===label?last.span++:out.push({label,span:1})});return out})
-const pathFor=(from:string,to:string)=>{const a=visibleTasks.value.findIndex(t=>t.id===from),b=visibleTasks.value.findIndex(t=>t.id===to),ft=visibleTasks.value[a],tt=visibleTasks.value[b];if(a<0||b<0||!ft?.finish||!tt?.start)return '';const x1=px(ft.finish)+dayWidth.value-6,x2=px(tt.start)+4,y1=a*54+27,y2=b*54+27,mid=x1+Math.max(18,(x2-x1)/2);return `M${x1},${y1} H${mid} V${y2} H${x2}`}
+const pathFor=(from:string,to:string)=>{const a=visibleTasks.value.findIndex(t=>t.id===from),b=visibleTasks.value.findIndex(t=>t.id===to),ft=visibleTasks.value[a],tt=visibleTasks.value[b];if(a<0||b<0||!ft?.finish||!tt?.start)return '';const x1=px(ft.finish)+dayWidth.value-6,x2=px(tt.start)+4,y1=a*rowHeight.value+rowHeight.value/2,y2=b*rowHeight.value+rowHeight.value/2,mid=x1+Math.max(18,(x2-x1)/2);return `M${x1},${y1} H${mid} V${y2} H${x2}`}
 function select(task:Task,e:MouseEvent){store.toggleSelect(task.id,e.ctrlKey||e.metaKey);drawer.value=true}
 function schedulePayload(){const tasks=store.workspace?.tasks.filter(task=>task.kind==='task').map(task=>({id:task.id,title:task.title,start:task.start,duration:task.start&&task.finish?Math.max(1,Math.round((Date.parse(task.finish)-Date.parse(task.start))/86400000)+1):1,completed:task.status==='completed'}))??[];return {today:new Date().toISOString().slice(0,10),tasks,dependencies:store.workspace?.dependencies.map(dependency=>({from:dependency.from,to:dependency.to,type:dependency.type}))??[]}}
 async function simulate(){simulating.value=true;simulation.value=null;try{const response=await fetch('/api/v1/schedule/simulate',{method:'POST',headers:{'Content-Type':'application/json',Accept:'application/json',...csrfHeaders()},body:JSON.stringify(schedulePayload())});if(!response.ok)throw new Error('Não foi possível calcular o cenário.');simulation.value=(await response.json()).data;toast.value=`Simulação pronta: ${simulation.value?.changes.length??0} tarefa(s) seriam ajustadas`}catch(error){toast.value=error instanceof Error?error.message:'Não foi possível calcular o cenário.'}finally{simulating.value=false;setTimeout(()=>toast.value='',3500)}}
@@ -45,11 +47,12 @@ function statusLabel(s:string){return ({completed:'Concluída',running:'Em execu
 <main v-if="auth.loading" class="loading"><div class="loader-logo">G</div><p>Verificando seu acesso…</p></main>
 <AuthGate v-else-if="!auth.user" :auth="auth" />
 <TodoistSetup v-else-if="needsTodoist" @ready="needsTodoist=false;store.load()" />
-<div v-else class="app-shell">
+<div v-else class="app-shell" :class="[`text-${textScale}`, `space-${spacing}`]">
   <header class="topbar">
     <div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><strong>Ganttist</strong></div>
     <div class="project-switcher"><span class="eyebrow">PROJETO TODOIST</span><button><span class="project-dot"></span>{{store.workspace?.project.name||'Carregando…'}} <span class="chevron">⌄</span></button></div>
     <div class="top-actions">
+      <div class="appearance-wrap"><button class="icon-btn appearance-btn" aria-label="Aparência" title="Aparência" @click="appearance=!appearance">A<span>a</span></button><div v-if="appearance" class="appearance-menu"><b>Aparência</b><label>Tamanho do texto<select v-model="textScale"><option value="compact">Menor</option><option value="comfortable">Confortável</option><option value="large">Maior</option></select></label><label>Espaçamento<select v-model="spacing"><option value="compact">Compacto</option><option value="comfortable">Confortável</option><option value="spacious">Espaçoso</option></select></label></div></div>
       <div class="sync-pill"><span class="pulse"></span><span><b>Sincronizado</b><small>agora mesmo</small></span></div>
       <button class="icon-btn" aria-label="Notificações" @click="notices=!notices">◴<em>3</em></button>
       <button class="avatar" title="Sair" @click="auth.logout">{{(auth.user.name||auth.user.email).slice(0,2).toUpperCase()}}</button>
@@ -85,19 +88,19 @@ function statusLabel(s:string){return ({completed:'Concluída',running:'Em execu
         <div class="day-heads"><span v-for="d in days" :class="{weekend:[0,6].includes(d.getDay()),today:d.toISOString().slice(0,10)==='2026-08-16'}" :style="{width:dayWidth+'px'}"><b>{{d.toLocaleDateString('pt-BR',{weekday:'short'}).slice(0,3)}}</b>{{d.getDate()}}</span></div>
       </div>
       <div class="rows-left">
-        <div v-for="task in visibleTasks" :key="task.id" class="task-row" :class="[{group:task.kind==='group',selected:store.selected.includes(task.id)},task.status]" @click="select(task,$event)">
-          <div class="task-name" :style="{paddingLeft:(task.level*24+14)+'px'}"><button v-if="task.kind==='group'" class="collapse" @click.stop="store.toggleGroup(task.id)">{{store.hiddenGroups.has(task.id)?'›':'⌄'}}</button><span v-else class="status-dot"></span><div><b>{{task.title}}</b><small v-if="task.kind==='task'">#{{task.id.toUpperCase()}} · P{{task.priority}}</small></div></div>
+        <div v-for="task in visibleTasks" :key="task.id" class="task-row" :class="[{group:task.kind==='group',parent:task.has_children,selected:store.selected.includes(task.id)},task.status]" :style="{height:rowHeight+'px'}" @click="select(task,$event)">
+          <div class="task-name" :style="{paddingLeft:(task.level*24+14)+'px'}"><button v-if="task.kind==='group'||task.has_children" class="collapse" @click.stop="store.toggleGroup(task.id)">{{store.hiddenGroups.has(task.id)?'›':'⌄'}}</button><span v-else class="status-dot"></span><div><b>{{task.title}}</b><small v-if="task.kind==='task'">#{{task.id.toUpperCase()}} · P{{task.priority}}</small></div></div>
           <div><span v-if="task.assignee" class="mini-avatar">{{task.assignee}}</span><span v-else>—</span></div>
           <div><span class="status-label"><i></i>{{statusLabel(task.status)}}</span></div>
         </div>
       </div>
       <div class="timeline-scroll">
-        <div class="timeline-body" :style="{width:days.length*dayWidth+'px',height:visibleTasks.length*54+'px'}">
+        <div class="timeline-body" :style="{width:days.length*dayWidth+'px',height:visibleTasks.length*rowHeight+'px'}">
           <div v-for="(d,i) in days" class="day-column" :class="{weekend:[0,6].includes(d.getDay())}" :style="{left:i*dayWidth+'px',width:dayWidth+'px'}"></div>
           <div class="today-line" :style="{left:px('2026-08-17')+'px'}"><span>HOJE</span></div>
-          <svg class="dependencies" :width="days.length*dayWidth" :height="visibleTasks.length*54"><defs><marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6Z"/></marker><marker id="arrow-critical" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6Z"/></marker></defs><path v-for="dep in store.workspace?.dependencies" :d="pathFor(dep.from,dep.to)" :class="{critical:dep.critical}" marker-end="url(#arrow)"/></svg>
-          <div v-for="(task,i) in visibleTasks" class="bar-lane" :style="{top:i*54+'px'}">
-            <div v-if="task.start" class="task-bar" :class="[task.kind,task.status,{critical:task.critical}]" :style="{left:px(task.start)+'px',width:width(task)+'px'}" @click.stop="select(task,$event)" @pointerdown.stop="startDrag(task,$event,'move')">
+          <svg class="dependencies" :width="days.length*dayWidth" :height="visibleTasks.length*rowHeight"><defs><marker id="arrow" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6Z"/></marker><marker id="arrow-critical" markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6Z"/></marker></defs><path v-for="dep in store.workspace?.dependencies" :d="pathFor(dep.from,dep.to)" :class="{critical:dep.critical}" marker-end="url(#arrow)"/></svg>
+          <div v-for="(task,i) in visibleTasks" class="bar-lane" :style="{top:i*rowHeight+'px',height:rowHeight+'px'}">
+            <div v-if="task.start" class="task-bar" :class="[task.kind,task.status,{critical:task.critical,parent:task.has_children}]" :style="{left:px(task.start)+'px',width:width(task)+'px'}" @click.stop="select(task,$event)" @pointerdown.stop="startDrag(task,$event,'move')">
               <template v-if="task.kind==='group'"><i class="group-line"></i><i class="group-left"></i><i class="group-right"></i></template>
               <template v-else><i class="progress-fill" :style="{width:task.progress+'%'}"></i><span class="bar-label">{{task.title}} <small v-if="task.progress">{{task.progress}}%</small></span><i class="handle left" @pointerdown.stop="startDrag(task,$event,'left')"></i><i class="handle right" @pointerdown.stop="startDrag(task,$event,'right')"></i></template>
             </div>

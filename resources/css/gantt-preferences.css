@@ -1,0 +1,48 @@
+/* Preferências de leitura do gráfico, aplicadas somente à aplicação autenticada. */
+.appearance-wrap { position: relative; }
+.appearance-btn { display: inline-flex; align-items: baseline; gap: 1px; font-family: Georgia, serif; font-size: 16px; font-weight: 800; }
+.appearance-btn span { font-size: 11px; }
+.appearance-menu { position: absolute; z-index: 30; top: calc(100% + 10px); right: 0; width: 210px; padding: 14px; border: 1px solid #e5e7ed; border-radius: 12px; background: #fff; box-shadow: 0 18px 40px rgba(20, 27, 46, .16); color: #252a3a; }
+.appearance-menu b { display: block; margin-bottom: 10px; font-family: Georgia, serif; font-size: 14px; }
+.appearance-menu label { display: grid; gap: 5px; margin-top: 10px; color: #697085; font-size: 11px; font-weight: 700; }
+.appearance-menu select { width: 100%; padding: 7px 9px; border: 1px solid #dfe2ea; border-radius: 7px; background: #fff; color: #252a3a; font: inherit; }
+
+.task-row.parent:not(.group) { background: linear-gradient(90deg, rgba(92, 82, 184, .045), transparent 72%); }
+.task-row.parent:not(.group) .task-name b { color: #34324f; font-weight: 800; }
+.task-bar.parent { background: #6255bd; box-shadow: 0 3px 9px rgba(70, 58, 155, .18); }
+
+.text-comfortable .gantt-head-left { font-size: 10px; }
+.text-comfortable .months span { font-size: 12px; }
+.text-comfortable .day-heads span { font-size: 11px; }
+.text-comfortable .day-heads b { font-size: 9px; }
+.text-comfortable .task-name b { font-size: 13px; }
+.text-comfortable .task-name small, .text-comfortable .status-label, .text-comfortable .gantt-footer { font-size: 10px; }
+.text-comfortable .bar-label { font-size: 11px; }
+
+.text-large .gantt-head-left { font-size: 11px; }
+.text-large .months span { font-size: 13px; }
+.text-large .day-heads span { font-size: 12px; }
+.text-large .day-heads b { font-size: 10px; }
+.text-large .task-name b { font-size: 15px; }
+.text-large .task-name small, .text-large .status-label, .text-large .gantt-footer { font-size: 11px; }
+.text-large .bar-label { font-size: 12px; }
+
+.space-compact .main { padding: 18px 24px 24px; }
+.space-compact .stats-row { gap: 10px; margin-bottom: 12px; }
+.space-compact .gantt-card { grid-template-rows: 64px auto 38px; }
+.space-compact .timeline-head { height: 64px; }
+.space-compact .months { height: 27px; }
+.space-compact .day-heads { height: 37px; }
+.space-compact .task-bar { top: 9px; height: 24px; }
+.space-compact .task-bar.group { top: 14px; }
+.space-compact .bar-label { line-height: 24px; }
+
+.space-comfortable .main { padding: 22px 28px 28px; }
+.space-comfortable .stats-row { gap: 12px; margin-bottom: 16px; }
+.space-comfortable .gantt-card { grid-template-rows: 68px auto 40px; }
+.space-comfortable .timeline-head { height: 68px; }
+.space-comfortable .months { height: 29px; }
+.space-comfortable .day-heads { height: 39px; }
+.space-comfortable .task-bar { top: 11px; height: 26px; }
+.space-comfortable .task-bar.group { top: 16px; }
+.space-comfortable .bar-label { line-height: 26px; }
