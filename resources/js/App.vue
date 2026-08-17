@@ -47,7 +47,7 @@ function statusLabel(s:string){return ({completed:'Concluída',running:'Em execu
   <main v-else-if="store.error" class="loading"><p>{{store.error}}</p><button class="primary" @click="store.load">Tentar novamente</button></main>
   <main v-else class="main">
     <section class="commandbar">
-      <div class="title-block"><div><span class="eyebrow">VISÃO DE PLANEJAMENTO</span><h1>{{store.workspace?.project.name}}</h1></div><span class="demo-badge">AMBIENTE DEMO</span></div>
+      <div class="title-block"><div><span class="eyebrow">VISÃO DE PLANEJAMENTO</span><h1>{{store.workspace?.project.name}}</h1></div><span v-if="store.workspace?.project.id==='demo-product-launch'" class="demo-badge">AMBIENTE DEMO</span></div>
       <div class="commands">
         <label class="search"><span>⌕</span><input v-model="store.search" placeholder="Buscar tarefa…"><kbd>⌘ K</kbd></label>
         <div class="segmented"><button :class="{active:store.zoom==='day'}" @click="store.zoom='day'">Dia</button><button :class="{active:store.zoom==='week'}" @click="store.zoom='week'">Semana</button><button :class="{active:store.zoom==='month'}" @click="store.zoom='month'">Mês</button></div>
