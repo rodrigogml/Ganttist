@@ -22,6 +22,7 @@ final class DependencyController extends Controller
     {
         $data = $request->validate(['from' => ['required', 'string', 'max:255'], 'to' => ['required', 'string', 'max:255', 'different:from'], 'type' => ['required', 'in:FS,SS,FF,SF']]);
         $project = $this->project($request);
+        abort_if($this->wouldCycle($project->id, $data['from'], $data['to']), 422, 'Essa dependência criaria um ciclo no grafo.');
         $id = (string) Str::ulid();
         DB::table('task_dependencies')->insert(['id' => $id, 'gantt_project_id' => $project->id, 'predecessor_todoist_task_id' => $data['from'], 'successor_todoist_task_id' => $data['to'], 'type' => $data['type'], 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
 
@@ -43,5 +44,21 @@ final class DependencyController extends Controller
         abort_unless($project, 409, 'Selecione um projeto Todoist primeiro.');
 
         return $project;
+    }
+
+    private function wouldCycle(string $projectId, string $from, string $to): bool
+    {
+        $edges = DB::table('task_dependencies')->where('gantt_project_id', $projectId)->where('status', 'active')->get()->groupBy('predecessor_todoist_task_id');
+        $seen = [];
+        $pending = [$to];
+        while ($pending) {
+            $current = array_pop($pending);
+            if ($current === $from) return true;
+            if (isset($seen[$current])) continue;
+            $seen[$current] = true;
+            foreach ($edges->get($current, []) as $edge) $pending[] = $edge->successor_todoist_task_id;
+        }
+
+        return false;
     }
 }
