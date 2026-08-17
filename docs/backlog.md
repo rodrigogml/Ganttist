@@ -2,9 +2,8 @@
 
 ## P0 — completar MVP
 
-- Ligar SPA a autenticação, projetos e comandos persistentes reais.
-- Completar Todoist Gateway, mocks/contract tests e reconciliação incremental.
-- Implementar operação lógica de cascata, workers, retries e SSE.
+- Homologar OAuth, webhook e sincronização contra uma conta Todoist real.
+- Completar operação lógica de cascata com retries, SSE e fila quando o volume justificar.
 - Completar drag/resize/touch, criação visual das quatro dependências e ghosts.
 - Spike/benchmark de 2.000 e stress de 5.000 tarefas com virtualização.
 - Expandir golden cases de SS/FF/SF, grupos, caminho crítico e calendários alterados.
