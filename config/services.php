@@ -4,6 +4,7 @@ return [
 
     'todoist' => [
         'driver' => env('TODOIST_DRIVER', 'http'),
+        'demo_mode' => env('GANTTIST_DEMO_MODE', false),
         'client_id' => env('TODOIST_CLIENT_ID'),
         'client_secret' => env('TODOIST_CLIENT_SECRET'),
         'webhook_secret' => env('TODOIST_WEBHOOK_SECRET'),

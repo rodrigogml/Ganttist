@@ -20,6 +20,8 @@ final class WorkspaceController extends Controller
             return response()->json($this->fromTodoist($project, $snapshot));
         }
 
+        abort_unless(config('services.todoist.demo_mode'), 409, 'Conecte o Todoist e selecione um projeto primeiro.');
+
         return response()->json(['data' => [
             'project' => ['id' => 'demo-product-launch', 'name' => 'Lançamento do Ganttist', 'source' => 'Todoist', 'sync_status' => 'synced', 'updated_at' => now()->toIso8601String()],
             'calendar' => ['timezone' => 'America/Sao_Paulo', 'working_days' => [1, 2, 3, 4, 5], 'exceptions' => [['date' => '2026-08-21', 'type' => 'NON_WORKING', 'description' => 'Feriado local']]],
