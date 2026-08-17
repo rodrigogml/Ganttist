@@ -15,7 +15,7 @@ final class TodoistOAuthController extends Controller
         $state = Str::random(40);
         $request->session()->put('todoist_oauth_state', $state);
 
-        return redirect()->away('https://todoist.com/oauth/authorize?'.http_build_query(['client_id' => config('services.todoist.client_id'), 'scope' => 'data:read_write,data:delete', 'state' => $state]));
+        return redirect()->away('https://app.todoist.com/oauth/authorize?'.http_build_query(['client_id' => config('services.todoist.client_id'), 'scope' => 'data:read_write,data:delete', 'state' => $state]));
     }
 
     public function callback(Request $request)

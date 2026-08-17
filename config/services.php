@@ -8,6 +8,7 @@ return [
         'client_id' => env('TODOIST_CLIENT_ID'),
         'client_secret' => env('TODOIST_CLIENT_SECRET'),
         'webhook_secret' => env('TODOIST_WEBHOOK_SECRET'),
+        'test_token' => env('TODOIST_TEST_TOKEN'),
         'api_url' => env('TODOIST_API_URL', 'https://api.todoist.com/api/v1'),
     ],
 
