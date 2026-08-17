@@ -2,10 +2,34 @@
 
 namespace App\Services;
 
+use App\Contracts\TodoistGateway;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 final class TodoistSyncService
 {
+    public function syncActiveProjects(TodoistGateway $gateway): array
+    {
+        $synced = 0;
+        $failed = 0;
+        $integrations = DB::table('todoist_integrations')->where('status', 'active')->whereNotNull('access_token_encrypted')->get();
+        foreach ($integrations as $integration) {
+            $projects = DB::table('gantt_projects')->where('user_id', $integration->user_id)->where('status', 'active')->get();
+            foreach ($projects as $project) {
+                try {
+                    $gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+                    $synced++;
+                } catch (\Throwable $exception) {
+                    $failed++;
+                    Log::warning('todoist.sync.failed', ['project_id' => $project->id, 'exception' => $exception::class]);
+                }
+            }
+            DB::table('todoist_integrations')->where('id', $integration->id)->update(['last_synced_at' => now(), 'updated_at' => now()]);
+        }
+
+        return compact('synced', 'failed');
+    }
+
     public function markEvent(array $payload): void
     {
         $todoistUserId = (string) ($payload['user_id'] ?? $payload['event_data']['user_id'] ?? '');
