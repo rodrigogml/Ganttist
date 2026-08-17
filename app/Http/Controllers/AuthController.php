@@ -2,22 +2,42 @@
 
 namespace App\Http\Controllers;
 
+use App\Mail\MagicLoginLink;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
+use Throwable;
 
 final class AuthController extends Controller
 {
     public function requestLink(Request $request): JsonResponse
     {
         $data = $request->validate(['email' => ['required', 'email:rfc', 'max:254']]);
+        $email = Str::lower($data['email']);
         $token = Str::random(64);
-        DB::table('login_challenges')->insert(['id' => (string) Str::ulid(), 'email' => Str::lower($data['email']), 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
-        Log::info('auth.magic_link.requested', ['email_hash' => hash('sha256', Str::lower($data['email'])), 'development_token' => app()->isLocal() ? $token : null]);
+        $challengeId = (string) Str::ulid();
+        DB::table('login_challenges')->insert(['id' => $challengeId, 'email' => $email, 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
+
+        $url = rtrim((string) config('app.url'), '/') . '/?token=' . urlencode($token);
+
+        try {
+            Mail::to($email)->send(new MagicLoginLink($url));
+        } catch (Throwable $exception) {
+            DB::table('login_challenges')->where('id', $challengeId)->delete();
+            Log::error('auth.magic_link.delivery_failed', [
+                'email_hash' => hash('sha256', $email),
+                'exception' => $exception::class,
+            ]);
+
+            return response()->json(['message' => 'Não foi possível enviar o link de acesso. Tente novamente.'], 503);
+        }
+
+        Log::info('auth.magic_link.sent', ['email_hash' => hash('sha256', $email)]);
 
         return response()->json(['message' => 'Se o e-mail puder ser utilizado, enviaremos um link de acesso.'], 202);
     }
