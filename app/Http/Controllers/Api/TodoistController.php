@@ -51,6 +51,16 @@ final class TodoistController extends Controller
         return response()->json(['message' => 'Projeto selecionado.'], 201);
     }
 
+    public function disconnect(Request $request): JsonResponse
+    {
+        DB::transaction(function () use ($request): void {
+            DB::table('todoist_integrations')->where('user_id', $request->user()->id)->update(['status' => 'disconnected', 'access_token_encrypted' => null, 'updated_at' => now()]);
+            DB::table('gantt_projects')->where('user_id', $request->user()->id)->update(['status' => 'archived', 'updated_at' => now()]);
+        });
+
+        return response()->json(['message' => 'Conta Todoist desconectada.']);
+    }
+
     private function token(Request $request): string
     {
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();

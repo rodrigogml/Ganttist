@@ -17,7 +17,7 @@ final class TodoistSyncService
             $projects = DB::table('gantt_projects')->where('user_id', $integration->user_id)->where('status', 'active')->get();
             foreach ($projects as $project) {
                 try {
-                    $gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+                    $this->snapshotWithRetry($gateway, decrypt($integration->access_token_encrypted), $project->todoist_project_id);
                     $synced++;
                 } catch (\Throwable $exception) {
                     $failed++;
@@ -37,5 +37,19 @@ final class TodoistSyncService
         $externalId = (string) ($payload['event_id'] ?? hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR)));
         DB::table('todoist_events')->insertOrIgnore(['id' => (string) \Illuminate\Support\Str::ulid(), 'external_event_id' => $externalId, 'user_id' => $userId, 'event_type' => (string) ($payload['event_name'] ?? 'unknown'), 'payload' => json_encode($payload, JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
         if ($userId) DB::table('todoist_integrations')->where('user_id', $userId)->update(['last_synced_at' => null, 'updated_at' => now()]);
+    }
+
+    private function snapshotWithRetry(TodoistGateway $gateway, string $token, string $projectId): array
+    {
+        $last = null;
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            try {
+                return $gateway->projectSnapshot($token, $projectId);
+            } catch (\Throwable $exception) {
+                $last = $exception;
+                if ($attempt < 2) usleep(250000 * ($attempt + 1));
+            }
+        }
+        throw $last ?? new \RuntimeException('Falha de sincronização sem exceção.');
     }
 }

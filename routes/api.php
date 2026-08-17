@@ -3,6 +3,7 @@
 use App\Http\Controllers\Api\ScheduleSimulationController;
 use App\Http\Controllers\Api\ScheduleApplyController;
 use App\Http\Controllers\Api\DependencyController;
+use App\Http\Controllers\Api\EventStreamController;
 use App\Http\Controllers\Api\SessionController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TodoistController;
@@ -15,9 +16,11 @@ Route::prefix('v1')->group(function () {
     Route::get('/health', fn () => response()->json(['status' => 'ok', 'version' => config('app.version', '0.1.0'), 'time' => now()->toIso8601String()]));
     Route::middleware('auth')->group(function () {
         Route::get('/me', [SessionController::class, 'show']);
+        Route::get('/events', EventStreamController::class);
         Route::get('/todoist/status', [TodoistController::class, 'status']);
         Route::get('/todoist/projects', [TodoistController::class, 'projects']);
         Route::post('/todoist/project', [TodoistController::class, 'selectProject']);
+        Route::delete('/todoist/integration', [TodoistController::class, 'disconnect']);
         Route::put('/tasks/{taskId}/dates', [TaskController::class, 'updateDates']);
         Route::put('/tasks/{taskId}', [TaskController::class, 'update']);
         Route::get('/workspace', [WorkspaceController::class, 'show'])->middleware('throttle:120,1');
