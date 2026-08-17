@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 
 final class WorkspaceController extends Controller
 {
@@ -14,8 +15,10 @@ final class WorkspaceController extends Controller
     {
         $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
+        Log::debug('workspace.requested', ['user_id' => $request->user()->id, 'has_project' => (bool) $project, 'has_integration' => (bool) $integration]);
         if ($project && $integration) {
             $snapshot = $gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+            Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id]);
 
             return response()->json($this->fromTodoist($project, $snapshot));
         }

@@ -25,7 +25,8 @@ async function selectProject() {
   } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível selecionar o projeto.' } finally { saving.value = false }
 }
 async function disconnect() {
-  await fetch('/api/v1/todoist/integration', { method: 'DELETE', headers: { Accept: 'application/json' } })
+  const csrf = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content
+  await fetch('/api/v1/todoist/integration', { method: 'DELETE', headers: { Accept: 'application/json', ...(csrf ? { 'X-CSRF-TOKEN': csrf } : {}) } })
   connected.value = false; projects.value = []; selected.value = ''
 }
 onMounted(load)
