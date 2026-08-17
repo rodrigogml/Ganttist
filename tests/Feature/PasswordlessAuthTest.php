@@ -53,7 +53,8 @@ final class PasswordlessAuthTest extends TestCase
             $mail = $sent;
             return true;
         });
-        $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])->assertOk()->assertCookie('remember_web');
+        $response = $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])->assertOk();
+        $this->assertTrue(collect($response->headers->getCookies())->contains(fn ($cookie): bool => str_starts_with($cookie->getName(), 'remember_web_')));
     }
 
     public function test_one_time_challenge_creates_session_and_cannot_be_reused(): void
