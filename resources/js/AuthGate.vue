@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-const props = defineProps<{ auth: { sending: boolean; sent: boolean; error: string; requestLink: (email: string) => Promise<void>; verifyPin: (pin: string) => Promise<void>; resetSent: () => void } }>()
+const props = defineProps<{ auth: { sending: boolean; sent: boolean; error: string; remember: boolean; requestLink: (email: string) => Promise<void>; verifyPin: (pin: string) => Promise<void>; resetSent: () => void } }>()
 const email = ref('')
 const pin = ref('')
 function submit() { if (email.value) props.auth.requestLink(email.value) }
@@ -24,6 +24,7 @@ function submit() { if (email.value) props.auth.requestLink(email.value) }
       </template>
       <form v-else @submit.prevent="submit">
         <label class="auth-label">E-mail<input v-model="email" type="email" autocomplete="email" placeholder="voce@exemplo.com" required></label>
+        <label class="auth-check"><input v-model="auth.remember" type="checkbox"> Lembrar meu login neste computador</label>
         <button class="auth-submit" :disabled="auth.sending">{{ auth.sending ? 'Enviando…' : 'Enviar link de acesso' }}</button>
       </form>
       <p v-if="auth.error" class="auth-error">{{ auth.error }}</p>

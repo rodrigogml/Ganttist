@@ -18,8 +18,9 @@ final class AuthController extends Controller
 {
     public function requestLink(Request $request): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email:rfc', 'max:254']]);
+        $data = $request->validate(['email' => ['required', 'email:rfc', 'max:254'], 'remember' => ['sometimes', 'boolean']]);
         $email = Str::lower($data['email']);
+        $request->session()->put('login_remember', (bool) ($data['remember'] ?? false));
         $token = Str::random(64);
         $pin = (string) random_int(100000, 999999);
         $challengeId = (string) Str::ulid();
@@ -39,7 +40,7 @@ final class AuthController extends Controller
             return response()->json(['message' => 'Não foi possível enviar o link de acesso. Tente novamente.'], 503);
         }
 
-        Log::info('auth.magic_link.sent', ['email_hash' => hash('sha256', $email)]);
+        Log::info('auth.magic_link.sent', ['email_hash' => hash('sha256', $email), 'challenge_id' => $challengeId]);
 
         return response()->json(['message' => 'Se o e-mail puder ser utilizado, enviaremos um link de acesso.'], 202);
     }
@@ -64,7 +65,7 @@ final class AuthController extends Controller
         DB::transaction(function () use ($challenge) {
             DB::table('login_challenges')->where('id', $challenge->id)->update(['consumed_at' => now(), 'updated_at' => now()]);
             $user = User::firstOrCreate(['email' => $challenge->email], ['timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
-            Auth::login($user);
+            Auth::login($user, (bool) $request->session()->pull('login_remember', false));
         });
         $request->session()->regenerate();
 

@@ -15,6 +15,7 @@ export const useAuthStore = defineStore('auth', () => {
   const sent = ref(false)
   const error = ref('')
   const loginEmail = ref('')
+  const remember = ref(false)
 
   async function current(): Promise<boolean> {
     const response = await fetch('/api/v1/me', { headers: { Accept: 'application/json' } })
@@ -40,7 +41,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function requestLink(email: string) {
     sending.value = true; error.value = ''
     try {
-      const response = await fetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email }) })
+      const response = await fetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email, remember: remember.value }) })
       if (!response.ok) throw new Error('Não foi possível enviar o link. Tente novamente.')
       loginEmail.value = email.trim().toLowerCase(); sent.value = true
     } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível enviar o link.' } finally { sending.value = false }
@@ -62,5 +63,5 @@ export const useAuthStore = defineStore('auth', () => {
 
   function resetSent() { sent.value = false }
 
-  return { user, loading, sending, sent, error, bootstrap, requestLink, verifyPin, logout, resetSent }
+  return { user, loading, sending, sent, error, remember, bootstrap, requestLink, verifyPin, logout, resetSent }
 })

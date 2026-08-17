@@ -44,6 +44,18 @@ final class PasswordlessAuthTest extends TestCase
         $this->assertAuthenticated();
     }
 
+    public function test_remember_option_creates_a_recaller_cookie(): void
+    {
+        Mail::fake();
+        $this->postJson('/auth/request-link', ['email' => 'person@example.com', 'remember' => true])->assertStatus(202);
+        $mail = null;
+        Mail::assertSent(MagicLoginLink::class, function (MagicLoginLink $sent) use (&$mail): bool {
+            $mail = $sent;
+            return true;
+        });
+        $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])->assertOk()->assertCookie('remember_web');
+    }
+
     public function test_one_time_challenge_creates_session_and_cannot_be_reused(): void
     {
         $token = str_repeat('a', 64);

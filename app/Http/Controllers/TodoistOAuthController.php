@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class TodoistOAuthController extends Controller
@@ -24,6 +25,7 @@ final class TodoistOAuthController extends Controller
         $request->validate(['code' => ['required', 'string'], 'state' => ['required', 'string']]);
         $state = DB::table('todoist_oauth_states')->where('state_hash', hash('sha256', $request->string('state')->toString()))->where('expires_at', '>', now())->first();
         abort_unless($state, 419, 'Estado OAuth inválido ou expirado.');
+        Log::info('todoist.oauth.callback.received', ['state_id' => $state->id, 'user_id' => $state->user_id]);
         $response = Http::asForm()->timeout(15)->post('https://todoist.com/oauth/access_token', ['client_id' => config('services.todoist.client_id'), 'client_secret' => config('services.todoist.client_secret'), 'code' => $request->string('code')->toString()])->throw()->json();
         abort_unless(! empty($response['access_token']), 502, 'O Todoist não retornou um token de acesso.');
         DB::table('todoist_oauth_states')->where('id', $state->id)->delete();
@@ -41,6 +43,7 @@ final class TodoistOAuthController extends Controller
                 'created_at' => now(),
             ],
         );
+        Log::info('todoist.oauth.connected', ['user_id' => $state->user_id, 'todoist_user_id' => $response['user_id'] ?? null]);
 
         return redirect('/?todoist=connected');
     }

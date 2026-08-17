@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AuthGate from './AuthGate.vue'
 import TodoistSetup from './TodoistSetup.vue'
 import { useAuthStore } from './stores/auth'
@@ -8,7 +8,10 @@ import type { Task } from './types'
 import { barWidth, civilDayOffset } from './utils/timeline'
 const store=useWorkspaceStore(); const auth=useAuthStore(); const needsTodoist=ref(false); let eventSource:EventSource|null=null; let eventReconnect:ReturnType<typeof setTimeout>|null=null
 function connectEvents(){eventSource?.close();eventSource=new EventSource('/api/v1/events');eventSource.addEventListener('workspace.updated',()=>store.load());eventSource.onerror=()=>{eventSource?.close();eventReconnect=setTimeout(connectEvents,5000)}}
-onMounted(async()=>{await auth.bootstrap();if(auth.user){const response=await fetch('/api/v1/todoist/status',{headers:{Accept:'application/json'}});const status=await response.json();needsTodoist.value=!status.connected||!status.project;if(!needsTodoist.value)store.load();connectEvents()}})
+let initializedUserId:string|null=null
+async function initializeWorkspace(){if(!auth.user||initializedUserId===auth.user.id)return;initializedUserId=auth.user.id;try{const response=await fetch('/api/v1/todoist/status',{headers:{Accept:'application/json'}});if(!response.ok)throw new Error('Não foi possível verificar a conexão com o Todoist.');const status=await response.json();needsTodoist.value=!status.connected||!status.project;if(!needsTodoist.value)await store.load();connectEvents()}catch(error){needsTodoist.value=true;toast.value=error instanceof Error?error.message:'Não foi possível carregar sua configuração.'}}
+watch(()=>auth.user?.id,()=>{if(auth.user)initializeWorkspace();else{initializedUserId=null;eventSource?.close()}})
+onMounted(async()=>{await auth.bootstrap();await initializeWorkspace()})
 onUnmounted(()=>{eventSource?.close();if(eventReconnect)clearTimeout(eventReconnect)})
 const drawer=ref(false), notices=ref(false), filters=ref(false), simulating=ref(false), toast=ref(''), simulation=ref<{changes:{task_id:string;start:string;finish:string}[]}|null>(null)
 const dependencyTarget=ref(''), dependencyType=ref<'FS'|'SS'|'FF'|'SF'>('FS')
