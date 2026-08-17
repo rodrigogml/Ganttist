@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import AuthGate from './AuthGate.vue'
+import { useAuthStore } from './stores/auth'
 import { useWorkspaceStore } from './stores/workspace'
 import type { Task } from './types'
 import { barWidth, civilDayOffset } from './utils/timeline'
-const store=useWorkspaceStore(); onMounted(store.load)
+const store=useWorkspaceStore(); const auth=useAuthStore(); onMounted(async()=>{await auth.bootstrap();if(auth.user)store.load()})
 const drawer=ref(false), notices=ref(false), filters=ref(false), simulating=ref(false), toast=ref('')
 const activeTask=computed(()=>store.workspace?.tasks.find(t=>t.id===store.selected.at(-1)) ?? null)
 const start=new Date('2026-08-17T12:00:00'), end=new Date('2026-09-19T12:00:00')
@@ -21,14 +23,16 @@ function statusLabel(s:string){return ({completed:'Concluída',running:'Em execu
 </script>
 
 <template>
-<div class="app-shell">
+<main v-if="auth.loading" class="loading"><div class="loader-logo">G</div><p>Verificando seu acesso…</p></main>
+<AuthGate v-else-if="!auth.user" :auth="auth" />
+<div v-else class="app-shell">
   <header class="topbar">
     <div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><strong>Ganttist</strong></div>
     <div class="project-switcher"><span class="eyebrow">PROJETO TODOIST</span><button><span class="project-dot"></span>{{store.workspace?.project.name||'Carregando…'}} <span class="chevron">⌄</span></button></div>
     <div class="top-actions">
       <div class="sync-pill"><span class="pulse"></span><span><b>Sincronizado</b><small>agora mesmo</small></span></div>
       <button class="icon-btn" aria-label="Notificações" @click="notices=!notices">◴<em>3</em></button>
-      <button class="avatar">MG</button>
+      <button class="avatar" title="Sair" @click="auth.logout">{{(auth.user.name||auth.user.email).slice(0,2).toUpperCase()}}</button>
     </div>
   </header>
 
