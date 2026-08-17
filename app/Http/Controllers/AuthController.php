@@ -62,7 +62,7 @@ final class AuthController extends Controller
         if (! $challenge) {
             return response()->json(['message' => 'Link inválido ou expirado.'], 422);
         }
-        DB::transaction(function () use ($challenge) {
+        DB::transaction(function () use ($challenge, $request) {
             DB::table('login_challenges')->where('id', $challenge->id)->update(['consumed_at' => now(), 'updated_at' => now()]);
             $user = User::firstOrCreate(['email' => $challenge->email], ['timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
             Auth::login($user, (bool) $request->session()->pull('login_remember', false));
