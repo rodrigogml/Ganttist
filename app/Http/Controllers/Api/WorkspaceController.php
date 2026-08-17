@@ -76,7 +76,8 @@ final class WorkspaceController extends Controller
             }
         }
 
-        return ['data' => ['project' => ['id' => $project->id, 'name' => $project->display_name, 'source' => 'Todoist', 'sync_status' => 'synced', 'updated_at' => now()->toIso8601String()], 'calendar' => ['timezone' => 'America/Sao_Paulo', 'working_days' => [1, 2, 3, 4, 5], 'exceptions' => []], 'tasks' => $ordered, 'dependencies' => [], 'stats' => ['progress' => $total ? (int) round($completed / $total * 100) : 0, 'completed' => $completed, 'total' => $total, 'critical' => 0, 'unscheduled' => count(array_filter($mapped, fn (array $task): bool => $task['status'] === 'unscheduled'))]], 'meta' => ['demo' => false, 'message' => 'Dados sincronizados do Todoist.']];
+        $dependencies = DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('status', 'active')->get()->map(fn (object $dependency): array => ['id' => $dependency->id, 'from' => $dependency->predecessor_todoist_task_id, 'to' => $dependency->successor_todoist_task_id, 'type' => $dependency->type, 'critical' => false])->values()->all();
+        return ['data' => ['project' => ['id' => $project->id, 'name' => $project->display_name, 'source' => 'Todoist', 'sync_status' => 'synced', 'updated_at' => now()->toIso8601String()], 'calendar' => ['timezone' => 'America/Sao_Paulo', 'working_days' => [1, 2, 3, 4, 5], 'exceptions' => []], 'tasks' => $ordered, 'dependencies' => $dependencies, 'stats' => ['progress' => $total ? (int) round($completed / $total * 100) : 0, 'completed' => $completed, 'total' => $total, 'critical' => 0, 'unscheduled' => count(array_filter($mapped, fn (array $task): bool => $task['status'] === 'unscheduled'))]], 'meta' => ['demo' => false, 'message' => 'Dados sincronizados do Todoist.']];
     }
 
     private function tasks(): array

@@ -3,6 +3,7 @@
 return [
 
     'todoist' => [
+        'driver' => env('TODOIST_DRIVER', 'http'),
         'client_id' => env('TODOIST_CLIENT_ID'),
         'client_secret' => env('TODOIST_CLIENT_SECRET'),
         'webhook_secret' => env('TODOIST_WEBHOOK_SECRET'),

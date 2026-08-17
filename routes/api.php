@@ -1,6 +1,8 @@
 <?php
 
 use App\Http\Controllers\Api\ScheduleSimulationController;
+use App\Http\Controllers\Api\ScheduleApplyController;
+use App\Http\Controllers\Api\DependencyController;
 use App\Http\Controllers\Api\SessionController;
 use App\Http\Controllers\Api\TaskController;
 use App\Http\Controllers\Api\TodoistController;
@@ -19,5 +21,9 @@ Route::prefix('v1')->group(function () {
         Route::put('/tasks/{taskId}/dates', [TaskController::class, 'updateDates']);
         Route::get('/workspace', [WorkspaceController::class, 'show'])->middleware('throttle:120,1');
         Route::post('/schedule/simulate', ScheduleSimulationController::class)->middleware('throttle:30,1');
+        Route::post('/schedule/apply', ScheduleApplyController::class)->middleware('throttle:10,1');
+        Route::get('/dependencies', [DependencyController::class, 'index']);
+        Route::post('/dependencies', [DependencyController::class, 'store']);
+        Route::delete('/dependencies/{id}', [DependencyController::class, 'destroy']);
     });
 });
