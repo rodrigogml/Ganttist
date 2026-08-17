@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 
@@ -22,8 +23,18 @@ final class TodoistOAuthController extends Controller
         $request->validate(['code' => ['required', 'string'], 'state' => ['required', 'string']]);
         abort_unless(hash_equals((string) $request->session()->pull('todoist_oauth_state'), $request->string('state')->toString()), 419, 'Estado OAuth inválido.');
         $response = Http::asForm()->timeout(15)->post('https://todoist.com/oauth/access_token', ['client_id' => config('services.todoist.client_id'), 'client_secret' => config('services.todoist.client_secret'), 'code' => $request->string('code')->toString()])->throw()->json();
-        // Persistência final depende de usuário autenticado e credenciais reais; nunca expõe o token ao navegador.
-        $request->session()->put('todoist_access_token_pending', encrypt($response['access_token']));
+        DB::table('todoist_integrations')->updateOrInsert(
+            ['user_id' => $request->user()->id],
+            [
+                'id' => (string) Str::ulid(),
+                'todoist_user_id' => $response['user_id'] ?? null,
+                'access_token_encrypted' => encrypt($response['access_token']),
+                'status' => 'active',
+                'authorized_at' => now(),
+                'updated_at' => now(),
+                'created_at' => now(),
+            ],
+        );
 
         return redirect('/?todoist=connected');
     }

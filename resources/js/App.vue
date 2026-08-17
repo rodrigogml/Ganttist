@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AuthGate from './AuthGate.vue'
+import TodoistSetup from './TodoistSetup.vue'
 import { useAuthStore } from './stores/auth'
 import { useWorkspaceStore } from './stores/workspace'
 import type { Task } from './types'
 import { barWidth, civilDayOffset } from './utils/timeline'
-const store=useWorkspaceStore(); const auth=useAuthStore(); onMounted(async()=>{await auth.bootstrap();if(auth.user)store.load()})
+const store=useWorkspaceStore(); const auth=useAuthStore(); const needsTodoist=ref(false); onMounted(async()=>{await auth.bootstrap();if(auth.user){const response=await fetch('/api/v1/todoist/status',{headers:{Accept:'application/json'}});const status=await response.json();needsTodoist.value=!status.connected||!status.project;if(!needsTodoist.value)store.load()}})
 const drawer=ref(false), notices=ref(false), filters=ref(false), simulating=ref(false), toast=ref('')
 const activeTask=computed(()=>store.workspace?.tasks.find(t=>t.id===store.selected.at(-1)) ?? null)
 const start=new Date('2026-08-17T12:00:00'), end=new Date('2026-09-19T12:00:00')
@@ -25,6 +26,7 @@ function statusLabel(s:string){return ({completed:'Concluída',running:'Em execu
 <template>
 <main v-if="auth.loading" class="loading"><div class="loader-logo">G</div><p>Verificando seu acesso…</p></main>
 <AuthGate v-else-if="!auth.user" :auth="auth" />
+<TodoistSetup v-else-if="needsTodoist" @ready="needsTodoist=false;store.load()" />
 <div v-else class="app-shell">
   <header class="topbar">
     <div class="brand"><span class="brand-mark"><i></i><i></i><i></i></span><strong>Ganttist</strong></div>

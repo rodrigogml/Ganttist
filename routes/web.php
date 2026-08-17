@@ -8,6 +8,6 @@ Route::post('/auth/request-link', [AuthController::class, 'requestLink'])->middl
 Route::post('/auth/verify', [AuthController::class, 'verify'])->middleware('throttle:10,1');
 Route::post('/auth/logout', [AuthController::class, 'logout'])->middleware('auth');
 Route::get('/oauth/todoist/redirect', [TodoistOAuthController::class, 'redirect'])->middleware('auth');
-Route::get('/oauth/todoist/callback', [TodoistOAuthController::class, 'callback']);
+Route::get('/oauth/todoist/callback', [TodoistOAuthController::class, 'callback'])->middleware('auth');
 
 Route::view('/{path?}', 'app')->where('path', '^(?!api).*$');
