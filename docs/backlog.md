@@ -3,8 +3,8 @@
 ## P0 — completar MVP
 
 - Homologar OAuth, webhook e sincronização contra uma conta Todoist real.
-- Completar operação lógica de cascata com retries, SSE e fila quando o volume justificar.
-- Completar drag/resize/touch, criação visual das quatro dependências e ghosts.
+- Validar operação lógica de cascata com falhas reais, SSE e fila quando o volume justificar.
+- Benchmarkar virtualização e touch em dispositivos reais.
 - Spike/benchmark de 2.000 e stress de 5.000 tarefas com virtualização.
 - Expandir golden cases de SS/FF/SF, grupos, caminho crítico e calendários alterados.
 - E2E Playwright, acessibilidade e matriz de navegadores/dispositivos.
