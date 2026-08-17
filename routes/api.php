@@ -19,6 +19,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/todoist/projects', [TodoistController::class, 'projects']);
         Route::post('/todoist/project', [TodoistController::class, 'selectProject']);
         Route::put('/tasks/{taskId}/dates', [TaskController::class, 'updateDates']);
+        Route::put('/tasks/{taskId}', [TaskController::class, 'update']);
         Route::get('/workspace', [WorkspaceController::class, 'show'])->middleware('throttle:120,1');
         Route::post('/schedule/simulate', ScheduleSimulationController::class)->middleware('throttle:30,1');
         Route::post('/schedule/apply', ScheduleApplyController::class)->middleware('throttle:10,1');

@@ -11,4 +11,8 @@ interface TodoistGateway
     public function projectSnapshot(string $accessToken, string $projectId): array;
 
     public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array;
+
+    public function updateTask(string $accessToken, string $taskId, array $attributes): array;
+
+    public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void;
 }

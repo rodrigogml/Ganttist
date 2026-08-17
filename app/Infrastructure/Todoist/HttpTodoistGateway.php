@@ -29,4 +29,14 @@ final class HttpTodoistGateway implements TodoistGateway
     {
         return $this->client($accessToken)->post("/tasks/{$taskId}", array_filter(['due_date' => $start, 'deadline_date' => $deadline], fn ($value) => $value !== null))->throw()->json();
     }
+
+    public function updateTask(string $accessToken, string $taskId, array $attributes): array
+    {
+        return $this->client($accessToken)->post("/tasks/{$taskId}", $attributes)->throw()->json();
+    }
+
+    public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void
+    {
+        $this->client($accessToken)->post("/tasks/{$taskId}/".($completed ? 'close' : 'reopen'))->throw();
+    }
 }

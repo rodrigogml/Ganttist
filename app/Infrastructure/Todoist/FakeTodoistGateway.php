@@ -25,4 +25,13 @@ final class FakeTodoistGateway implements TodoistGateway
     {
         return ['id' => $taskId, 'due' => ['date' => $start], 'deadline_date' => $deadline];
     }
+
+    public function updateTask(string $accessToken, string $taskId, array $attributes): array
+    {
+        return ['id' => $taskId] + $attributes;
+    }
+
+    public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void
+    {
+    }
 }
