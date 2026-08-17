@@ -11,7 +11,7 @@ final class MagicLoginLink extends Mailable
 {
     use Queueable;
 
-    public function __construct(public readonly string $url)
+    public function __construct(public readonly string $url, public readonly string $pin)
     {
     }
 

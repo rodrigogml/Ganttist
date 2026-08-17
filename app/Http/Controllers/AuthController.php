@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
@@ -20,13 +21,14 @@ final class AuthController extends Controller
         $data = $request->validate(['email' => ['required', 'email:rfc', 'max:254']]);
         $email = Str::lower($data['email']);
         $token = Str::random(64);
+        $pin = (string) random_int(100000, 999999);
         $challengeId = (string) Str::ulid();
-        DB::table('login_challenges')->insert(['id' => $challengeId, 'email' => $email, 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('login_challenges')->insert(['id' => $challengeId, 'email' => $email, 'token_hash' => hash('sha256', $token), 'pin_hash' => Hash::make($pin), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
 
         $url = rtrim((string) config('app.url'), '/') . '/?token=' . urlencode($token);
 
         try {
-            Mail::to($email)->send(new MagicLoginLink($url));
+            Mail::to($email)->send(new MagicLoginLink($url, $pin));
         } catch (Throwable $exception) {
             DB::table('login_challenges')->where('id', $challengeId)->delete();
             Log::error('auth.magic_link.delivery_failed', [
@@ -44,8 +46,18 @@ final class AuthController extends Controller
 
     public function verify(Request $request): JsonResponse
     {
-        $data = $request->validate(['token' => ['required', 'string', 'size:64']]);
-        $challenge = DB::table('login_challenges')->where('token_hash', hash('sha256', $data['token']))->whereNull('consumed_at')->where('expires_at', '>', now())->lockForUpdate()->first();
+        $data = $request->validate(['token' => ['nullable', 'string', 'size:64'], 'email' => ['required_without:token', 'email:rfc', 'max:254'], 'pin' => ['required_without:token', 'digits:6']]);
+        $challengeQuery = DB::table('login_challenges')->whereNull('consumed_at')->where('expires_at', '>', now());
+        if (! empty($data['token'])) {
+            $challengeQuery->where('token_hash', hash('sha256', $data['token']));
+        } else {
+            $challengeQuery->where('email', Str::lower($data['email']))->whereNotNull('pin_hash')->orderByDesc('created_at');
+        }
+        $challenge = $challengeQuery->first();
+        if ($challenge && empty($data['token']) && ! Hash::check($data['pin'], $challenge->pin_hash)) {
+            DB::table('login_challenges')->where('id', $challenge->id)->increment('attempts');
+            $challenge = null;
+        }
         if (! $challenge) {
             return response()->json(['message' => 'Link inválido ou expirado.'], 422);
         }

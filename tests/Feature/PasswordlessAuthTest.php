@@ -22,13 +22,26 @@ final class PasswordlessAuthTest extends TestCase
             ->assertJsonPath('message', 'Se o e-mail puder ser utilizado, enviaremos um link de acesso.');
 
         Mail::assertSent(MagicLoginLink::class, function (MagicLoginLink $mail): bool {
-            return $mail->hasTo('person@example.com') && str_contains($mail->url, '?token=');
+            return $mail->hasTo('person@example.com') && str_contains($mail->url, '?token=') && strlen($mail->pin) === 6;
         });
 
         $this->assertDatabaseHas('login_challenges', [
             'email' => 'person@example.com',
             'consumed_at' => null,
         ]);
+    }
+
+    public function test_pin_can_create_session(): void
+    {
+        Mail::fake();
+        $this->postJson('/auth/request-link', ['email' => 'person@example.com'])->assertStatus(202);
+        $mail = null;
+        Mail::assertSent(MagicLoginLink::class, function (MagicLoginLink $sent) use (&$mail): bool {
+            $mail = $sent;
+            return true;
+        });
+        $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])->assertOk();
+        $this->assertAuthenticated();
     }
 
     public function test_one_time_challenge_creates_session_and_cannot_be_reused(): void

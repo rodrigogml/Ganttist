@@ -14,6 +14,7 @@ export const useAuthStore = defineStore('auth', () => {
   const sending = ref(false)
   const sent = ref(false)
   const error = ref('')
+  const loginEmail = ref('')
 
   async function current(): Promise<boolean> {
     const response = await fetch('/api/v1/me', { headers: { Accept: 'application/json' } })
@@ -41,8 +42,17 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const response = await fetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email }) })
       if (!response.ok) throw new Error('Não foi possível enviar o link. Tente novamente.')
-      sent.value = true
+      loginEmail.value = email.trim().toLowerCase(); sent.value = true
     } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível enviar o link.' } finally { sending.value = false }
+  }
+
+  async function verifyPin(pin: string) {
+    sending.value = true; error.value = ''
+    try {
+      const response = await fetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ email: loginEmail.value, pin }) })
+      if (!response.ok) throw new Error('Código inválido ou expirado.')
+      user.value = (await response.json()).user; sent.value = false
+    } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível validar o código.' } finally { sending.value = false }
   }
 
   async function logout() {
@@ -52,5 +62,5 @@ export const useAuthStore = defineStore('auth', () => {
 
   function resetSent() { sent.value = false }
 
-  return { user, loading, sending, sent, error, bootstrap, requestLink, logout, resetSent }
+  return { user, loading, sending, sent, error, bootstrap, requestLink, verifyPin, logout, resetSent }
 })
