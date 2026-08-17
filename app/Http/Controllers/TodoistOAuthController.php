@@ -13,8 +13,16 @@ final class TodoistOAuthController extends Controller
 {
     public function redirect(Request $request)
     {
+        $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->whereNotNull('access_token_encrypted')->first();
+        $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
+        if ($integration && $project) {
+            Log::info('todoist.oauth.authorization_skipped', ['user_id' => $request->user()->id, 'reason' => 'existing_active_integration']);
+
+            return redirect('/?todoist=connected');
+        }
         abort_unless(config('services.todoist.client_id'), 503, 'OAuth Todoist ainda não configurado neste ambiente.');
         $state = Str::random(64);
+        Log::info('todoist.oauth.authorization_started', ['user_id' => $request->user()->id, 'has_active_integration' => $integration !== null, 'has_active_project' => $project !== null]);
         DB::table('todoist_oauth_states')->insert(['id' => (string) Str::ulid(), 'user_id' => $request->user()->id, 'remember' => (bool) $request->session()->get('login_remember', false), 'state_hash' => hash('sha256', $state), 'expires_at' => now()->addMinutes(10), 'created_at' => now(), 'updated_at' => now()]);
 
         return redirect()->away('https://app.todoist.com/oauth/authorize?'.http_build_query(['client_id' => config('services.todoist.client_id'), 'scope' => 'data:read_write,data:delete', 'state' => $state]));
@@ -31,18 +39,10 @@ final class TodoistOAuthController extends Controller
         DB::table('todoist_oauth_states')->where('id', $state->id)->delete();
         Auth::loginUsingId($state->user_id, (bool) $state->remember);
         $request->session()->regenerate();
-        DB::table('todoist_integrations')->updateOrInsert(
-            ['user_id' => $state->user_id],
-            [
-                'id' => (string) Str::ulid(),
-                'todoist_user_id' => $response['user_id'] ?? null,
-                'access_token_encrypted' => encrypt($response['access_token']),
-                'status' => 'active',
-                'authorized_at' => now(),
-                'updated_at' => now(),
-                'created_at' => now(),
-            ],
-        );
+        $values = ['todoist_user_id' => $response['user_id'] ?? null, 'access_token_encrypted' => encrypt($response['access_token']), 'status' => 'active', 'authorized_at' => now(), 'updated_at' => now()];
+        $existingIntegration = DB::table('todoist_integrations')->where('user_id', $state->user_id)->first();
+        if ($existingIntegration) DB::table('todoist_integrations')->where('id', $existingIntegration->id)->update($values);
+        else DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $state->user_id, ...$values, 'created_at' => now()]);
         Log::info('todoist.oauth.connected', ['user_id' => $state->user_id, 'todoist_user_id' => $response['user_id'] ?? null]);
 
         return redirect('/?todoist=connected');

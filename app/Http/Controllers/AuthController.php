@@ -62,14 +62,17 @@ final class AuthController extends Controller
         if (! $challenge) {
             return response()->json(['message' => 'Link inválido ou expirado.'], 422);
         }
-        DB::transaction(function () use ($challenge, $request) {
+        $user = DB::transaction(function () use ($challenge, $request): User {
             DB::table('login_challenges')->where('id', $challenge->id)->update(['consumed_at' => now(), 'updated_at' => now()]);
             $user = User::firstOrCreate(['email' => $challenge->email], ['timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
             Auth::login($user, (bool) $request->session()->pull('login_remember', false));
+
+            return $user;
         });
         $request->session()->regenerate();
+        Log::info('auth.magic_link.verified', ['user_id' => $user->id, 'remember' => Auth::viaRemember()]);
 
-        return response()->json(['message' => 'Acesso confirmado.', 'user' => Auth::user()]);
+        return response()->json(['message' => 'Acesso confirmado.', 'user' => $user]);
     }
 
     public function logout(Request $request): JsonResponse

@@ -14,9 +14,9 @@ final class TodoistController extends Controller
 {
     public function status(Request $request): JsonResponse
     {
-        $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
+        $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->whereNotNull('access_token_encrypted')->first();
         $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
-        Log::debug('todoist.status.requested', ['user_id' => $request->user()->id, 'connected' => $integration !== null, 'has_project' => $project !== null]);
+        Log::debug('todoist.status.requested', ['user_id' => $request->user()->id, 'connected' => $integration !== null, 'has_project' => $project !== null, 'ready' => $integration !== null && $project !== null]);
 
         return response()->json(['connected' => $integration !== null, 'project' => $project ? ['id' => $project->id, 'todoist_project_id' => $project->todoist_project_id, 'name' => $project->display_name] : null]);
     }
