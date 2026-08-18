@@ -20,7 +20,6 @@
 /storage/pail
 /vendor
 .tools/
-.agents/
 .phpunit.cache/
 Homestead.json
 Homestead.yaml

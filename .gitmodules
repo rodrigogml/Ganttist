@@ -1,0 +1,3 @@
+[submodule ".agents/skills/skillSapientAIDevelopment"]
+	path = .agents/skills/skillSapientAIDevelopment
+	url = git@github.com:rodrigogml/skillSapientAIDevelopment.git
