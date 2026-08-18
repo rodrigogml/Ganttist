@@ -1,0 +1,167 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Contracts\TodoistGateway;
+use App\Jobs\ProcessTodoistEvent;
+use App\Models\User;
+use App\Services\TodoistSyncService;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
+use Illuminate\Support\Str;
+use Tests\TestCase;
+
+final class TodoistSyncServiceTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_webhook_queues_a_single_idempotent_event_after_hmac_validation(): void
+    {
+        config()->set('services.todoist.webhook_secret', 'webhook-secret');
+        config()->set('queue.default', 'database');
+        Queue::fake();
+        $payload = ['event_id' => 'evt-webhook', 'event_name' => 'item:updated', 'user_id' => 'unknown-user'];
+        $json = json_encode($payload, JSON_THROW_ON_ERROR);
+        $signature = base64_encode(hash_hmac('sha256', $json, 'webhook-secret', true));
+
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertStatus(202);
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertStatus(202);
+
+        self::assertDatabaseCount('todoist_events', 1);
+        Queue::assertPushed(ProcessTodoistEvent::class, 1);
+    }
+
+    public function test_webhook_rejects_validly_signed_malformed_json_without_persisting_an_event(): void
+    {
+        config()->set('services.todoist.webhook_secret', 'webhook-secret');
+        $body = '{invalid';
+        $signature = base64_encode(hash_hmac('sha256', $body, 'webhook-secret', true));
+
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $body)->assertStatus(422);
+        self::assertDatabaseCount('todoist_events', 0);
+    }
+
+    public function test_webhook_event_is_deduplicated_and_reconciles_orphaned_dependencies(): void
+    {
+        config()->set('services.todoist.driver', 'fake');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('task_dependencies')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'predecessor_todoist_task_id' => 'fake-task-1', 'successor_todoist_task_id' => 'removed-task', 'type' => 'FS', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('task_metadata')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'todoist_task_id' => 'removed-task', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $sync = app(TodoistSyncService::class);
+        $eventId = $sync->markEvent(['event_id' => 'evt-1', 'event_name' => 'item:updated', 'user_id' => 'fake-user']);
+
+        self::assertNotNull($eventId);
+        self::assertTrue($sync->processEvent($eventId));
+        self::assertSame($eventId, $sync->markEvent(['event_id' => 'evt-1', 'event_name' => 'item:updated', 'user_id' => 'fake-user']));
+        self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
+        self::assertDatabaseHas('task_dependencies', ['gantt_project_id' => $projectId, 'status' => 'inactive']);
+        self::assertDatabaseHas('task_metadata', ['gantt_project_id' => $projectId, 'todoist_task_id' => 'removed-task', 'status' => 'outside_project']);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'todoist.event.reconciled', 'causation_id' => 'evt-1']);
+    }
+
+    public function test_reconciliation_reactivates_items_that_reappear_in_the_authoritative_snapshot(): void
+    {
+        config()->set('services.todoist.driver', 'fake');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'restore-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('task_metadata')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'todoist_task_id' => 'fake-task-2', 'status' => 'outside_project', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('task_dependencies')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'predecessor_todoist_task_id' => 'fake-task-1', 'successor_todoist_task_id' => 'fake-task-2', 'type' => 'FS', 'status' => 'inactive', 'created_at' => now(), 'updated_at' => now()]);
+
+        $eventId = app(TodoistSyncService::class)->markEvent(['event_id' => 'evt-restore', 'event_name' => 'item:updated', 'user_id' => 'restore-user', 'event_data' => ['project_id' => 'fake-project']]);
+
+        self::assertTrue(app(TodoistSyncService::class)->processEvent($eventId));
+        self::assertDatabaseHas('task_metadata', ['gantt_project_id' => $projectId, 'todoist_task_id' => 'fake-task-2', 'status' => 'active']);
+        self::assertDatabaseHas('task_dependencies', ['gantt_project_id' => $projectId, 'predecessor_todoist_task_id' => 'fake-task-1', 'successor_todoist_task_id' => 'fake-task-2', 'status' => 'active']);
+    }
+
+    public function test_revoked_token_marks_integration_for_reauthorization_without_retrying_the_event(): void
+    {
+        config()->set('services.todoist.driver', 'http');
+        Http::fake(['*' => Http::response(['error' => 'unauthorized'], 401)]);
+        [$user, $eventId] = $this->activeIntegrationWithEvent('evt-revoked');
+
+        self::assertTrue(app(TodoistSyncService::class)->processEvent($eventId));
+        self::assertDatabaseHas('todoist_integrations', ['user_id' => $user->id, 'status' => 'reauthorization_required', 'sync_state' => 'reauthorization_required', 'last_sync_error' => 'authorization_revoked']);
+        self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
+    }
+
+    public function test_rate_limit_keeps_event_pending_and_marks_sync_as_degraded(): void
+    {
+        config()->set('services.todoist.driver', 'http');
+        Http::fake(['*' => Http::response(['error' => 'rate_limited'], 429)]);
+        [$user, $eventId] = $this->activeIntegrationWithEvent('evt-rate-limit');
+
+        self::assertFalse(app(TodoistSyncService::class)->processEvent($eventId));
+        self::assertDatabaseHas('todoist_integrations', ['user_id' => $user->id, 'status' => 'active', 'sync_state' => 'degraded', 'last_sync_error' => 'rate_limited']);
+        self::assertNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
+    }
+
+    public function test_sync_derives_parent_dates_from_planned_descendants_and_audits_the_write(): void
+    {
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'project-groups', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $gateway = new class implements TodoistGateway
+        {
+            public array $updates = [];
+
+            public function projects(string $accessToken): array
+            {
+                return [];
+            }
+
+            public function projectSnapshot(string $accessToken, string $projectId): array
+            {
+                return ['tasks' => ['results' => [['id' => 'parent', 'content' => 'Grupo', 'is_completed' => false, 'due' => null, 'deadline_date' => null], ['id' => 'child', 'content' => 'Filha', 'parent_id' => 'parent', 'is_completed' => false, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19']]]];
+            }
+
+            public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
+            {
+                $this->updates[] = compact('taskId', 'start', 'deadline');
+
+                return [];
+            }
+
+            public function updateTask(string $accessToken, string $taskId, array $attributes): array
+            {
+                return [];
+            }
+
+            public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void {}
+
+            public function createTask(string $accessToken, array $attributes): array
+            {
+                return [];
+            }
+
+            public function deleteTask(string $accessToken, string $taskId): void {}
+        };
+        app()->instance(TodoistGateway::class, $gateway);
+
+        self::assertSame(['synced' => 1, 'failed' => 0], app(TodoistSyncService::class)->syncActiveProjects());
+        self::assertSame([['taskId' => 'parent', 'start' => '2026-08-17', 'deadline' => '2026-08-19']], $gateway->updates);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'group.dates.derived']);
+    }
+
+    /** @return array{User, string} */
+    private function activeIntegrationWithEvent(string $externalEventId): array
+    {
+        $user = User::factory()->create();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'todoist-'.$externalEventId, 'access_token_encrypted' => encrypt('token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_project_id' => 'project-'.$externalEventId, 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+
+        $eventId = app(TodoistSyncService::class)->markEvent(['event_id' => $externalEventId, 'event_name' => 'item:updated', 'user_id' => 'todoist-'.$externalEventId]);
+
+        self::assertNotNull($eventId);
+
+        return [$user, $eventId];
+    }
+}

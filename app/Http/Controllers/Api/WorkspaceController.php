@@ -3,7 +3,14 @@
 namespace App\Http\Controllers\Api;
 
 use App\Contracts\TodoistGateway;
+use App\Domain\Scheduling\Dependency;
+use App\Domain\Scheduling\GroupScheduleCalculator;
+use App\Domain\Scheduling\SchedulingEngine;
+use App\Domain\Scheduling\TaskPlan;
+use App\Domain\Scheduling\WorkCalendar;
 use App\Http\Controllers\Controller;
+use App\Services\ProjectCalendarService;
+use DateTimeImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -11,7 +18,7 @@ use Illuminate\Support\Facades\Log;
 
 final class WorkspaceController extends Controller
 {
-    public function show(Request $request, TodoistGateway $gateway): JsonResponse
+    public function show(Request $request, TodoistGateway $gateway, ProjectCalendarService $calendars): JsonResponse
     {
         $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
@@ -20,7 +27,7 @@ final class WorkspaceController extends Controller
             $snapshot = $gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
             Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id]);
 
-            return response()->json($this->fromTodoist($project, $snapshot));
+            return response()->json($this->fromTodoist($project, $integration, $snapshot, $calendars->forProject($project->id)));
         }
 
         abort_unless(config('services.todoist.demo_mode'), 409, 'Conecte o Todoist e selecione um projeto primeiro.');
@@ -38,10 +45,15 @@ final class WorkspaceController extends Controller
         ], 'meta' => ['demo' => true, 'message' => 'Fixture local; conecte o OAuth Todoist para usar dados reais.']]);
     }
 
-    private function fromTodoist(object $project, array $snapshot): array
+    private function fromTodoist(object $project, object $integration, array $snapshot, WorkCalendar $calendar): array
     {
         $tasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'];
         $sections = $snapshot['sections']['results'] ?? $snapshot['sections'];
+        $completionOverrides = DB::table('task_metadata')
+            ->where('gantt_project_id', $project->id)
+            ->whereNotNull('completion_date_override')
+            ->pluck('completion_date_override', 'todoist_task_id')
+            ->all();
         $nodes = [];
         foreach ($tasks as $task) {
             $id = (string) $task['id'];
@@ -50,22 +62,29 @@ final class WorkspaceController extends Controller
         $children = [];
         $roots = [];
         foreach ($nodes as $id => $node) {
-            if ($node['parent_id'] && isset($nodes[$node['parent_id']])) $children[$node['parent_id']][] = $id;
-            else $roots[] = $id;
+            if ($node['parent_id'] && isset($nodes[$node['parent_id']])) {
+                $children[$node['parent_id']][] = $id;
+            } else {
+                $roots[] = $id;
+            }
         }
         $sortIds = function (array &$ids) use ($nodes): void {
             usort($ids, fn (string $left, string $right): int => ((int) ($nodes[$left]['task']['child_order'] ?? $nodes[$left]['task']['order'] ?? 0)) <=> ((int) ($nodes[$right]['task']['child_order'] ?? $nodes[$right]['task']['order'] ?? 0)));
         };
         $sortIds($roots);
-        foreach ($children as &$ids) $sortIds($ids);
+        foreach ($children as &$ids) {
+            $sortIds($ids);
+        }
         unset($ids);
-        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children): array {
+        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children, $calendar): array {
             $task = $nodes[$id]['task'];
             $start = $task['due']['date'] ?? null;
             $finish = $task['deadline_date'] ?? $start;
-            $item = ['id' => $id, 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'progress' => ($task['is_completed'] ?? false) ? 100 : 0, 'status' => ($task['is_completed'] ?? false) ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
+            $item = ['id' => $id, 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'planned' => $start !== null, 'derived' => false, 'virtual_start' => null, 'effective_completion' => $completionOverrides[$id] ?? ($task['completed_at'] ?? null), 'calendar_inconsistent' => $start !== null && ! $calendar->isWorkDay(new DateTimeImmutable($start)), 'sync_status' => 'synced', 'progress' => ($task['is_completed'] ?? false) ? 100 : 0, 'status' => ($task['is_completed'] ?? false) ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
             $result = [$item];
-            foreach ($children[$id] ?? [] as $childId) $result = [...$result, ...$mapTask($childId, $level + 1, $id)];
+            foreach ($children[$id] ?? [] as $childId) {
+                $result = [...$result, ...$mapTask($childId, $level + 1, $id)];
+            }
 
             return $result;
         };
@@ -73,26 +92,97 @@ final class WorkspaceController extends Controller
         $unsectionedRoots = [];
         foreach ($roots as $id) {
             $sectionId = $nodes[$id]['section_id'];
-            if ($sectionId) $rootsBySection[$sectionId][] = $id;
-            else $unsectionedRoots[] = $id;
+            if ($sectionId) {
+                $rootsBySection[$sectionId][] = $id;
+            } else {
+                $unsectionedRoots[] = $id;
+            }
         }
         $ordered = [];
         foreach ($sections as $section) {
             $sectionId = (string) $section['id'];
             $groupId = 'section:'.$sectionId;
             $members = [];
-            foreach ($rootsBySection[$sectionId] ?? [] as $rootId) $members = [...$members, ...$mapTask($rootId, 0, $groupId)];
+            foreach ($rootsBySection[$sectionId] ?? [] as $rootId) {
+                $members = [...$members, ...$mapTask($rootId, 0, $groupId)];
+            }
             $dates = array_values(array_filter(array_merge(array_column($members, 'start'), array_column($members, 'finish'))));
-            $ordered[] = ['id' => $groupId, 'title' => (string) $section['name'], 'kind' => 'group', 'level' => 0, 'parent_id' => null, 'has_children' => $members !== [], 'start' => $dates ? min($dates) : null, 'finish' => $dates ? max($dates) : null, 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['status'] === 'completed')) / count($members) * 100) : 0, 'status' => 'running', 'critical' => false];
+            $ordered[] = ['id' => $groupId, 'title' => (string) $section['name'], 'kind' => 'group', 'level' => 0, 'parent_id' => null, 'has_children' => $members !== [], 'start' => $dates ? min($dates) : null, 'finish' => $dates ? max($dates) : null, 'planned' => $dates !== [], 'derived' => true, 'virtual_start' => null, 'sync_status' => 'synced', 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['status'] === 'completed')) / count($members) * 100) : 0, 'status' => 'running', 'critical' => false];
             $ordered = [...$ordered, ...$members];
         }
-        foreach ($unsectionedRoots as $rootId) $ordered = [...$ordered, ...$mapTask($rootId, 0, null)];
+        foreach ($unsectionedRoots as $rootId) {
+            $ordered = [...$ordered, ...$mapTask($rootId, 0, null)];
+        }
+
+        $plans = [];
+        foreach ($ordered as $item) {
+            if ($item['kind'] !== 'task') {
+                continue;
+            }
+            $start = $item['start'] ? new DateTimeImmutable($item['start']) : null;
+            $effectiveCompletion = isset($completionOverrides[$item['id']]) ? new DateTimeImmutable($completionOverrides[$item['id']]) : null;
+            $plans[$item['id']] = TaskPlan::fromDates($item['id'], $item['title'], $start, $item['finish'] ? new DateTimeImmutable($item['finish']) : null, $calendar, $item['status'] === 'completed', $effectiveCompletion, isset($plans[$item['parent_id'] ?? '']) ? $item['parent_id'] : null);
+        }
+        $dependencyRows = DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('status', 'active')->get();
+        $domainDependencies = [];
+        foreach ($dependencyRows as $dependency) {
+            if (isset($plans[$dependency->predecessor_todoist_task_id], $plans[$dependency->successor_todoist_task_id])) {
+                $domainDependencies[] = new Dependency($dependency->predecessor_todoist_task_id, $dependency->successor_todoist_task_id, $dependency->type);
+            }
+        }
+        $calculation = (new SchedulingEngine($calendar))->schedule(array_values($plans), $domainDependencies, now()->startOfDay()->toDateTimeImmutable());
+        $scheduledPlans = $plans;
+        foreach ($calculation->tasks as $id => $task) {
+            $scheduledPlans[$id] = $task;
+        }
+        $groups = (new GroupScheduleCalculator)->calculate($scheduledPlans, $calendar);
+        $criticalIds = array_fill_keys($calculation->criticalTaskIds, true);
+        $criticalGroups = [];
+        foreach ($calculation->criticalTaskIds as $id) {
+            $parentId = $plans[$id]->parentId ?? null;
+            while ($parentId !== null) {
+                $criticalGroups[$parentId] = true;
+                $parentId = $plans[$parentId]->parentId ?? null;
+            }
+        }
+        foreach ($ordered as &$item) {
+            if (isset($groups[$item['id']])) {
+                $item['kind'] = 'group';
+                $item['start'] = $groups[$item['id']]->start->format('Y-m-d');
+                $item['finish'] = $groups[$item['id']]->finish->format('Y-m-d');
+                $item['derived'] = true;
+                $item['planned'] = true;
+            }
+            $item['critical'] = isset($criticalIds[$item['id']]);
+            $item['total_float'] = $calculation->totalFloat[$item['id']] ?? null;
+            $item['virtual_start'] = isset($calculation->virtualStarts[$item['id']]) ? $calculation->virtualStarts[$item['id']]->format('Y-m-d') : null;
+            $item['sync_status'] = $this->syncState($integration);
+            if ($item['kind'] === 'group') {
+                $item['contains_critical'] = isset($criticalGroups[$item['id']]);
+            }
+        }
+        unset($item);
         $leafTasks = array_values(array_filter($ordered, fn (array $task): bool => $task['kind'] === 'task'));
         $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === 'completed'));
         $total = count($leafTasks);
 
-        $dependencies = DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('status', 'active')->get()->map(fn (object $dependency): array => ['id' => $dependency->id, 'from' => $dependency->predecessor_todoist_task_id, 'to' => $dependency->successor_todoist_task_id, 'type' => $dependency->type, 'critical' => false])->values()->all();
-        return ['data' => ['project' => ['id' => $project->id, 'name' => $project->display_name, 'source' => 'Todoist', 'sync_status' => 'synced', 'updated_at' => now()->toIso8601String()], 'calendar' => ['timezone' => 'America/Sao_Paulo', 'working_days' => [1, 2, 3, 4, 5], 'exceptions' => []], 'tasks' => $ordered, 'dependencies' => $dependencies, 'stats' => ['progress' => $total ? (int) round($completed / $total * 100) : 0, 'completed' => $completed, 'total' => $total, 'critical' => 0, 'unscheduled' => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === 'unscheduled'))]], 'meta' => ['demo' => false, 'message' => 'Dados sincronizados do Todoist.']];
+        $dependencies = $dependencyRows->map(fn (object $dependency): array => ['id' => $dependency->id, 'from' => $dependency->predecessor_todoist_task_id, 'to' => $dependency->successor_todoist_task_id, 'type' => $dependency->type, 'critical' => (isset($criticalIds[$dependency->predecessor_todoist_task_id]) || isset($criticalGroups[$dependency->predecessor_todoist_task_id])) && isset($criticalIds[$dependency->successor_todoist_task_id])])->values()->all();
+
+        return ['data' => ['project' => ['id' => $project->id, 'name' => $project->display_name, 'source' => 'Todoist', 'sync_status' => $this->syncState($integration), 'updated_at' => $integration->last_synced_at ?? now()->toIso8601String()], 'calendar' => $this->calendarPayload($project->id), 'tasks' => $ordered, 'dependencies' => $dependencies, 'stats' => ['progress' => $total ? (int) round($completed / $total * 100) : 0, 'completed' => $completed, 'total' => $total, 'critical' => count($calculation->criticalTaskIds), 'unscheduled' => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === 'unscheduled'))]], 'meta' => ['demo' => false, 'version' => (int) (DB::table('project_settings')->where('gantt_project_id', $project->id)->value('version') ?? 1), 'message' => 'Dados sincronizados do Todoist.']];
+    }
+
+    private function calendarPayload(string $projectId): array
+    {
+        $settings = DB::table('project_settings')->where('gantt_project_id', $projectId)->first();
+        $days = ['monday' => 1, 'tuesday' => 2, 'wednesday' => 3, 'thursday' => 4, 'friday' => 5, 'saturday' => 6, 'sunday' => 7];
+        $workingDays = array_values(array_filter($days, fn (int $day, string $name): bool => $settings === null ? $day <= 5 : (bool) $settings->{$name}, ARRAY_FILTER_USE_BOTH));
+
+        return ['timezone' => 'America/Sao_Paulo', 'working_days' => $workingDays, 'rescheduling_mode' => $settings?->rescheduling_mode ?? 'MANUAL', 'exceptions' => DB::table('calendar_exceptions')->where('gantt_project_id', $projectId)->orderBy('date')->get(['date', 'type', 'description'])->map(fn (object $exception): array => ['date' => $exception->date, 'type' => $exception->type, 'description' => $exception->description])->all()];
+    }
+
+    private function syncState(object $integration): string
+    {
+        return $integration->sync_state === 'unknown' ? 'synced' : ($integration->sync_state ?? 'synced');
     }
 
     private function tasks(): array

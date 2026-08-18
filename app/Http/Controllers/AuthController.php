@@ -26,7 +26,7 @@ final class AuthController extends Controller
         $challengeId = (string) Str::ulid();
         DB::table('login_challenges')->insert(['id' => $challengeId, 'email' => $email, 'token_hash' => hash('sha256', $token), 'pin_hash' => Hash::make($pin), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
 
-        $url = rtrim((string) config('app.url'), '/') . '/?token=' . urlencode($token);
+        $url = rtrim((string) config('app.url'), '/').'/?token='.urlencode($token);
 
         try {
             Mail::to($email)->send(new MagicLoginLink($url, $pin));
@@ -82,5 +82,20 @@ final class AuthController extends Controller
         $request->session()->regenerateToken();
 
         return response()->json(['message' => 'Sessão encerrada.']);
+    }
+
+    public function destroyAccount(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        DB::transaction(function () use ($user): void {
+            DB::table('sessions')->where('user_id', $user->id)->delete();
+            $user->delete();
+        });
+        Auth::logout();
+        $request->session()->invalidate();
+        $request->session()->regenerateToken();
+        Log::info('auth.account.deleted', ['user_id' => $user->id]);
+
+        return response()->json(['message' => 'Conta excluída.']);
     }
 }

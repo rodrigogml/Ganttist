@@ -16,7 +16,8 @@ final class FakeTodoistGateway implements TodoistGateway
     public function projectSnapshot(string $accessToken, string $projectId): array
     {
         return ['sections' => ['results' => [['id' => 'fake-section', 'name' => 'Entrega']]], 'tasks' => ['results' => [
-            ['id' => 'fake-task-1', 'content' => 'Preparar primeira entrega', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 2, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19'],
+            ['id' => 'fake-group', 'content' => 'Preparação', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
+            ['id' => 'fake-task-1', 'content' => 'Preparar primeira entrega', 'parent_id' => 'fake-group', 'section_id' => 'fake-section', 'is_completed' => true, 'priority' => 2, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19'],
             ['id' => 'fake-task-2', 'content' => 'Validar resultado', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
         ]]];
     }
@@ -31,7 +32,12 @@ final class FakeTodoistGateway implements TodoistGateway
         return ['id' => $taskId] + $attributes;
     }
 
-    public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void
+    public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void {}
+
+    public function createTask(string $accessToken, array $attributes): array
     {
+        return ['id' => 'fake-created-task'] + $attributes;
     }
+
+    public function deleteTask(string $accessToken, string $taskId): void {}
 }

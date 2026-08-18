@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
@@ -31,18 +31,22 @@ final class TodoistOAuthController extends Controller
     public function callback(Request $request)
     {
         $request->validate(['code' => ['required', 'string'], 'state' => ['required', 'string']]);
-        $state = DB::table('todoist_oauth_states')->where('state_hash', hash('sha256', $request->string('state')->toString()))->where('expires_at', '>', now())->first();
+        $state = DB::table('todoist_oauth_states')->where('state_hash', hash('sha256', $request->string('state')->toString()))->where('expires_at', '>', now())->whereNull('consumed_at')->first();
         abort_unless($state, 419, 'Estado OAuth inválido ou expirado.');
+        $consumed = DB::table('todoist_oauth_states')->where('id', $state->id)->whereNull('consumed_at')->update(['consumed_at' => now(), 'updated_at' => now()]);
+        abort_unless($consumed === 1, 419, 'OAuth state has already been used.');
         Log::info('todoist.oauth.callback.received', ['state_id' => $state->id, 'user_id' => $state->user_id]);
         $response = Http::asForm()->timeout(15)->post('https://todoist.com/oauth/access_token', ['client_id' => config('services.todoist.client_id'), 'client_secret' => config('services.todoist.client_secret'), 'code' => $request->string('code')->toString()])->throw()->json();
         abort_unless(! empty($response['access_token']), 502, 'O Todoist não retornou um token de acesso.');
-        DB::table('todoist_oauth_states')->where('id', $state->id)->delete();
         Auth::loginUsingId($state->user_id, (bool) $state->remember);
         $request->session()->regenerate();
-        $values = ['todoist_user_id' => $response['user_id'] ?? null, 'access_token_encrypted' => encrypt($response['access_token']), 'status' => 'active', 'authorized_at' => now(), 'updated_at' => now()];
+        $values = ['todoist_user_id' => $response['user_id'] ?? null, 'access_token_encrypted' => encrypt($response['access_token']), 'status' => 'active', 'sync_state' => 'synced', 'last_sync_error' => null, 'authorized_at' => now(), 'token_rotated_at' => now(), 'updated_at' => now()];
         $existingIntegration = DB::table('todoist_integrations')->where('user_id', $state->user_id)->first();
-        if ($existingIntegration) DB::table('todoist_integrations')->where('id', $existingIntegration->id)->update($values);
-        else DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $state->user_id, ...$values, 'created_at' => now()]);
+        if ($existingIntegration) {
+            DB::table('todoist_integrations')->where('id', $existingIntegration->id)->update($values);
+        } else {
+            DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $state->user_id, ...$values, 'created_at' => now()]);
+        }
         Log::info('todoist.oauth.connected', ['user_id' => $state->user_id, 'todoist_user_id' => $response['user_id'] ?? null]);
 
         return redirect('/?todoist=connected');

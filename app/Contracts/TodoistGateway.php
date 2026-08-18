@@ -15,4 +15,8 @@ interface TodoistGateway
     public function updateTask(string $accessToken, string $taskId, array $attributes): array;
 
     public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void;
+
+    public function createTask(string $accessToken, array $attributes): array;
+
+    public function deleteTask(string $accessToken, string $taskId): void;
 }

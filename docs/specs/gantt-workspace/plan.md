@@ -1,0 +1,44 @@
+﻿# Implementation Plan: Workspace de Projeto Gantt
+
+**Feature**: `gantt-workspace` | **Date**: 2026-08-17 | **Spec**: [spec.md](spec.md)
+
+## Summary
+
+Construir projeÃ§Ã£o autorizada de um projeto Todoist: Ã¡rvore preservada, grupos derivados, calendÃ¡rio/configuraÃ§Ã£o e estados calculados. Reaproveitar o carregamento de snapshot e substituir a projeÃ§Ã£o simplificada atual.
+
+## Technical Context
+
+**Language/Version**: PHP 8.4+, TypeScript 5.x. **Dependencies**: Laravel 12, Vue 3, Pinia. **Storage**: MySQL 9.7 + Todoist. **Testing**: PHPUnit, Vitest, E2E. **Platform**: SPA HTTPS. **Performance/Scope**: 2.000 tarefas nominais; 5.000 em stress. **Constraints**: Todoist mantÃ©m campos nativos; core produz estado derivado.
+
+## Interaction Surface Architecture
+
+**Surface Catalog**: [interaction-surfaces.md](../../architecture/interaction-surfaces.md)
+**Interface Design Applicability**: REQUIRED.
+
+| Surface ID | Feature Coverage | Technology Decision | Module/Repository | Notes |
+|---|---|---|---|---|
+| SURF-WEB-OPERATIONS | FULL | Vue/TypeScript SPA | `resources/js` | Ãrvore e timeline sincronizadas |
+
+## Constitution Check
+
+| PrincÃ­pio | Status | Notas |
+|---|---|---|
+| Todoist como fonte nativa | PASS | Snapshot nÃ£o vira rÃ©plica autoritativa. |
+| Core determinÃ­stico | PASS | ProjeÃ§Ã£o consome resultado do domÃ­nio. |
+| Integridade/sincronizaÃ§Ã£o | PASS | Estado possui versÃ£o/sincronizaÃ§Ã£o explÃ­cita. |
+| Qualidade/seguranÃ§a | PASS | Isolamento por usuÃ¡rio/projeto e testes de contrato. |
+| SPA responsiva | PASS | Interface segue catÃ¡logo. |
+
+## Project Structure
+
+Evoluir `app/Http/Controllers/Api/WorkspaceController.php`, serviÃ§o de projeÃ§Ã£o em `app/Domain`/`app/Services`, consultas de configuraÃ§Ã£o em `database`, tipos/store em `resources/js`, e testes de contrato em `tests/Feature`. A projeÃ§Ã£o nÃ£o pode conter regra matemÃ¡tica duplicada no controller.
+
+## ConvenÃ§Ãµes de Borda
+
+| Camada | Case style | ValidaÃ§Ã£o | Fonte da verdade |
+|---|---|---|---|
+| DB | snake_case | migration/constraint | migrations |
+| DomÃ­nio/projeÃ§Ã£o | objetos nomeados | testes golden | contratos de domÃ­nio |
+| API/SPA | camelCase | schema nos dois lados | contracts da feature |
+
+**Mapper layer**: serviÃ§o de projeÃ§Ã£o converte snapshot+metadados em DTO do workspace. **ValidaÃ§Ã£o**: responses e schema da SPA.

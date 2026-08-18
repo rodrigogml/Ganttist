@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Infrastructure\Todoist\HttpTodoistGateway;
+use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
 
@@ -20,5 +21,30 @@ final class HttpTodoistGatewayTest extends TestCase
 
         self::assertSame('t1', $snapshot['tasks']['results'][0]['id']);
         Http::assertSentCount(2);
+    }
+
+    public function test_writes_use_the_provider_contract_and_bearer_token(): void
+    {
+        Http::fake(['*' => Http::response(['id' => 't1'])]);
+
+        $gateway = new HttpTodoistGateway;
+        $gateway->updateTaskDates('token', 't1', '2026-08-20', '2026-08-22');
+        $gateway->updateTask('token', 't1', ['content' => 'Renomeada']);
+        $gateway->setTaskCompletion('token', 't1', true);
+        $gateway->createTask('token', ['content' => 'Nova', 'project_id' => 'p1']);
+        $gateway->deleteTask('token', 't1');
+
+        Http::assertSent(function (Request $request): bool {
+            $data = $request->data();
+
+            return $request->method() === 'POST'
+                && $request->url() === 'https://api.todoist.com/api/v1/tasks/t1'
+                && $request->hasHeader('Authorization', 'Bearer token')
+                && ($data['due_date'] ?? null) === '2026-08-20'
+                && ($data['deadline_date'] ?? null) === '2026-08-22';
+        });
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.todoist.com/api/v1/tasks/t1/close');
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST' && $request->url() === 'https://api.todoist.com/api/v1/tasks' && ($request->data()['content'] ?? null) === 'Nova');
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'DELETE' && $request->url() === 'https://api.todoist.com/api/v1/tasks/t1');
     }
 }

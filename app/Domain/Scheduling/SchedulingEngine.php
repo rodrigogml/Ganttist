@@ -19,6 +19,39 @@ final class SchedulingEngine
         foreach ($tasks as $task) {
             $byId[$task->id] = $task;
         }
+        $groupIds = [];
+        foreach ($byId as $task) {
+            if ($task->parentId !== null && isset($byId[$task->parentId])) {
+                $groupIds[$task->parentId] = true;
+            }
+        }
+        if ($groupIds !== []) {
+            $leafTasks = array_values(array_filter($byId, fn (TaskPlan $task): bool => ! isset($groupIds[$task->id])));
+            $leafDependencies = [];
+            $groupDependencies = [];
+            foreach ($dependencies as $dependency) {
+                if (isset($groupIds[$dependency->successorId])) {
+                    throw new InvalidArgumentException('Um grupo não pode ser sucessor de uma dependência.');
+                }
+                if (isset($groupIds[$dependency->predecessorId])) {
+                    $groupDependencies[] = $dependency;
+                } else {
+                    $leafDependencies[] = $dependency;
+                }
+            }
+            if ($groupDependencies === []) {
+                return $this->schedule($leafTasks, $leafDependencies, $localToday);
+            }
+            $initial = $this->schedule($leafTasks, $leafDependencies, $localToday);
+            $normalized = (new GroupDependencyResolver($this->calendar))->normalize($byId, $initial, $groupDependencies);
+            $unique = [];
+            foreach ([...$leafDependencies, ...$normalized] as $dependency) {
+                $unique[implode('|', [$dependency->predecessorId, $dependency->successorId, $dependency->type])] = $dependency;
+            }
+
+            return $this->schedule($leafTasks, array_values($unique), $localToday);
+        }
+        $originalTasks = $byId;
         $this->validateDependencies($byId, $dependencies);
         $order = $this->topologicalOrder(array_keys($byId), $dependencies);
         $incoming = $this->groupIncoming($dependencies);
@@ -62,7 +95,16 @@ final class SchedulingEngine
 
         [$float, $critical] = $this->calculateFloat($byId, $dependencies, $order);
 
-        return new ScheduleResult($byId, $changed, $float, $critical, $order);
+        $virtualStarts = [];
+        $publicTasks = $byId;
+        foreach ($originalTasks as $id => $original) {
+            if ($original->start === null) {
+                $virtualStarts[$id] = $byId[$id]->start ?? $operationalToday;
+                $publicTasks[$id] = $original;
+            }
+        }
+
+        return new ScheduleResult($publicTasks, $changed, $float, $critical, $order, $virtualStarts);
     }
 
     /** @param array<string, TaskPlan> $tasks @param list<Dependency> $dependencies */
@@ -162,7 +204,7 @@ final class SchedulingEngine
 
         $float = [];
         foreach ($tasks as $id => $task) {
-            $early = $task->start ?? throw new DomainException('Data virtual ausente.');
+            $early = $task->start ?? $task->effectiveCompletionDate ?? throw new DomainException('Data virtual ausente.');
             $float[$id] = $lateStart[$id] <= $early
                 ? 0
                 : $this->calendar->countWorkDays($early, $lateStart[$id]) - 1;

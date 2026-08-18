@@ -1,9 +1,11 @@
 <?php
 
+use App\Http\Middleware\RequestCorrelation;
+use App\Http\Middleware\SecurityHeaders;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
-use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Http\Request;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -15,9 +17,12 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     ->withMiddleware(function (Middleware $middleware): void {
         $middleware->trustProxies(at: '*');
+        $middleware->append(RequestCorrelation::class);
+        $middleware->append(SecurityHeaders::class);
     })
     ->withSchedule(function (Schedule $schedule): void {
         $schedule->command('todoist:sync')->everyFiveMinutes()->withoutOverlapping();
+        $schedule->command('audit:prune')->daily()->withoutOverlapping();
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(fn (Request $request, Throwable $exception): bool => $request->is('api/*') || $request->expectsJson());

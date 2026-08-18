@@ -1,0 +1,27 @@
+groups:
+  - name: ganttist
+    rules:
+      - alert: GanttistSyncQueueDelayed
+        expr: ganttist_sync_operations_oldest_pending_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Sincronização Ganttist está aguardando há mais de 15 minutos"
+          runbook: "docs/operations-runbook.md#fila-de-sincronização"
+      - alert: GanttistSyncFailure
+        expr: ganttist_sync_operations_failed > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Há operação Ganttist em falha ou conflito"
+          runbook: "docs/operations-runbook.md#falha-ou-conflito-de-sincronização"
+      - alert: GanttistTodoistReauthorizationRequired
+        expr: ganttist_todoist_reauthorization_required > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Integração Todoist requer nova autorização"
+          runbook: "docs/operations-runbook.md#reaautorização-do-todoist"

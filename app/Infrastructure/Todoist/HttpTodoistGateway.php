@@ -39,4 +39,14 @@ final class HttpTodoistGateway implements TodoistGateway
     {
         $this->client($accessToken)->post("/tasks/{$taskId}/".($completed ? 'close' : 'reopen'))->throw();
     }
+
+    public function createTask(string $accessToken, array $attributes): array
+    {
+        return $this->client($accessToken)->post('/tasks', $attributes)->throw()->json();
+    }
+
+    public function deleteTask(string $accessToken, string $taskId): void
+    {
+        $this->client($accessToken)->delete("/tasks/{$taskId}")->throw();
+    }
 }

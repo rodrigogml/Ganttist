@@ -18,8 +18,32 @@ final readonly class TaskPlan
         public ?string $parentId = null,
     ) {}
 
+    public static function fromDates(
+        string $id,
+        string $title,
+        ?DateTimeImmutable $start,
+        ?DateTimeImmutable $deadline,
+        WorkCalendar $calendar,
+        bool $completed = false,
+        ?DateTimeImmutable $effectiveCompletionDate = null,
+        ?string $parentId = null,
+    ): self {
+        if ($start === null || $deadline === null || $deadline < $start) {
+            return new self($id, $title, $start, 1, $completed, $effectiveCompletionDate, $parentId);
+        }
+        $normalizedDeadline = $calendar->onOrBefore($deadline);
+        if ($normalizedDeadline < $start) {
+            return new self($id, $title, $start, 1, $completed, $effectiveCompletionDate, $parentId);
+        }
+
+        return new self($id, $title, $start, $calendar->countWorkDays($start, $normalizedDeadline), $completed, $effectiveCompletionDate, $parentId);
+    }
+
     public function finish(WorkCalendar $calendar, ?DateTimeImmutable $fallbackStart = null): DateTimeImmutable
     {
+        if ($this->completed && $this->effectiveCompletionDate !== null) {
+            return $this->effectiveCompletionDate;
+        }
         $start = $this->completed && $this->effectiveCompletionDate
             ? $this->effectiveCompletionDate
             : ($this->start ?? $fallbackStart);
