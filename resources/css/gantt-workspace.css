@@ -300,6 +300,29 @@
   background: #e86c68;
 }
 
+.task-bar:not(.summary) {
+  overflow: hidden;
+}
+
+.task-bar.provisional {
+  background: color-mix(in srgb, var(--amber) 22%, #fff);
+  border: 1px dashed var(--amber);
+  box-shadow: none;
+}
+
+.task-bar.drag-ghost {
+  z-index: 8;
+  cursor: grabbing;
+  opacity: .72;
+  border: 1px solid rgba(255, 255, 255, .8);
+  box-shadow: 0 6px 16px rgba(50, 41, 128, .28);
+  pointer-events: none;
+}
+
+.task-bar.drag-ghost.committing {
+  opacity: .5;
+}
+
 .task-title b,
 .task-title small {
   display: block;

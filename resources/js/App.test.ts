@@ -137,6 +137,65 @@ describe('workspace interaction', () => {
     wrapper.unmount()
   })
 
+  it('moves an empty timeblock ghost by whole days, cancels with Escape and persists a drop directly', async () => {
+    let reconciled = false
+    const dragWorkspace = { ...firstWorkspace, calendar: { timezone: 'America/Sao_Paulo', working_days: [1, 2, 3, 4, 5] }, tasks: [
+      { ...firstWorkspace.tasks[1], id: 'planned', title: 'Planejada', level: 0, parent_id: null, start: '2026-08-17', finish: '2026-08-19' },
+      { ...firstWorkspace.tasks[1], id: 'single-day', title: 'Sem prazo', level: 0, parent_id: null, start: '2026-08-18', finish: null },
+      { ...firstWorkspace.tasks[1], id: 'empty', title: 'Sem data', level: 0, parent_id: null, has_children: true, start: '', finish: '', status: 'unscheduled' },
+      { ...firstWorkspace.tasks[1], id: 'empty-child', title: 'Sem data filha', level: 1, parent_id: 'empty', start: null, finish: null, status: 'unscheduled' },
+    ] }
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: reconciled ? { ...dragWorkspace, tasks: [{ ...dragWorkspace.tasks[0], start: '2026-08-19', finish: '2026-08-21' }, ...dragWorkspace.tasks.slice(1)] } : dragWorkspace }) }
+      if (url === '/api/v1/tasks/planned/dates' && options?.method === 'PUT') { reconciled = true; return { ok: true, json: async () => ({ data: { task_id: 'planned', start: '2026-08-19', finish: '2026-08-21', deadline: '2026-08-21' } }) } }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.stubGlobal('crypto', { randomUUID: () => 'drag-command' })
+
+    const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    const planned = wrapper.get('[aria-label^="Planejada:"]')
+    const provisional = wrapper.get('[aria-label^="Sem data:"]')
+    const provisionalLeaf = wrapper.get('[aria-label^="Sem data filha:"]')
+    expect(planned.text()).toBe('')
+    expect(provisional.text()).toBe('')
+    expect(provisional.classes()).toContain('provisional')
+    expect(provisional.attributes('style')).toContain('width: 42px')
+    expect(provisional.attributes('style')?.match(/left: [^;]+/)?.[0]).toBe(wrapper.get('.today-line').attributes('style')?.match(/left: [^;]+/)?.[0])
+    expect(provisionalLeaf.attributes('style')).toContain('width: 42px')
+    expect(provisionalLeaf.attributes('style')?.match(/left: [^;]+/)?.[0]).toBe(wrapper.get('.today-line').attributes('style')?.match(/left: [^;]+/)?.[0])
+    expect(wrapper.get('[aria-label^="Sem prazo:"]').attributes('style')).toContain('width: 42px')
+
+    await planned.trigger('pointerdown', { clientX: 100 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 184, bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.drag-ghost').attributes('style')).toContain('width: 126px')
+    expect(wrapper.get('.drag-ghost').attributes('aria-label')).toContain('2026-08-19')
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.drag-ghost').exists()).toBe(false)
+    expect(fetch.mock.calls.some(([url]) => url === '/api/v1/tasks/planned/dates')).toBe(false)
+
+    await wrapper.get('[aria-label^="Planejada:"]').trigger('pointerdown', { clientX: 100 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 184, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 184, bubbles: true }))
+    await flushPromises()
+    const request = fetch.mock.calls.find(([url]) => url === '/api/v1/tasks/planned/dates')
+    expect(JSON.parse(String((request?.[1] as RequestInit).body))).toEqual({ start: '2026-08-19', commandId: 'drag-command' })
+    expect(fetch.mock.calls.some(([url]) => url === '/api/v1/schedule/simulate')).toBe(false)
+    expect(wrapper.get('[aria-label^="Planejada:"]').attributes('style')).toContain('width: 126px')
+    await wrapper.findAll('.gantt-row').find(row => row.text().includes('Sem prazo'))!.trigger('dblclick')
+    const dateInputs = wrapper.findAll<HTMLInputElement>('.drawer input[type="date"]')
+    expect(dateInputs[0].element.value).toBe('2026-08-18')
+    expect(dateInputs[1].element.value).toBe('')
+    wrapper.unmount()
+  })
+
   it('separates the row cursor from checkbox selection and expands the hierarchy', async () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }

@@ -21,8 +21,16 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return true
   }))
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
+  let activeLoad: Promise<void> | null = null
 
-  async function load(): Promise<void> {
+  function load(): Promise<void> {
+    if (activeLoad) return activeLoad
+    activeLoad = performLoad().finally(() => { activeLoad = null })
+
+    return activeLoad
+  }
+
+  async function performLoad(): Promise<void> {
     const initialLoad = workspace.value === null
     if (initialLoad) loading.value = true
     else refreshing.value = true

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Services\TodoistUserIdentityService;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\DB;
@@ -29,7 +30,7 @@ final class TodoistOAuthController extends Controller
         return redirect()->away('https://app.todoist.com/oauth/authorize?'.http_build_query(['client_id' => config('services.todoist.client_id'), 'scope' => 'data:read_write,data:delete', 'state' => $state]));
     }
 
-    public function callback(Request $request)
+    public function callback(Request $request, TodoistUserIdentityService $identities)
     {
         if (! $request->filled(['code', 'state'])) {
             Log::warning('todoist.oauth.callback.rejected', ['reason' => $request->filled('error') ? 'provider_rejected' : 'missing_parameters']);
@@ -51,15 +52,21 @@ final class TodoistOAuthController extends Controller
             if (empty($response['access_token'])) {
                 throw new \RuntimeException('Todoist access token missing.');
             }
+            try {
+                $todoistUserId = $identities->resolve($response['access_token']);
+            } catch (Throwable $exception) {
+                $todoistUserId = null;
+                Log::warning('todoist.oauth.identity_unavailable', ['state_id' => $state->id, 'exception' => $exception::class]);
+            }
 
-            DB::transaction(function () use ($state, $response): void {
+            DB::transaction(function () use ($state, $response, $todoistUserId): void {
                 $currentState = DB::table('todoist_oauth_states')->where('id', $state->id)->where('expires_at', '>', now())->whereNull('consumed_at')->lockForUpdate()->first();
                 if (! $currentState) {
                     throw new \RuntimeException('Todoist OAuth state is no longer available.');
                 }
 
                 $existingIntegration = DB::table('todoist_integrations')->where('user_id', $state->user_id)->lockForUpdate()->first();
-                $values = ['todoist_user_id' => $response['user_id'] ?? null, 'access_token_encrypted' => encrypt($response['access_token']), 'status' => 'active', 'sync_state' => 'synced', 'last_sync_error' => null, 'authorized_at' => now(), 'token_rotated_at' => now(), 'updated_at' => now()];
+                $values = ['todoist_user_id' => $todoistUserId ?? $existingIntegration?->todoist_user_id, 'access_token_encrypted' => encrypt($response['access_token']), 'status' => 'active', 'sync_state' => 'synced', 'last_sync_error' => null, 'authorized_at' => now(), 'token_rotated_at' => now(), 'updated_at' => now()];
                 if (isset($response['expires_in'])) {
                     $values['access_token_expires_at'] = now()->addSeconds((int) $response['expires_in']);
                 }
@@ -83,7 +90,7 @@ final class TodoistOAuthController extends Controller
 
         Auth::loginUsingId($state->user_id, (bool) $state->remember);
         $request->session()->regenerate();
-        Log::info('todoist.oauth.connected', ['user_id' => $state->user_id, 'todoist_user_id' => $response['user_id'] ?? null]);
+        Log::info('todoist.oauth.connected', ['user_id' => $state->user_id, 'todoist_user_id' => $todoistUserId]);
 
         return redirect('/?todoist=connected');
     }

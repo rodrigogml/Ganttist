@@ -11,6 +11,7 @@ use App\Domain\Scheduling\WorkCalendar;
 use App\Http\Controllers\Controller;
 use App\Services\ProjectCalendarService;
 use App\Services\TodoistAccessTokenService;
+use App\Services\TodoistSnapshotStore;
 use App\Support\TodoistTask;
 use DateTimeImmutable;
 use Illuminate\Http\JsonResponse;
@@ -20,14 +21,19 @@ use Illuminate\Support\Facades\Log;
 
 final class WorkspaceController extends Controller
 {
-    public function show(Request $request, TodoistGateway $gateway, ProjectCalendarService $calendars, TodoistAccessTokenService $tokens): JsonResponse
+    public function show(Request $request, TodoistGateway $gateway, ProjectCalendarService $calendars, TodoistAccessTokenService $tokens, TodoistSnapshotStore $snapshots): JsonResponse
     {
         $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         Log::debug('workspace.requested', ['user_id' => $request->user()->id, 'has_project' => (bool) $project, 'has_integration' => (bool) $integration]);
         if ($project && $integration) {
-            $snapshot = $gateway->projectSnapshot($tokens->accessToken($integration), $project->todoist_project_id);
-            Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id]);
+            $snapshot = $snapshots->get($project->id);
+            if ($snapshot === null) {
+                $snapshot = $gateway->projectSnapshot($tokens->accessToken($integration), $project->todoist_project_id);
+                Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id, 'source' => 'remote']);
+            } else {
+                Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id, 'source' => 'reconciled_cache']);
+            }
 
             return response()->json($this->fromTodoist($project, $integration, $snapshot, $calendars->forProject($project->id)));
         }
@@ -81,7 +87,7 @@ final class WorkspaceController extends Controller
         $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children, $calendar, $completionOverrides): array {
             $task = $nodes[$id]['task'];
             $start = TodoistTask::start($task);
-            $finish = TodoistTask::finish($task);
+            $finish = TodoistTask::deadline($task);
             $completed = TodoistTask::completed($task);
             $item = ['id' => $id, 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'planned' => $start !== null, 'derived' => false, 'virtual_start' => null, 'effective_completion' => $completionOverrides[$id] ?? ($task['completed_at'] ?? null), 'calendar_inconsistent' => $start !== null && ! $calendar->isWorkDay(new DateTimeImmutable($start)), 'sync_status' => 'synced', 'progress' => $completed ? 100 : 0, 'status' => $completed ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
             $result = [$item];

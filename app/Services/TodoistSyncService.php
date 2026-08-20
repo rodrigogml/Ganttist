@@ -16,7 +16,7 @@ use Illuminate\Support\Str;
 
 final class TodoistSyncService
 {
-    public function __construct(private readonly TodoistGateway $gateway, private readonly AuditWriter $audit, private readonly ProjectCalendarService $calendars, private readonly TodoistAccessTokenService $tokens) {}
+    public function __construct(private readonly TodoistGateway $gateway, private readonly AuditWriter $audit, private readonly ProjectCalendarService $calendars, private readonly TodoistAccessTokenService $tokens, private readonly TodoistSnapshotStore $snapshots, private readonly TodoistUserIdentityService $identities) {}
 
     public function syncActiveProjects(): array
     {
@@ -24,6 +24,7 @@ final class TodoistSyncService
         $failed = 0;
         $integrations = DB::table('todoist_integrations')->where('status', 'active')->whereNotNull('access_token_encrypted')->get();
         foreach ($integrations as $integration) {
+            $this->backfillTodoistUserId($integration);
             $projects = DB::table('gantt_projects')->where('user_id', $integration->user_id)->where('status', 'active')->get();
             $integrationFailed = false;
             foreach ($projects as $project) {
@@ -56,7 +57,7 @@ final class TodoistSyncService
     {
         $todoistUserId = (string) ($payload['user_id'] ?? $payload['event_data']['user_id'] ?? '');
         $userId = $todoistUserId !== '' ? DB::table('todoist_integrations')->where('todoist_user_id', $todoistUserId)->value('user_id') : null;
-        $externalId = (string) ($payload['event_id'] ?? hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR)));
+        $externalId = (string) ($payload['delivery_id'] ?? $payload['event_id'] ?? hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR)));
         $id = (string) Str::ulid();
         $inserted = DB::table('todoist_events')->insertOrIgnore(['id' => $id, 'external_event_id' => $externalId, 'user_id' => $userId, 'event_type' => (string) ($payload['event_name'] ?? 'unknown'), 'payload' => json_encode($payload, JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
         if ($inserted === 1) {
@@ -83,6 +84,7 @@ final class TodoistSyncService
             foreach ($projects as $project) {
                 $snapshot = $this->snapshotWithRetry($integration, $project->todoist_project_id);
                 $this->synchronizeDerivedGroupDates($integration, $project, $snapshot, 'webhook', $event->external_event_id);
+                $this->snapshots->put($project->id, $snapshot);
                 $sourceTasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
                 $ids = array_fill_keys(array_map(fn (array $task): string => (string) $task['id'], $sourceTasks), true);
                 $this->reconcileProjectSnapshot($integration, $project, $ids, $event, $eventId);
@@ -117,6 +119,23 @@ final class TodoistSyncService
     private function isAuthorizationFailure(RequestException $exception): bool
     {
         return in_array($exception->response?->status(), [401, 403], true);
+    }
+
+    private function backfillTodoistUserId(object $integration): void
+    {
+        if ($integration->todoist_user_id !== null || config('services.todoist.driver') !== 'http') {
+            return;
+        }
+        try {
+            $userId = $this->identities->resolve($this->tokens->accessToken($integration));
+            if ($userId === null) {
+                return;
+            }
+            DB::table('todoist_integrations')->where('id', $integration->id)->update(['todoist_user_id' => $userId, 'updated_at' => now()]);
+            $integration->todoist_user_id = $userId;
+        } catch (\Throwable $exception) {
+            Log::warning('todoist.identity.backfill_failed', ['integration_id' => $integration->id, 'exception' => $exception::class]);
+        }
     }
 
     private function recordIntegrationFailure(object $integration, RequestException $exception, string $origin, ?string $eventId = null, ?string $externalEventId = null): void
@@ -215,6 +234,8 @@ final class TodoistSyncService
         if (is_string($previous) && hash_equals($previous, $fingerprint)) {
             return;
         }
+
+        $this->snapshots->put($project->id, $snapshot);
 
         $this->audit->record($integration->user_id, $project->id, 'todoist.snapshot.reconciled', 'scheduler', 'gantt_project', $project->id, null, null, [
             'task_count' => count($snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? []),

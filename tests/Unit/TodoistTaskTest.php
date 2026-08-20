@@ -18,8 +18,14 @@ final class TodoistTaskTest extends TestCase
 
         self::assertSame('2026-08-19', TodoistTask::start($current));
         self::assertSame('2026-08-21', TodoistTask::finish($current));
+        self::assertSame('2026-08-21', TodoistTask::deadline($current));
         self::assertTrue(TodoistTask::completed($current));
         self::assertSame('2026-08-20', TodoistTask::finish($legacy));
+        self::assertSame('2026-08-20', TodoistTask::deadline($legacy));
+        self::assertNull(TodoistTask::deadline(['due' => ['date' => '2026-08-19']]));
+        self::assertNull(TodoistTask::start(['due' => ['date' => '']]));
+        self::assertNull(TodoistTask::start(['due_date' => '   ']));
+        self::assertNull(TodoistTask::deadline(['deadline' => ['date' => '2026-02-30']]));
         self::assertFalse(TodoistTask::completed($legacy));
     }
 }

@@ -52,7 +52,10 @@ final class TodoistOAuthTest extends TestCase
     {
         config()->set('services.todoist.client_id', 'client');
         config()->set('services.todoist.client_secret', 'secret');
-        Http::fake(['https://api.todoist.com/oauth/access_token' => Http::response(['access_token' => 'rotated-token', 'refresh_token' => 'refresh-token', 'expires_in' => 3600, 'user_id' => 'todoist-user'])]);
+        Http::fake([
+            'https://api.todoist.com/oauth/access_token' => Http::response(['access_token' => 'rotated-token', 'refresh_token' => 'refresh-token', 'expires_in' => 3600]),
+            'https://api.todoist.com/api/v1/sync' => Http::response(['user' => ['id' => 'todoist-user']]),
+        ]);
         $user = User::factory()->create();
         $state = str_repeat('s', 64);
         $stateId = (string) Str::ulid();
@@ -63,13 +66,14 @@ final class TodoistOAuthTest extends TestCase
         self::assertNotNull(DB::table('todoist_oauth_states')->where('id', $stateId)->value('consumed_at'));
         $integration = DB::table('todoist_integrations')->where('user_id', $user->id)->first();
         self::assertSame('rotated-token', decrypt($integration->access_token_encrypted));
+        self::assertSame('todoist-user', $integration->todoist_user_id);
         self::assertSame('active', $integration->status);
         self::assertNotNull($integration->token_rotated_at);
         self::assertSame('refresh-token', decrypt($integration->refresh_token_encrypted));
         self::assertNotNull($integration->access_token_expires_at);
 
         $this->get('/oauth/todoist/callback?code=authorized-code&state='.$state)->assertRedirect('/?todoist=authorization_expired');
-        Http::assertSentCount(1);
+        Http::assertSentCount(2);
     }
 
     public function test_failed_token_exchange_does_not_consume_the_oauth_state_or_return_an_error_page(): void

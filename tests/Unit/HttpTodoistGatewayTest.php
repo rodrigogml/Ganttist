@@ -23,6 +23,25 @@ final class HttpTodoistGatewayTest extends TestCase
         Http::assertSentCount(2);
     }
 
+    public function test_project_snapshot_follows_task_cursors_without_truncating_the_project(): void
+    {
+        Http::fake(function (Request $request) {
+            if (str_contains($request->url(), '/sections')) {
+                return Http::response(['results' => [], 'next_cursor' => null]);
+            }
+            if (($request->data()['cursor'] ?? null) === 'next-page') {
+                return Http::response(['results' => [['id' => 't2']], 'next_cursor' => null]);
+            }
+
+            return Http::response(['results' => [['id' => 't1']], 'next_cursor' => 'next-page']);
+        });
+
+        $snapshot = (new HttpTodoistGateway)->projectSnapshot('token', 'p1');
+
+        self::assertSame(['t1', 't2'], array_column($snapshot['tasks']['results'], 'id'));
+        Http::assertSentCount(3);
+    }
+
     public function test_writes_use_the_provider_contract_and_bearer_token(): void
     {
         Http::fake(['*' => Http::response(['id' => 't1'])]);

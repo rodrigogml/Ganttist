@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Contracts\TodoistGateway;
+use App\Infrastructure\Todoist\FakeTodoistGateway;
 use App\Models\User;
 use App\Services\RecalculationProcessor;
+use App\Services\TodoistSnapshotStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -64,6 +66,49 @@ final class WorkspaceApiTest extends TestCase
         self::assertTrue(collect($response->json('data.tasks'))->firstWhere('id', 'fake-task-1')['calendar_inconsistent']);
         self::assertSame('MANUAL', $response->json('data.calendar.rescheduling_mode'));
         self::assertSame(1, $response->json('meta.version'));
+    }
+
+    public function test_workspace_reuses_the_snapshot_just_reconciled_by_an_event(): void
+    {
+        config()->set('services.todoist.demo_mode', false);
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Teste', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, (new FakeTodoistGateway)->projectSnapshot('fake', 'fake-project'));
+        app()->instance(TodoistGateway::class, new class implements TodoistGateway
+        {
+            public function projects(string $accessToken): array
+            {
+                return [];
+            }
+
+            public function projectSnapshot(string $accessToken, string $projectId): array
+            {
+                throw new \LogicException('Não deve buscar novamente no Todoist.');
+            }
+
+            public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
+            {
+                return [];
+            }
+
+            public function updateTask(string $accessToken, string $taskId, array $attributes): array
+            {
+                return [];
+            }
+
+            public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void {}
+
+            public function createTask(string $accessToken, array $attributes): array
+            {
+                return [];
+            }
+
+            public function deleteTask(string $accessToken, string $taskId): void {}
+        });
+
+        $this->actingAs($user)->getJson('/api/v1/workspace')->assertOk()->assertJsonPath('data.tasks.1.id', 'fake-group');
     }
 
     public function test_schedule_apply_persists_an_idempotent_operation_without_calling_todoist(): void

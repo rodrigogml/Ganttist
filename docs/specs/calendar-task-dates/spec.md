@@ -50,7 +50,7 @@ Como planejador, quero distinguir tarefas nÃ£o programadas de datas calculadas
 - **FR-001**: Planejamento DEVE usar exclusivamente datas civis e dias inteiros.
 - **FR-002**: O calendÃ¡rio DEVE permitir semana Ãºtil e exceÃ§Ãµes por data por Gantt.
 - **FR-003**: DuraÃ§Ã£o DEVE contar somente dias Ãºteis; ausÃªncia de deadline vÃ¡lido representa duraÃ§Ã£o de um dia.
-- **FR-004**: Tarefa sem data DEVE continuar nÃ£o programada visualmente e ter referÃªncia virtual somente para cÃ¡lculos autorizados.
+- **FR-004**: Tarefa sem data DEVE continuar nÃ£o programada visualmente, receber timeblock provisÃ³rio de um dia em hoje e ter referÃªncia virtual somente para cÃ¡lculos autorizados; essa representaÃ§Ã£o nÃ£o persiste data sem aÃ§Ã£o explÃ­cita.
 - **FR-005**: AlteraÃ§Ãµes no calendÃ¡rio DEVEM preservar duraÃ§Ã£o em dias Ãºteis e recalcular os impactos necessÃ¡rios.
 - **FR-006**: Datas de grupo DEVEM ser derivadas do menor inÃ­cio e maior fim dos descendentes planejados.
 - **FR-007**: Grupo nÃ£o pode ser movido ou redimensionado diretamente.
@@ -68,4 +68,4 @@ Como planejador, quero distinguir tarefas nÃ£o programadas de datas calculadas
 
 - **SC-001**: 100% dos casos de duraÃ§Ã£o aprovados contabilizam somente dias Ãºteis.
 - **SC-002**: Alterar o calendÃ¡rio mantÃ©m a duraÃ§Ã£o Ãºtil de todas as atividades afetadas em 100% dos cenÃ¡rios automatizados.
-- **SC-003**: Nenhuma tarefa sem inÃ­cio persiste uma barra temporal apenas por possuir referÃªncia virtual.
+- **SC-003**: Nenhuma tarefa sem inÃ­cio persiste data apenas por possuir timeblock provisÃ³rio em hoje ou referÃªncia virtual.

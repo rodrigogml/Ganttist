@@ -22,14 +22,16 @@ final class TodoistSyncServiceTest extends TestCase
         config()->set('services.todoist.webhook_secret', 'webhook-secret');
         config()->set('queue.default', 'database');
         Queue::fake();
-        $payload = ['event_id' => 'evt-webhook', 'event_name' => 'item:updated', 'user_id' => 'unknown-user'];
+        $payload = ['event_name' => 'item:updated', 'user_id' => 'unknown-user'];
         $json = json_encode($payload, JSON_THROW_ON_ERROR);
         $signature = base64_encode(hash_hmac('sha256', $json, 'webhook-secret', true));
 
-        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertStatus(202);
-        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertStatus(202);
+        $server = ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'HTTP_X_TODOIST_DELIVERY_ID' => 'delivery-webhook', 'CONTENT_TYPE' => 'application/json'];
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], $server, $json)->assertOk();
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], $server, $json)->assertOk();
 
         self::assertDatabaseCount('todoist_events', 1);
+        self::assertSame('delivery-webhook', DB::table('todoist_events')->value('external_event_id'));
         Queue::assertPushed(ProcessTodoistEvent::class, 1);
     }
 
@@ -51,7 +53,7 @@ final class TodoistSyncServiceTest extends TestCase
         $json = json_encode($payload, JSON_THROW_ON_ERROR);
         $signature = base64_encode(hash_hmac('sha256', $json, 'webhook-secret', true));
 
-        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertStatus(202);
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertOk();
 
         self::assertNotNull(DB::table('todoist_events')->where('external_event_id', 'evt-sync-driver')->value('processed_at'));
     }
@@ -72,6 +74,7 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertTrue($sync->processEvent($eventId));
         self::assertSame($eventId, $sync->markEvent(['event_id' => 'evt-1', 'event_name' => 'item:updated', 'user_id' => 'fake-user']));
         self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
+        self::assertIsArray(cache()->get('todoist:snapshot:data:'.$projectId));
         self::assertDatabaseHas('task_dependencies', ['gantt_project_id' => $projectId, 'status' => 'inactive']);
         self::assertDatabaseHas('task_metadata', ['gantt_project_id' => $projectId, 'todoist_task_id' => 'removed-task', 'status' => 'outside_project']);
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'todoist.event.reconciled', 'causation_id' => 'evt-1']);
@@ -134,7 +137,7 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertSame('new-token', decrypt($integration->access_token_encrypted));
         self::assertSame('new-refresh-token', decrypt($integration->refresh_token_encrypted));
         self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
-        Http::assertSentCount(6);
+        Http::assertSentCount(5);
     }
 
     public function test_rate_limit_keeps_event_pending_and_marks_sync_as_degraded(): void

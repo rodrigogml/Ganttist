@@ -32,7 +32,7 @@ Como planejador, quero ver seÃ§Ãµes, tarefas e subtarefas na ordem original,
 
 **Acceptance Scenarios**:
 
-1. **Given** uma tarefa sem data, **When** o Gantt Ã© exibido, **Then** ela permanece na posiÃ§Ã£o original da Ã¡rvore, Ã© identificada como nÃ£o programada e nÃ£o recebe barra temporal persistida.
+1. **Given** uma tarefa sem data, **When** o Gantt Ã© exibido, **Then** ela permanece na posiÃ§Ã£o original da Ã¡rvore, Ã© identificada como nÃ£o programada e recebe somente um timeblock provisÃ³rio de um dia em hoje, sem persistÃªncia atÃ© uma aÃ§Ã£o explÃ­cita.
 2. **Given** uma tarefa com descendentes planejados, **When** o Gantt Ã© exibido, **Then** ela aparece como resumo derivado e nÃ£o como atividade comum editÃ¡vel.
 
 ### User Story 3 - Trabalhar sem recarga completa (Priority: P2)

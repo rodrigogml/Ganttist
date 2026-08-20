@@ -49,6 +49,23 @@ describe('workspace visibility', () => {
     expect(store.stale).toBe(false)
   })
 
+  it('coalesces concurrent event refreshes into one workspace request', async () => {
+    const store = useWorkspaceStore()
+    const workspace = { project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, unscheduled: 0 } }
+    let resolveResponse!: (value: unknown) => void
+    const response = new Promise(resolve => { resolveResponse = resolve })
+    const fetch = vi.fn().mockReturnValue(response)
+    vi.stubGlobal('fetch', fetch)
+
+    const first = store.load()
+    const second = store.load()
+    const third = store.load()
+    resolveResponse({ ok: true, json: async () => workspaceResponse(workspace) })
+    await Promise.all([first, second, third])
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('keeps the last projection when the API response violates the workspace contract', async () => {
     const store = useWorkspaceStore()
     store.workspace = { project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, unscheduled: 0 } }

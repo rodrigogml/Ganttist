@@ -27,6 +27,7 @@
 | INT-NAV-001 | SURF-WEB-OPERATIONS | SCREEN | MODIFIED | Árvore e timeline Gantt | workspace |
 | INT-NAV-002 | SURF-WEB-OPERATIONS | PANEL | NEW | Busca e filtros | barra do sistema/atalho |
 | INT-NAV-003 | SURF-WEB-OPERATIONS | PANEL | MODIFIED | Editor seguro de tarefa | duplo clique, Enter ou barra contextual |
+| INT-NAV-004 | SURF-WEB-OPERATIONS | FLOW | MODIFIED | Movimentação civil de timeblock | arraste horizontal da tarefa |
 
 ## Interaction Details
 
@@ -162,6 +163,52 @@
 | access-denied | sessão expirada redireciona ao acesso conforme regra global | refazer login | initial |
 | partial-stale | projeção remota antiga sinalizada sem sobrescrever rascunho | salvar ou reconciliar depois | processing/ready |
 
+### INT-NAV-004 — Movimentação civil de timeblock
+
+**Surface**: SURF-WEB-OPERATIONS
+**Surface Type**: WEB
+**Change Type**: MODIFIED
+**Purpose**: alterar a data Todoist de uma tarefa diretamente no Gantt com feedback preciso, reversível durante o gesto e limitado a dias civis inteiros.
+**Actors and Permissions**: dono do Gantt; somente tarefas folha são arrastáveis, enquanto seções e intervalos derivados permanecem imóveis.
+**Entry and Navigation**: pointer down sobre o timeblock inicia o gesto; movimento horizontal escolhe a coluna de destino; pointer up confirma; `Esc` ou `pointercancel` cancela.
+**Content and Data**: data inicial persistida ou referência visual de hoje, deadline explícito quando houver, largura de coluna, delta em dias, ghost e estado de sincronização.
+**Actions and Behavior**:
+
+- Durante o gesto, o timeblock original não se move nem é exibido; apenas um ghost sem texto acompanha horizontalmente o pointer dentro da própria linha.
+- O ghost encaixa em colunas de dias civis inteiros. Movimento vertical não troca a tarefa de linha e horas/frações de dia não fazem parte do MVP.
+- No drop, a nova data inicial é persistida imediatamente no Todoist. Se existir deadline explícito, ele recebe o mesmo delta civil e preserva a duração; sem deadline, continua ausente.
+- Enquanto a escrita está em andamento, o ghost permanece no destino. No sucesso, a projeção reconciliada assume sua posição; na falha, a barra original reaparece e a mensagem permite tentar novamente.
+- `Esc` durante o gesto restaura a representação original sem chamada externa.
+- Timeblocks não exibem título ou outro texto interno e ocupam múltiplos inteiros da largura da coluna, do início ao deadline inclusive; sem deadline, ocupam exatamente uma coluna.
+- Tarefas sem data persistida continuam com estado não programado, mas recebem um timeblock provisório de uma coluna na faixa de hoje. Arrastá-lo para um destino persiste a primeira data; antes disso, a representação não altera o Todoist.
+
+**Validation and Feedback**: servidor revalida pertencimento da tarefa e deriva o deadline da fonte Todoist; a UI nunca envia duração como autoridade. Falha não deixa mutação otimista residual.
+**Responsive/Adaptive Behavior**: pointer fino em desktop; em touch o mesmo gesto respeita eixo horizontal e alvos adequados. Alternativa de edição por campos permanece no painel.
+**Accessibility**: timeblock possui nome acessível sem texto visível; `Esc` cancela; edição por formulário oferece alternativa completa ao drag.
+**Localization**: datas são civis `YYYY-MM-DD`; “hoje” usa o timezone do workspace.
+**Components and Design System**: timeblock, ghost de drag, toast e projeção reconciliada existentes.
+**Integration and Contracts**: `PUT /api/v1/tasks/{taskId}/dates` com data inicial e `commandId`; adapter Todoist atualiza data e deadline calculado.
+**Telemetry**: início, cancelamento, delta e resultado do drag, sem título da tarefa.
+**Wireframe Requirement**: N/A
+**Wireframe**: N/A — mudança gestual dentro da linha existente, descrita por estados e testes visuais.
+**Traceability**: US-3; FR-005–008; contrato de tarefa Todoist.
+
+**States**:
+
+| State | Expected Presentation | Available Actions | Transition/Exit |
+|---|---|---|---|
+| initial | timeblock persistido ou provisório em hoje | iniciar drag ou editar por formulário | ready |
+| loading | ghost fixo no destino enquanto Todoist responde | aguardar | success/remote-error |
+| empty | tarefa sem data usa bloco provisório em hoje | arrastar para definir data | loading |
+| ready | ghost encaixado na coluna sob o pointer | mover, soltar ou cancelar | loading/initial |
+| processing | equivalente a loading para escrita direta | aguardar | success/remote-error |
+| success | projeção reconciliada na data persistida | continuar | initial |
+| validation-error | destino ou tarefa não editável explicado | corrigir | initial |
+| remote-error | barra original restaurada e erro informado | tentar novamente | ready |
+| offline | drop falha sem alterar a fonte | tentar após reconexão | ready |
+| access-denied | regra global de sessão redireciona ao login | refazer login | initial |
+| partial-stale | atualização remota posterior vence na reconciliação | revisar posição | initial |
+
 ## Cross-Surface Rules
 
 Filtros alteram apenas visibilidade. Relações e grupos permanecem no modelo, e toda ponta oculta oferece caminho de inspeção. Atualizações remotas preservam seleção e cursor somente para IDs existentes.
@@ -173,6 +220,7 @@ Filtros alteram apenas visibilidade. Relações e grupos permanecem no modelo, e
 | INT-NAV-001 | US-3 | FR-005–008 | SC-003 | workspace/preferências/eventos |
 | INT-NAV-002 | US-1–2 | FR-001–004 | SC-001–002 | busca/filtros |
 | INT-NAV-003 | US-3 | FR-006–008 | SC-003 | tarefa/simulação/Todoist |
+| INT-NAV-004 | US-3 | FR-005–008 | SC-003 | tarefa/datas/Todoist |
 
 ## Wireframes
 
@@ -180,6 +228,7 @@ Filtros alteram apenas visibilidade. Relações e grupos permanecem no modelo, e
 |---|---|---|---|
 | INT-NAV-001 | REQUIRED | wireframes/int-nav-001.md | desktop amplo e telefone |
 | INT-NAV-003 | REQUIRED | wireframes/int-nav-003.md | painel flutuante, fixado e confirmação de descarte |
+| INT-NAV-004 | N/A | N/A | gesto e estados na linha existente; sem alteração estrutural |
 
 ## Validation Summary
 

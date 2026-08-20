@@ -12,7 +12,7 @@ final class TaskApiTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_direct_task_update_rejects_dates_and_keeps_schedule_on_the_operation_boundary(): void
+    public function test_direct_date_update_moves_start_and_explicit_deadline_by_the_same_number_of_days(): void
     {
         config()->set('services.todoist.driver', 'fake');
         $user = User::factory()->create();
@@ -21,7 +21,19 @@ final class TaskApiTest extends TestCase
         DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
 
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'commandId' => 'invalid-date-update', 'start' => '2026-08-20'])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20'])->assertStatus(410);
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20'])->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20', 'finish' => '2026-08-25', 'commandId' => 'invalid-finish'])->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20', 'commandId' => 'move-task'])
+            ->assertOk()
+            ->assertJsonPath('data.start', '2026-08-20')
+            ->assertJsonPath('data.finish', '2026-08-22')
+            ->assertJsonPath('data.deadline', '2026-08-22');
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.dates_updated', 'causation_id' => 'move-task']);
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['start' => '2026-08-25', 'commandId' => 'schedule-empty-task'])
+            ->assertOk()
+            ->assertJsonPath('data.start', '2026-08-25')
+            ->assertJsonPath('data.finish', null)
+            ->assertJsonPath('data.deadline', null);
     }
 
     public function test_direct_task_update_requires_a_command_and_is_audited(): void

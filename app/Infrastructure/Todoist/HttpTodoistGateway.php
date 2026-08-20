@@ -6,6 +6,7 @@ namespace App\Infrastructure\Todoist;
 
 use App\Contracts\TodoistGateway;
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Support\Facades\Http;
 
 final class HttpTodoistGateway implements TodoistGateway
@@ -22,7 +23,31 @@ final class HttpTodoistGateway implements TodoistGateway
 
     public function projectSnapshot(string $accessToken, string $projectId): array
     {
-        return ['project_id' => $projectId, 'sections' => $this->client($accessToken)->get('/sections', ['project_id' => $projectId])->throw()->json(), 'tasks' => $this->client($accessToken)->get('/tasks', ['project_id' => $projectId])->throw()->json()];
+        $baseUrl = rtrim((string) config('services.todoist.api_url'), '/');
+        $responses = Http::pool(fn (Pool $pool): array => [
+            $pool->as('sections')->withToken($accessToken)->acceptJson()->timeout(15)->get($baseUrl.'/sections', ['project_id' => $projectId, 'limit' => 200]),
+            $pool->as('tasks')->withToken($accessToken)->acceptJson()->timeout(15)->get($baseUrl.'/tasks', ['project_id' => $projectId, 'limit' => 200]),
+        ]);
+
+        return [
+            'project_id' => $projectId,
+            'sections' => $this->allPages($accessToken, '/sections', $projectId, $responses['sections']->throw()->json()),
+            'tasks' => $this->allPages($accessToken, '/tasks', $projectId, $responses['tasks']->throw()->json()),
+        ];
+    }
+
+    /** @param array<string, mixed> $firstPage */
+    private function allPages(string $accessToken, string $path, string $projectId, array $firstPage): array
+    {
+        $results = $firstPage['results'] ?? $firstPage;
+        $cursor = $firstPage['next_cursor'] ?? null;
+        while (is_string($cursor) && $cursor !== '') {
+            $page = $this->client($accessToken)->get($path, ['project_id' => $projectId, 'limit' => 200, 'cursor' => $cursor])->throw()->json();
+            $results = [...$results, ...($page['results'] ?? [])];
+            $cursor = $page['next_cursor'] ?? null;
+        }
+
+        return ['results' => $results, 'next_cursor' => null];
     }
 
     public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array

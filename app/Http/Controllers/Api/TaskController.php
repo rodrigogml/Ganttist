@@ -6,8 +6,10 @@ use App\Contracts\TodoistGateway;
 use App\Http\Controllers\Controller;
 use App\Services\AuditWriter;
 use App\Services\TodoistAccessTokenService;
+use App\Support\TodoistTask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 
@@ -92,9 +94,39 @@ final class TaskController extends Controller
         return response()->json(['data' => $task]);
     }
 
-    public function updateDates(Request $request, string $taskId, TodoistGateway $gateway): JsonResponse
+    public function updateDates(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
     {
-        abort(410, 'Datas devem ser alteradas pela simulação e operação de reagendamento.');
+        $data = $request->validate([
+            'start' => ['required', 'date_format:Y-m-d'],
+            'commandId' => ['required', 'string', 'max:64'],
+            'finish' => ['prohibited'],
+            'deadline' => ['prohibited'],
+        ]);
+        [$project, $integration, $tasks] = $this->authorizedTasks($request, $gateway);
+        $source = collect($tasks)->first(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId);
+        abort_unless($source, 404, 'Tarefa não pertence ao projeto selecionado.');
+
+        $timezone = config('app.timezone', 'America/Sao_Paulo');
+        $sourceStart = TodoistTask::start($source);
+        $referenceStart = Carbon::createFromFormat('Y-m-d', $sourceStart ?? now($timezone)->toDateString(), $timezone)->startOfDay();
+        $targetStart = Carbon::createFromFormat('Y-m-d', $data['start'], $timezone)->startOfDay();
+        $dayDelta = (int) $referenceStart->diffInDays($targetStart, false);
+        $sourceDeadline = TodoistTask::deadline($source);
+        $targetDeadline = $sourceDeadline
+            ? Carbon::createFromFormat('Y-m-d', $sourceDeadline, $timezone)->addDays($dayDelta)->toDateString()
+            : null;
+
+        $gateway->updateTaskDates($this->tokens->accessToken($integration), $taskId, $data['start'], $targetDeadline);
+        $before = ['start' => $sourceStart, 'deadline' => $sourceDeadline];
+        $after = ['start' => $data['start'], 'deadline' => $targetDeadline];
+        $audit->record($request->user()->id, $project->id, 'task.dates_updated', 'user', 'todoist_task', $taskId, $data['commandId'], $before, $after);
+
+        return response()->json(['data' => [
+            'task_id' => $taskId,
+            'start' => $data['start'],
+            'finish' => $targetDeadline,
+            'deadline' => $targetDeadline,
+        ]]);
     }
 
     public function updateCompletionDate(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit): JsonResponse

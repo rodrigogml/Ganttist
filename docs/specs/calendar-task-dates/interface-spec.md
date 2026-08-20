@@ -74,7 +74,7 @@
 **Entry and Navigation**: painel de tarefa e seleÃ§Ã£o de barra; retorno ao workspace.
 **Content and Data**: inÃ­cio, deadline, duraÃ§Ã£o Ãºtil, estado, calendÃ¡rio aplicÃ¡vel e aviso de nÃ£o planejada/virtual/inconsistÃªncia.
 **Actions and Behavior**: definir/remover data, mover/redimensionar quando permitido e abrir simulaÃ§Ã£o; grupo Ã© somente leitura.
-**Validation and Feedback**: dias bloqueados impedem/encaixam aÃ§Ã£o conforme configuraÃ§Ã£o; deadline invÃ¡lido explicado; ausÃªncia de data nÃ£o Ã© tratada como barra persistida.
+**Validation and Feedback**: dias bloqueados impedem/encaixam aÃ§Ã£o conforme configuraÃ§Ã£o; deadline invÃ¡lido explicado; ausÃªncia de data usa timeblock provisÃ³rio de um dia em hoje, visualmente distinto e sem persistÃªncia atÃ© uma aÃ§Ã£o explÃ­cita.
 **Responsive/Adaptive Behavior**: painel lateral desktop, folha/modal telefone; entrada de data acessÃ­vel sem depender de drag.
 **Accessibility**: campos rotulados, mensagens associadas, equivalentes de teclado para aÃ§Ãµes de barra.
 **Localization**: datas civis em formato local, sem horÃ¡rio.
