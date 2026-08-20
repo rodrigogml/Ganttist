@@ -344,6 +344,153 @@
   margin-inline: 28px;
 }
 
+.app-shell > .main,
+.app-shell > .hidden-dependencies {
+  transition: width 220ms ease, margin-right 220ms ease;
+}
+
+.app-shell.editor-pinned > .main {
+  width: calc(100% - var(--task-editor-width));
+  margin-left: 0;
+  margin-right: var(--task-editor-width);
+}
+
+.app-shell.editor-pinned > .hidden-dependencies {
+  margin-right: calc(var(--task-editor-width) + 28px);
+}
+
+.drawer {
+  width: clamp(390px, var(--task-editor-width), 50vw);
+  max-width: 100vw;
+}
+
+.drawer.pinned {
+  top: 72px;
+  z-index: 19;
+  width: var(--task-editor-width);
+  max-width: 50vw;
+  box-shadow: -1px 0 0 var(--line);
+}
+
+.drawer header {
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.drawer header > div:first-child {
+  min-width: 0;
+}
+
+.drawer header h2 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.drawer-header-actions {
+  display: flex;
+  gap: 7px;
+  margin-left: auto;
+}
+
+.drawer header .drawer-header-actions button {
+  display: inline-grid;
+  place-items: center;
+  margin-left: 0;
+  cursor: pointer;
+}
+
+.drawer-pin svg {
+  width: 16px;
+  height: 16px;
+  fill: #72798a;
+  transform: rotate(-18deg);
+  transition: transform 160ms ease, fill 160ms ease;
+}
+
+.drawer-pin.active {
+  background: #e9e5ff;
+  box-shadow: inset 0 0 0 1px #c9c1f7;
+}
+
+.drawer-pin.active svg {
+  fill: #5548c8;
+  transform: rotate(0);
+}
+
+.drawer-resizer {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  bottom: 0;
+  left: -5px;
+  width: 10px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.drawer-resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 2px;
+  background: transparent;
+  transition: background-color 120ms ease;
+}
+
+.drawer-resizer:hover::after,
+.drawer-resizer:focus-visible::after {
+  background: #7566e8;
+}
+
+.drawer-resizer:focus-visible {
+  outline: 0;
+}
+
+.drawer .soft-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.unsaved-confirm {
+  position: absolute;
+  z-index: 8;
+  left: 18px;
+  right: 18px;
+  bottom: 76px;
+  padding: 16px;
+  border: 1px solid #d8d2fa;
+  border-radius: 11px;
+  background: #fff;
+  box-shadow: 0 18px 48px #151a3038;
+}
+
+.unsaved-confirm b {
+  color: #3f378d;
+  font-size: 12px;
+}
+
+.unsaved-confirm p {
+  margin: 7px 0 14px;
+  color: #666e7f;
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.unsaved-confirm > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.unsaved-confirm button {
+  min-height: 34px;
+}
+
 @media (max-width: 720px) {
   .gantt-card {
     height: max(500px, calc(100dvh - 220px));
@@ -365,6 +512,30 @@
   }
 }
 
+@media (max-width: 779px) {
+  .app-shell.editor-pinned > .main {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .app-shell.editor-pinned > .hidden-dependencies {
+    margin-right: 12px;
+  }
+
+  .drawer,
+  .drawer.pinned {
+    top: 0;
+    z-index: 60;
+    width: min(100%, 390px);
+    max-width: 100vw;
+  }
+
+  .drawer-pin,
+  .drawer-resizer {
+    display: none !important;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .task-row,
   .bar-lane {
@@ -372,6 +543,12 @@
   }
 
   .gantt-tree-toggle-chevron {
+    transition: none;
+  }
+
+  .app-shell > .main,
+  .app-shell > .hidden-dependencies,
+  .drawer-pin svg {
     transition: none;
   }
 }

@@ -30,7 +30,7 @@ class FakeEventSource {
 }
 
 describe('workspace interaction', () => {
-  afterEach(() => { sessionStorage.clear(); vi.unstubAllGlobals() })
+  afterEach(() => { sessionStorage.clear(); localStorage.clear(); vi.unstubAllGlobals() })
 
   it('explains an expired session after reloading an authenticated tab', async () => {
     sessionStorage.setItem('ganttist.authenticated-session', '1')
@@ -259,6 +259,86 @@ describe('workspace interaction', () => {
     const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
     chart.element.dispatchEvent(space)
     expect(space.defaultPrevented).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('opens the task editor on double click and protects dirty drafts', async () => {
+    let saveSucceeds = false
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: selectionWorkspace }) }
+      if (url === '/api/v1/tasks/child') return { ok: saveSucceeds }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.stubGlobal('innerWidth', 1400)
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    const rows = wrapper.findAll('.task-row')
+
+    await rows[1].trigger('dblclick')
+    expect(wrapper.get('.drawer').classes()).toContain('open')
+    expect(wrapper.find('.scrim').exists()).toBe(false)
+    expect(wrapper.get('.drawer').attributes('aria-modal')).toBe('false')
+
+    const title = wrapper.get<HTMLInputElement>('.drawer-body input')
+    await title.setValue('Tarefa pai alterada')
+    document.body.click()
+    await flushPromises()
+    expect(wrapper.get('.drawer').classes()).toContain('open')
+
+    await wrapper.get('.drawer-close').trigger('click')
+    expect(wrapper.get('.unsaved-confirm').attributes('role')).toBe('alertdialog')
+    expect(wrapper.text()).toContain('Alterações não salvas')
+    await wrapper.get('.continue-editing').trigger('click')
+    expect(wrapper.find('.unsaved-confirm').exists()).toBe(false)
+
+    await wrapper.get('.drawer-cancel').trigger('click')
+    await wrapper.get('.discard-changes').trigger('click')
+    expect(wrapper.get('.drawer').classes()).not.toContain('open')
+    expect(wrapper.text()).toContain('Tarefa pai')
+    expect(wrapper.text()).not.toContain('Tarefa pai alterada')
+
+    await rows[1].trigger('dblclick')
+    await wrapper.get('.drawer-pin').trigger('click')
+    expect(wrapper.get('.app-shell').classes()).toContain('editor-pinned')
+    expect(wrapper.get('.drawer').classes()).toContain('pinned')
+    const separator = wrapper.get('.drawer-resizer')
+    expect(separator.attributes('role')).toBe('separator')
+    await separator.trigger('pointerdown', { clientX: 900 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 850 }))
+    window.dispatchEvent(new MouseEvent('pointerup'))
+    await flushPromises()
+    expect(separator.attributes('aria-valuenow')).toBe('440')
+    await separator.trigger('keydown', { key: 'End' })
+    expect(separator.attributes('aria-valuenow')).toBe('700')
+    expect(wrapper.get('.app-shell').attributes('style')).toContain('--task-editor-width: 700px')
+
+    await wrapper.get<HTMLInputElement>('.drawer-body input').setValue('Troca protegida')
+    await rows[2].trigger('dblclick')
+    expect(wrapper.find('.unsaved-confirm').exists()).toBe(true)
+    await wrapper.get('.discard-changes').trigger('click')
+    expect(wrapper.get('.drawer h2').text()).toBe('Subtarefa')
+
+    await wrapper.get<HTMLInputElement>('.drawer-body input').setValue('Subtarefa revisada')
+    const unload = new Event('beforeunload', { cancelable: true })
+    window.dispatchEvent(unload)
+    expect(unload.defaultPrevented).toBe(true)
+    await wrapper.get('.drawer-close').trigger('click')
+    await wrapper.get('.save-before-close').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.drawer').classes()).toContain('open')
+    expect(wrapper.text()).toContain('Não foi possível salvar a tarefa no Todoist')
+
+    saveSucceeds = true
+    await wrapper.get('.save-before-close').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.drawer').classes()).not.toContain('open')
+    expect(fetch).toHaveBeenCalledWith('/api/v1/tasks/child', expect.objectContaining({ method: 'PUT' }))
     wrapper.unmount()
   })
 

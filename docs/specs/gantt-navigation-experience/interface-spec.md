@@ -26,6 +26,7 @@
 |---|---|---|---|---|---|
 | INT-NAV-001 | SURF-WEB-OPERATIONS | SCREEN | MODIFIED | Árvore e timeline Gantt | workspace |
 | INT-NAV-002 | SURF-WEB-OPERATIONS | PANEL | NEW | Busca e filtros | barra do sistema/atalho |
+| INT-NAV-003 | SURF-WEB-OPERATIONS | PANEL | MODIFIED | Editor seguro de tarefa | duplo clique, Enter ou barra contextual |
 
 ## Interaction Details
 
@@ -46,7 +47,7 @@
 - Todo nó com descendentes apresenta um chevron nomeado e visível. A indentação desenha conectores de árvore; ao apontar uma tarefa, seus ancestrais e o caminho de conectores até eles recebem destaque sem substituir o destaque da linha apontada.
 - O último checkbox acionado sem `Shift` torna-se âncora; intervalos sucessivos preservam essa âncora. O último item clicado ou marcado torna-se cursor.
 - Setas acima/abaixo movem o cursor e garantem visibilidade; esquerda/direita rolam a timeline; Espaço alterna a linha do cursor.
-- Edição é ação explícita da barra contextual e fica disponível para exatamente um item.
+- Clique duplo no corpo de uma tarefa ou em sua faixa temporal abre a edição sem alterar a seleção; seções estruturais não são editáveis. `Enter` no cursor e a ação explícita da barra contextual continuam disponíveis.
 - A barra contextual fica dentro do cartão, fixa acima da legenda, e não desloca o gráfico na página.
 - Cada item é uma única linha virtualizada que contém a célula de tarefa fixa à esquerda e sua faixa temporal. Um único scroller controla os dois e não existe coleção de linhas espelhada.
 - Quando o próprio gráfico está focado, setas e Espaço mantêm a mesma semântica da lista. `Shift+Tab` transfere o foco para a linha do cursor sem criar um segundo deslocamento vertical.
@@ -115,6 +116,52 @@
 | access-denied | sem workspace | login | initial |
 | partial-stale | resultado antigo | reconciliar | loading |
 
+### INT-NAV-003 — Editor seguro de tarefa
+
+**Surface**: SURF-WEB-OPERATIONS
+**Surface Type**: WEB
+**Change Type**: MODIFIED
+**Purpose**: editar uma tarefa sem perda silenciosa de dados e permitir consulta simultânea ao Gantt em telas amplas.
+**Actors and Permissions**: dono do Gantt; somente linhas `task` são editáveis.
+**Entry and Navigation**: duplo clique na linha ou faixa temporal, `Enter` sobre o cursor ou ação Editar para uma única seleção. O foco inicial segue para o título; ao fechar, retorna à linha que abriu o painel quando ela ainda estiver renderizada.
+**Content and Data**: campos editáveis da tarefa, origem Todoist, dependências, exclusão, estado de alterações não salvas, modo flutuante/fixado e largura do painel.
+**Actions and Behavior**:
+
+- O painel flutuante entra pela direita, sem backdrop ou desfoque, não fecha por clique externo e mantém o workspace disponível para consulta.
+- X e Cancelar solicitam fechamento. Sem alterações, fecham imediatamente; com alterações não salvas, oferecem `Continuar editando`, `Descartar alterações` e `Salvar alterações`.
+- Abrir outra tarefa enquanto há alterações pendentes usa a mesma confirmação antes da troca. Recarregar ou abandonar a página aciona a proteção nativa do navegador.
+- O botão de pin, imediatamente antes do X, alterna entre painel flutuante e painel incorporado ao layout.
+- Fixado em desktop, o editor ocupa uma coluna à direita e reduz a área principal sem cobrir gráfico ou barra superior. Um separador acessível ajusta a largura entre 390 px e 50% da viewport; a largura também responde a teclado.
+- Em viewport menor que 780 px o editor permanece sobreposto e ocupa a largura disponível; o pin não produz uma divisão inviável.
+- Salvar só encerra o editor após sucesso. Falha remota preserva o rascunho e informa o erro.
+
+**Validation and Feedback**: estado alterado é calculado comparando os campos editáveis com o snapshot de abertura; a confirmação identifica claramente a consequência de cada ação.
+**Responsive/Adaptive Behavior**: desktop e widescreen oferecem modo fixado redimensionável; tablet estreito e telefone usam drawer sobreposto sem backdrop. Pointer arrasta o separador; teclado usa setas, Home e End.
+**Accessibility**: `role="dialog"`, título associado, botões nomeados, pin com `aria-pressed`, separador com `role="separator"` e valores, confirmação com `role="alertdialog"`; não fecha por Escape ou clique acidental.
+**Localization**: mensagens e rótulos em pt-BR; datas continuam civis no formato do controle do navegador.
+**Components and Design System**: drawer existente, botões `soft-btn`/`primary`/`danger-btn`, novo guardião de alterações e separador de painel.
+**Integration and Contracts**: atualização existente de tarefa Todoist, simulação de agenda e override de conclusão; nenhuma alteração de payload externo.
+**Telemetry**: abertura por origem, descarte confirmado e modo fixado, sem conteúdo dos campos.
+**Wireframe Requirement**: REQUIRED
+**Wireframe**: wireframes/int-nav-003.md
+**Traceability**: US-3; FR-006, FR-007 e FR-008; contratos de tarefa e simulação existentes.
+
+**States**:
+
+| State | Expected Presentation | Available Actions | Transition/Exit |
+|---|---|---|---|
+| initial | painel fechado | abrir por duplo clique, Enter ou Editar | ready |
+| loading | N/A — rascunho parte da projeção já carregada | N/A | N/A |
+| empty | N/A — seções e ausência de tarefa não abrem o editor | retornar ao workspace | initial |
+| ready | painel flutuante ou fixado, rascunho intacto | editar, fixar, redimensionar, salvar, cancelar | processing/success/validation-error |
+| processing | ação de salvar/excluir indicada e controles críticos bloqueados | aguardar | success/remote-error |
+| success | painel fechado e projeção atualizada ou simulação criada | continuar no workspace | initial |
+| validation-error | confirmação de alterações ou campo inválido dentro do painel | continuar, descartar ou corrigir | ready/initial |
+| remote-error | mensagem de falha com rascunho preservado | corrigir e salvar novamente | processing |
+| offline | último rascunho permanece no painel | aguardar conexão ou descartar conscientemente | ready |
+| access-denied | sessão expirada redireciona ao acesso conforme regra global | refazer login | initial |
+| partial-stale | projeção remota antiga sinalizada sem sobrescrever rascunho | salvar ou reconciliar depois | processing/ready |
+
 ## Cross-Surface Rules
 
 Filtros alteram apenas visibilidade. Relações e grupos permanecem no modelo, e toda ponta oculta oferece caminho de inspeção. Atualizações remotas preservam seleção e cursor somente para IDs existentes.
@@ -125,12 +172,14 @@ Filtros alteram apenas visibilidade. Relações e grupos permanecem no modelo, e
 |---|---|---|---|---|
 | INT-NAV-001 | US-3 | FR-005–008 | SC-003 | workspace/preferências/eventos |
 | INT-NAV-002 | US-1–2 | FR-001–004 | SC-001–002 | busca/filtros |
+| INT-NAV-003 | US-3 | FR-006–008 | SC-003 | tarefa/simulação/Todoist |
 
 ## Wireframes
 
 | Interaction ID | Requirement | Artifact | Notes |
 |---|---|---|---|
 | INT-NAV-001 | REQUIRED | wireframes/int-nav-001.md | desktop amplo e telefone |
+| INT-NAV-003 | REQUIRED | wireframes/int-nav-003.md | painel flutuante, fixado e confirmação de descarte |
 
 ## Validation Summary
 
