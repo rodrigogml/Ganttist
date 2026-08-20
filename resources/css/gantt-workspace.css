@@ -154,11 +154,12 @@
 }
 
 .gantt-tree-toggle-spacer {
-  position: relative;
   z-index: 1;
   width: 22px;
-  height: 22px;
+  height: var(--tree-row-height);
   flex: 0 0 22px;
+  overflow: visible;
+  shape-rendering: geometricPrecision;
 }
 
 .gantt-tree-toggle:hover,
@@ -258,21 +259,18 @@
   stroke-width: 1;
 }
 
-.gantt-tree-toggle-spacer.connected::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  height: 1px;
-  background: #cfd4df;
-  transform: translateY(-50%);
-  transition: background-color 100ms linear, height 100ms linear;
+.gantt-tree-toggle-spacer path {
+  fill: none;
+  stroke: #cfd4df;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+  stroke-linecap: square;
+  transition: stroke 100ms linear, stroke-width 100ms linear;
 }
 
-.gantt-tree-toggle-spacer.connected.active::after {
-  height: 2px;
-  background: #6558d0;
+.gantt-tree-toggle-spacer.active path {
+  stroke: #6558d0;
+  stroke-width: 2;
 }
 
 .task-row.hierarchy-ancestor .gantt-tree-toggle {

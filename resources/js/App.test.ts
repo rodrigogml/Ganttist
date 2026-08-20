@@ -185,8 +185,10 @@ describe('workspace interaction', () => {
     expect(rows[1].find('.tree-slot').exists()).toBe(true)
     expect(rows[1].get('.task-tree-content').classes()).toContain('has-expanded-children')
     expect(rows[1].get('.tree-slot.current-branch').find('.tree-sibling-continuation').exists()).toBe(true)
+    expect(rows[1].get('.tree-slot.current-branch').get('.tree-sibling-continuation').attributes('d')).toBe('M11 44 V100')
     expect(rows[2].get('.tree-slot.current-branch').find('.tree-sibling-continuation').exists()).toBe(false)
     expect(rows[2].find('.gantt-tree-toggle-spacer').exists()).toBe(true)
+    expect(rows[2].get('.gantt-tree-toggle-spacer').get('path').attributes('d')).toBe('M0 50 H22')
     await wrapper.findAll('.gantt-row')[2].trigger('mouseenter')
     expect(rows[0].classes()).toContain('hierarchy-ancestor')
     expect(rows[1].classes()).toContain('hierarchy-ancestor')
@@ -308,7 +310,7 @@ describe('workspace interaction', () => {
     expect(rows[2].get('.task-tree-content').classes()).toContain('node-down-active')
     for (const siblingRow of [rows[3], rows[4]]) {
       expect(siblingRow.find('.tree-segment-active[d="M11 0 V50"]').exists()).toBe(true)
-      expect(siblingRow.find('.tree-segment-active[d="M11 50 V100"]').exists()).toBe(true)
+      expect(siblingRow.find('.tree-segment-active[d="M11 44 V100"]').exists()).toBe(true)
       expect(siblingRow.find('.tree-segment-active[d="M11 0 V44 Q11 50 17 50 H22"]').exists()).toBe(false)
     }
     expect(rows[5].find('.tree-segment-active[d="M11 0 V44 Q11 50 17 50 H22"]').exists()).toBe(true)
