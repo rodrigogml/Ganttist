@@ -10,6 +10,8 @@ use App\Domain\Scheduling\TaskPlan;
 use App\Domain\Scheduling\WorkCalendar;
 use App\Http\Controllers\Controller;
 use App\Services\ProjectCalendarService;
+use App\Services\TodoistAccessTokenService;
+use App\Support\TodoistTask;
 use DateTimeImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -18,13 +20,13 @@ use Illuminate\Support\Facades\Log;
 
 final class WorkspaceController extends Controller
 {
-    public function show(Request $request, TodoistGateway $gateway, ProjectCalendarService $calendars): JsonResponse
+    public function show(Request $request, TodoistGateway $gateway, ProjectCalendarService $calendars, TodoistAccessTokenService $tokens): JsonResponse
     {
         $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         Log::debug('workspace.requested', ['user_id' => $request->user()->id, 'has_project' => (bool) $project, 'has_integration' => (bool) $integration]);
         if ($project && $integration) {
-            $snapshot = $gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+            $snapshot = $gateway->projectSnapshot($tokens->accessToken($integration), $project->todoist_project_id);
             Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id]);
 
             return response()->json($this->fromTodoist($project, $integration, $snapshot, $calendars->forProject($project->id)));
@@ -76,11 +78,12 @@ final class WorkspaceController extends Controller
             $sortIds($ids);
         }
         unset($ids);
-        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children, $calendar): array {
+        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children, $calendar, $completionOverrides): array {
             $task = $nodes[$id]['task'];
-            $start = $task['due']['date'] ?? null;
-            $finish = $task['deadline_date'] ?? $start;
-            $item = ['id' => $id, 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'planned' => $start !== null, 'derived' => false, 'virtual_start' => null, 'effective_completion' => $completionOverrides[$id] ?? ($task['completed_at'] ?? null), 'calendar_inconsistent' => $start !== null && ! $calendar->isWorkDay(new DateTimeImmutable($start)), 'sync_status' => 'synced', 'progress' => ($task['is_completed'] ?? false) ? 100 : 0, 'status' => ($task['is_completed'] ?? false) ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
+            $start = TodoistTask::start($task);
+            $finish = TodoistTask::finish($task);
+            $completed = TodoistTask::completed($task);
+            $item = ['id' => $id, 'title' => (string) $task['content'], 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'planned' => $start !== null, 'derived' => false, 'virtual_start' => null, 'effective_completion' => $completionOverrides[$id] ?? ($task['completed_at'] ?? null), 'calendar_inconsistent' => $start !== null && ! $calendar->isWorkDay(new DateTimeImmutable($start)), 'sync_status' => 'synced', 'progress' => $completed ? 100 : 0, 'status' => $completed ? 'completed' : ($start ? 'not_started' : 'unscheduled'), 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
             $result = [$item];
             foreach ($children[$id] ?? [] as $childId) {
                 $result = [...$result, ...$mapTask($childId, $level + 1, $id)];
@@ -104,10 +107,10 @@ final class WorkspaceController extends Controller
             $groupId = 'section:'.$sectionId;
             $members = [];
             foreach ($rootsBySection[$sectionId] ?? [] as $rootId) {
-                $members = [...$members, ...$mapTask($rootId, 0, $groupId)];
+                $members = [...$members, ...$mapTask($rootId, 1, $groupId)];
             }
             $dates = array_values(array_filter(array_merge(array_column($members, 'start'), array_column($members, 'finish'))));
-            $ordered[] = ['id' => $groupId, 'title' => (string) $section['name'], 'kind' => 'group', 'level' => 0, 'parent_id' => null, 'has_children' => $members !== [], 'start' => $dates ? min($dates) : null, 'finish' => $dates ? max($dates) : null, 'planned' => $dates !== [], 'derived' => true, 'virtual_start' => null, 'sync_status' => 'synced', 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['status'] === 'completed')) / count($members) * 100) : 0, 'status' => 'running', 'critical' => false];
+            $ordered[] = ['id' => $groupId, 'title' => (string) $section['name'], 'kind' => 'section', 'level' => 0, 'parent_id' => null, 'has_children' => $members !== [], 'start' => $dates ? min($dates) : null, 'finish' => $dates ? max($dates) : null, 'planned' => $dates !== [], 'derived' => true, 'virtual_start' => null, 'sync_status' => 'synced', 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['status'] === 'completed')) / count($members) * 100) : 0, 'status' => 'running', 'critical' => false];
             $ordered = [...$ordered, ...$members];
         }
         foreach ($unsectionedRoots as $rootId) {
@@ -116,7 +119,7 @@ final class WorkspaceController extends Controller
 
         $plans = [];
         foreach ($ordered as $item) {
-            if ($item['kind'] !== 'task') {
+            if ($item['kind'] === 'section') {
                 continue;
             }
             $start = $item['start'] ? new DateTimeImmutable($item['start']) : null;
@@ -147,7 +150,6 @@ final class WorkspaceController extends Controller
         }
         foreach ($ordered as &$item) {
             if (isset($groups[$item['id']])) {
-                $item['kind'] = 'group';
                 $item['start'] = $groups[$item['id']]->start->format('Y-m-d');
                 $item['finish'] = $groups[$item['id']]->finish->format('Y-m-d');
                 $item['derived'] = true;
@@ -157,12 +159,12 @@ final class WorkspaceController extends Controller
             $item['total_float'] = $calculation->totalFloat[$item['id']] ?? null;
             $item['virtual_start'] = isset($calculation->virtualStarts[$item['id']]) ? $calculation->virtualStarts[$item['id']]->format('Y-m-d') : null;
             $item['sync_status'] = $this->syncState($integration);
-            if ($item['kind'] === 'group') {
+            if ($item['kind'] === 'section' || $item['has_children']) {
                 $item['contains_critical'] = isset($criticalGroups[$item['id']]);
             }
         }
         unset($item);
-        $leafTasks = array_values(array_filter($ordered, fn (array $task): bool => $task['kind'] === 'task'));
+        $leafTasks = array_values(array_filter($ordered, fn (array $task): bool => $task['kind'] === 'task' && ! $task['has_children']));
         $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === 'completed'));
         $total = count($leafTasks);
 
@@ -188,14 +190,14 @@ final class WorkspaceController extends Controller
     private function tasks(): array
     {
         return [
-            ['id' => 'g1', 'title' => 'Estratégia & Descoberta', 'kind' => 'group', 'level' => 0, 'start' => '2026-08-17', 'finish' => '2026-08-20', 'progress' => 100, 'status' => 'completed', 'critical' => true],
+            ['id' => 'g1', 'title' => 'Estratégia & Descoberta', 'kind' => 'section', 'level' => 0, 'start' => '2026-08-17', 'finish' => '2026-08-20', 'progress' => 100, 'status' => 'completed', 'critical' => true],
             ['id' => 't1', 'title' => 'Mapear jornada principal', 'kind' => 'task', 'level' => 1, 'start' => '2026-08-17', 'finish' => '2026-08-18', 'progress' => 100, 'status' => 'completed', 'critical' => true, 'priority' => 4, 'assignee' => 'MC'],
             ['id' => 't2', 'title' => 'Validar arquitetura técnica', 'kind' => 'task', 'level' => 1, 'start' => '2026-08-19', 'finish' => '2026-08-20', 'progress' => 100, 'status' => 'completed', 'critical' => true, 'priority' => 3, 'assignee' => 'RL'],
-            ['id' => 'g2', 'title' => 'Experiência do produto', 'kind' => 'group', 'level' => 0, 'start' => '2026-08-24', 'finish' => '2026-09-03', 'progress' => 36, 'status' => 'running', 'critical' => true],
+            ['id' => 'g2', 'title' => 'Experiência do produto', 'kind' => 'section', 'level' => 0, 'start' => '2026-08-24', 'finish' => '2026-09-03', 'progress' => 36, 'status' => 'running', 'critical' => true],
             ['id' => 't3', 'title' => 'Design system e fundações', 'kind' => 'task', 'level' => 1, 'start' => '2026-08-24', 'finish' => '2026-08-27', 'progress' => 70, 'status' => 'running', 'critical' => true, 'priority' => 4, 'assignee' => 'AS'],
             ['id' => 't4', 'title' => 'Prototipar navegação mobile', 'kind' => 'task', 'level' => 1, 'start' => '2026-08-25', 'finish' => '2026-08-28', 'progress' => 45, 'status' => 'running', 'critical' => false, 'priority' => 2, 'assignee' => 'CB'],
             ['id' => 't5', 'title' => 'Renderizador Gantt próprio', 'kind' => 'task', 'level' => 1, 'start' => '2026-08-28', 'finish' => '2026-09-03', 'progress' => 18, 'status' => 'running', 'critical' => true, 'priority' => 4, 'assignee' => 'RL'],
-            ['id' => 'g3', 'title' => 'Integrações & Qualidade', 'kind' => 'group', 'level' => 0, 'start' => '2026-09-04', 'finish' => '2026-09-14', 'progress' => 0, 'status' => 'not_started', 'critical' => true],
+            ['id' => 'g3', 'title' => 'Integrações & Qualidade', 'kind' => 'section', 'level' => 0, 'start' => '2026-09-04', 'finish' => '2026-09-14', 'progress' => 0, 'status' => 'not_started', 'critical' => true],
             ['id' => 't6', 'title' => 'OAuth e sincronização Todoist', 'kind' => 'task', 'level' => 1, 'start' => '2026-09-04', 'finish' => '2026-09-08', 'progress' => 0, 'status' => 'not_started', 'critical' => false, 'priority' => 3, 'assignee' => 'MC'],
             ['id' => 't7', 'title' => 'Golden tests do scheduling', 'kind' => 'task', 'level' => 1, 'start' => '2026-09-04', 'finish' => '2026-09-09', 'progress' => 0, 'status' => 'not_started', 'critical' => true, 'priority' => 4, 'assignee' => 'RL'],
             ['id' => 't8', 'title' => 'Homologação do fluxo completo', 'kind' => 'task', 'level' => 1, 'start' => '2026-09-10', 'finish' => '2026-09-14', 'progress' => 0, 'status' => 'not_started', 'critical' => true, 'priority' => 3, 'assignee' => 'AS'],

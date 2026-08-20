@@ -33,7 +33,7 @@ final class WorkspaceApiTest extends TestCase
             ->assertOk()->assertJsonPath('data.changes.0.start', '2026-08-20');
     }
 
-    public function test_real_workspace_derives_parent_group_from_todoist_snapshot(): void
+    public function test_real_workspace_keeps_parent_task_distinct_from_todoist_section(): void
     {
         config()->set('services.todoist.demo_mode', false);
         config()->set('services.todoist.driver', 'fake');
@@ -47,12 +47,16 @@ final class WorkspaceApiTest extends TestCase
         DB::table('task_dependencies')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'predecessor_todoist_task_id' => 'fake-group', 'successor_todoist_task_id' => 'fake-task-2', 'type' => 'FS', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
 
         $response = $this->actingAs($user)->getJson('/api/v1/workspace')->assertOk();
-        $group = collect($response->json('data.tasks'))->firstWhere('id', 'fake-group');
-        self::assertSame('group', $group['kind']);
-        self::assertSame('2026-08-17', $group['start']);
-        self::assertSame('2026-08-18', $group['finish']);
-        self::assertTrue($group['derived']);
-        self::assertTrue($group['contains_critical']);
+        $parentTask = collect($response->json('data.tasks'))->firstWhere('id', 'fake-group');
+        $section = collect($response->json('data.tasks'))->firstWhere('id', 'section:fake-section');
+        self::assertSame('task', $parentTask['kind']);
+        self::assertTrue($parentTask['has_children']);
+        self::assertSame('2026-08-17', $parentTask['start']);
+        self::assertSame('2026-08-18', $parentTask['finish']);
+        self::assertTrue($parentTask['derived']);
+        self::assertTrue($parentTask['contains_critical']);
+        self::assertSame('section', $section['kind']);
+        self::assertTrue($section['has_children']);
         self::assertSame(2, $response->json('data.stats.critical'));
         self::assertTrue($response->json('data.dependencies.0.critical'));
         self::assertTrue($response->json('data.tasks.2.planned'));

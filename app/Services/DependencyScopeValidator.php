@@ -9,12 +9,12 @@ use InvalidArgumentException;
 
 final readonly class DependencyScopeValidator
 {
-    public function __construct(private TodoistGateway $gateway) {}
+    public function __construct(private TodoistGateway $gateway, private TodoistAccessTokenService $tokens) {}
 
     /** @param object{id: string, todoist_project_id: string} $project @param object{access_token_encrypted: string} $integration */
     public function validate(object $project, object $integration, string $predecessorId, string $successorId): void
     {
-        $snapshot = $this->gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+        $snapshot = $this->gateway->projectSnapshot($this->tokens->accessToken($integration), $project->todoist_project_id);
         $tasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
         $known = [];
         $groups = [];

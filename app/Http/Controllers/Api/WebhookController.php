@@ -24,7 +24,7 @@ final class WebhookController extends Controller
         }
         abort_unless(is_array($payload), 422, 'Payload de webhook invÃ¡lido.');
         $eventId = $sync->markEvent($payload, true);
-        if ($eventId !== null && config('queue.default') !== 'sync') {
+        if ($eventId !== null) {
             ProcessTodoistEvent::dispatch($eventId)->onQueue('sync');
         }
 

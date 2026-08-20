@@ -7,8 +7,8 @@
 .appearance-menu label { display: grid; gap: 5px; margin-top: 10px; color: #697085; font-size: 11px; font-weight: 700; }
 .appearance-menu select { width: 100%; padding: 7px 9px; border: 1px solid #dfe2ea; border-radius: 7px; background: #fff; color: #252a3a; font: inherit; }
 
-.task-row.parent:not(.group) { background: linear-gradient(90deg, rgba(92, 82, 184, .045), transparent 72%); }
-.task-row.parent:not(.group) .task-name b { color: #34324f; font-weight: 800; }
+.task-row.parent:not(.section) { background: linear-gradient(90deg, rgba(92, 82, 184, .045), transparent 72%); }
+.task-row.parent:not(.section) .task-name b { color: #34324f; font-weight: 800; }
 .task-bar.parent { background: #6255bd; box-shadow: 0 3px 9px rgba(70, 58, 155, .18); }
 
 .text-comfortable .gantt-head-left { font-size: 10px; }
@@ -34,7 +34,7 @@
 .space-compact .months { height: 27px; }
 .space-compact .day-heads { height: 37px; }
 .space-compact .task-bar { top: 9px; height: 24px; }
-.space-compact .task-bar.group { top: 14px; }
+.space-compact .task-bar.summary { top: 14px; }
 .space-compact .bar-label { line-height: 24px; }
 
 .space-comfortable .main { padding: 22px 28px 28px; }
@@ -44,5 +44,5 @@
 .space-comfortable .months { height: 29px; }
 .space-comfortable .day-heads { height: 39px; }
 .space-comfortable .task-bar { top: 11px; height: 26px; }
-.space-comfortable .task-bar.group { top: 16px; }
+.space-comfortable .task-bar.summary { top: 16px; }
 .space-comfortable .bar-label { line-height: 26px; }

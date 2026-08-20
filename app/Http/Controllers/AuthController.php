@@ -62,15 +62,23 @@ final class AuthController extends Controller
         if (! $challenge) {
             return response()->json(['message' => 'Link inválido ou expirado.'], 422);
         }
-        $user = DB::transaction(function () use ($challenge, $request): User {
+        $remember = (bool) $request->session()->pull('login_remember', false);
+        $user = DB::transaction(function () use ($challenge): ?User {
+            $availableChallenge = DB::table('login_challenges')->where('id', $challenge->id)->whereNull('consumed_at')->where('expires_at', '>', now())->lockForUpdate()->first();
+            if (! $availableChallenge) {
+                return null;
+            }
             DB::table('login_challenges')->where('id', $challenge->id)->update(['consumed_at' => now(), 'updated_at' => now()]);
-            $user = User::firstOrCreate(['email' => $challenge->email], ['timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
-            Auth::login($user, (bool) $request->session()->pull('login_remember', false));
 
-            return $user;
+            return User::firstOrCreate(['email' => $availableChallenge->email], ['timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
         });
+        if (! $user) {
+            return response()->json(['message' => 'Link inválido ou expirado.'], 422);
+        }
+        Auth::login($user, $remember);
         $request->session()->regenerate();
-        Log::info('auth.magic_link.verified', ['user_id' => $user->id, 'remember' => Auth::viaRemember()]);
+        $request->session()->put('login_remember', $remember);
+        Log::info('auth.magic_link.verified', ['user_id' => $user->id, 'remember' => $remember]);
 
         return response()->json(['message' => 'Acesso confirmado.', 'user' => $user]);
     }

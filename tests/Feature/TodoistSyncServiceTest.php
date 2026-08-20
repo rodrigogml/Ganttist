@@ -43,6 +43,19 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertDatabaseCount('todoist_events', 0);
     }
 
+    public function test_webhook_processes_the_event_when_the_sync_queue_driver_is_used(): void
+    {
+        config()->set('services.todoist.webhook_secret', 'webhook-secret');
+        config()->set('queue.default', 'sync');
+        $payload = ['event_id' => 'evt-sync-driver', 'event_name' => 'item:updated', 'user_id' => 'unknown-user'];
+        $json = json_encode($payload, JSON_THROW_ON_ERROR);
+        $signature = base64_encode(hash_hmac('sha256', $json, 'webhook-secret', true));
+
+        $this->call('POST', '/api/v1/webhooks/todoist', [], [], [], ['HTTP_X_TODOIST_HMAC_SHA256' => $signature, 'CONTENT_TYPE' => 'application/json'], $json)->assertStatus(202);
+
+        self::assertNotNull(DB::table('todoist_events')->where('external_event_id', 'evt-sync-driver')->value('processed_at'));
+    }
+
     public function test_webhook_event_is_deduplicated_and_reconciles_orphaned_dependencies(): void
     {
         config()->set('services.todoist.driver', 'fake');
@@ -90,6 +103,38 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertTrue(app(TodoistSyncService::class)->processEvent($eventId));
         self::assertDatabaseHas('todoist_integrations', ['user_id' => $user->id, 'status' => 'reauthorization_required', 'sync_state' => 'reauthorization_required', 'last_sync_error' => 'authorization_revoked']);
         self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
+    }
+
+    public function test_unauthorized_api_response_refreshes_the_token_and_retries_once(): void
+    {
+        config()->set('services.todoist.driver', 'http');
+        config()->set('services.todoist.client_id', 'client');
+        config()->set('services.todoist.client_secret', 'secret');
+        Http::fake(function ($request) {
+            if ($request->url() === 'https://api.todoist.com/oauth/access_token') {
+                return Http::response(['access_token' => 'new-token', 'refresh_token' => 'new-refresh-token', 'expires_in' => 3600]);
+            }
+            if ($request->hasHeader('Authorization', 'Bearer new-token')) {
+                return str_contains($request->url(), '/tasks')
+                    ? Http::response(['results' => []])
+                    : Http::response([]);
+            }
+
+            return Http::response(['error' => 'Unauthorized'], 401);
+        });
+        [$user, $eventId] = $this->activeIntegrationWithEvent('evt-expired-access');
+        DB::table('todoist_integrations')->where('user_id', $user->id)->update([
+            'refresh_token_encrypted' => encrypt('refresh-token'),
+            'access_token_expires_at' => now()->addHour(),
+        ]);
+
+        self::assertTrue(app(TodoistSyncService::class)->processEvent($eventId));
+        $integration = DB::table('todoist_integrations')->where('user_id', $user->id)->first();
+        self::assertSame('active', $integration->status);
+        self::assertSame('new-token', decrypt($integration->access_token_encrypted));
+        self::assertSame('new-refresh-token', decrypt($integration->refresh_token_encrypted));
+        self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
+        Http::assertSentCount(6);
     }
 
     public function test_rate_limit_keeps_event_pending_and_marks_sync_as_degraded(): void
@@ -149,6 +194,9 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertSame(['synced' => 1, 'failed' => 0], app(TodoistSyncService::class)->syncActiveProjects());
         self::assertSame([['taskId' => 'parent', 'start' => '2026-08-17', 'deadline' => '2026-08-19']], $gateway->updates);
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'group.dates.derived']);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'todoist.snapshot.reconciled', 'origin' => 'scheduler']);
+        self::assertSame(['synced' => 1, 'failed' => 0], app(TodoistSyncService::class)->syncActiveProjects());
+        self::assertSame(1, DB::table('audit_events')->where('gantt_project_id', $projectId)->where('action', 'todoist.snapshot.reconciled')->count());
     }
 
     /** @return array{User, string} */

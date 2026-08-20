@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useWorkspaceStore } from './workspace'
+import { useAuthStore } from './auth'
 
 function workspaceResponse(workspace: unknown) { return { data: workspace } }
 
@@ -13,7 +14,7 @@ describe('workspace visibility', () => {
     store.workspace = {
       project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' },
       tasks: [
-        { id: 'group', title: 'Grupo', kind: 'group', level: 0, start: null, finish: null, progress: 0, status: 'running', critical: false },
+        { id: 'group', title: 'Grupo', kind: 'section', level: 0, start: null, finish: null, progress: 0, status: 'running', critical: false },
         { id: 'task', title: 'Tarefa escondida', kind: 'task', level: 1, parent_id: 'group', start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'running', critical: false },
         { id: 'other', title: 'Outra tarefa', kind: 'task', level: 0, start: '2026-08-18', finish: '2026-08-18', progress: 0, status: 'running', critical: false },
       ],
@@ -57,5 +58,18 @@ describe('workspace visibility', () => {
 
     expect(store.workspace?.project.id).toBe('p')
     expect(store.stale).toBe(true)
+  })
+
+  it('returns to authentication when the workspace session expires', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' }
+    const store = useWorkspaceStore()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401 }))
+
+    await store.load()
+
+    expect(auth.user).toBeNull()
+    expect(auth.error).toContain('sessão expirou')
+    expect(store.stale).toBe(false)
   })
 })

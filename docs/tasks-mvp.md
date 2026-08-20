@@ -83,7 +83,7 @@ Ref: `gantt-navigation-experience/spec.md` FR-001â€“008; INT-NAV-001/002
 
 - [x] 4.2.1 Implementar virtualizaÃ§Ã£o vertical/horizontal e janela temporal sem intervalo fixo. <!-- janela vertical/horizontal limitada por viewport; intervalo deriva das tarefas -->
 - [x] 4.2.2 Implementar busca, filtros, relaÃ§Ãµes ocultas, teclado, touch e responsividade. <!-- busca/filtros, dependÃªncias ocultas revelÃ¡veis, Ã¡rvore por teclado, Pointer Events e breakpoints -->
-- [ ] 4.2.3 Medir 2k/5k, testar dispositivos reais e registrar gate do spike.
+- [~] 4.2.3 Medir 2k/5k, testar dispositivos reais e registrar gate do spike. <!-- benchmark Chromium headless no staging: 2k/5k com 32 nós no DOM; matriz de dispositivos físicos permanece pendente; evidência em docs/performance-evidence.md -->
 
 ### 4.3 Implementar fluxos de calendÃ¡rio, dependÃªncia e operaÃ§Ã£o `[A]`
 
@@ -107,9 +107,9 @@ Ref: INT-SYNC-001/002; INT-AUDIT-001
 
 Ref: ConstituiÃ§Ã£o IV; especificaÃ§Ã£o Â§18N/18O
 
-- [ ] 5.1.1 Expandir suites golden, integraÃ§Ã£o MySQL, contract Todoist, E2E e carga.
-- [ ] 5.1.2 Configurar mÃ©tricas, logs estruturados, health/readiness, filas e alertas aprovados.
-- [ ] 5.1.3 Executar checklist de aceite, testes exploratÃ³rios e registrar bugs/limitaÃ§Ãµes.
+- [~] 5.1.1 Expandir suites golden, integraÃ§Ã£o MySQL, contract Todoist, E2E e carga. <!-- PHPUnit/MySQL, Vitest, typecheck, build, Pint, audits e benchmark executados; E2E autenticado e carga sustentada continuam gate externo -->
+- [x] 5.1.2 Configurar mÃ©tricas, logs estruturados, health/readiness, filas e alertas aprovados. <!-- staging validado: /health, /ready, /metrics; regras em etc/monitoring/ganttist-alerts.yml -->
+- [~] 5.1.3 Executar checklist de aceite, testes exploratÃ³rios e registrar bugs/limitaÃ§Ãµes. <!-- aceite automatizado atualizado; OAuth/webhook/e-mail/SSE multi-cliente e exploraÃ§Ã£o visual ainda exigem credenciais/execuÃ§Ã£o manual -->
 
 ## Matriz de DependÃªncias
 

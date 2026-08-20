@@ -12,10 +12,10 @@ final class EventStreamController extends Controller
     public function __invoke(Request $request, WorkspaceEventFeed $feed)
     {
         $userId = $request->user()->id;
+        $lastEventId = $this->cursor($request, $userId);
 
-        return response()->stream(function () use ($userId, $feed): void {
+        return response()->stream(function () use ($userId, $feed, $lastEventId): void {
             set_time_limit(0);
-            $lastEventId = $this->cursor($request, $userId);
             for ($attempt = 0; $attempt < 24; $attempt++) {
                 $events = $feed->after($userId, $lastEventId);
                 if ($events->isNotEmpty()) {

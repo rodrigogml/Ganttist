@@ -22,7 +22,7 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
   for (const task of data.tasks) {
     const item = record(task, 'task')
     for (const field of ['id', 'title', 'kind', 'status']) string(item[field], `task.${field}`)
-    if (typeof item.level !== 'number' || !['task', 'group'].includes(item.kind as string)) throw new Error('Contrato de workspace inválido: task.kind/level.')
+    if (typeof item.level !== 'number' || !['task', 'section'].includes(item.kind as string)) throw new Error('Contrato de workspace inválido: task.kind/level.')
     if (item.start !== null && typeof item.start !== 'string') throw new Error('Contrato de workspace inválido: task.start.')
     if (item.finish !== null && typeof item.finish !== 'string') throw new Error('Contrato de workspace inválido: task.finish.')
   }

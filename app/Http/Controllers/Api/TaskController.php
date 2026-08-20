@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Contracts\TodoistGateway;
 use App\Http\Controllers\Controller;
 use App\Services\AuditWriter;
+use App\Services\TodoistAccessTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -12,6 +13,8 @@ use Illuminate\Support\Str;
 
 final class TaskController extends Controller
 {
+    public function __construct(private readonly TodoistAccessTokenService $tokens) {}
+
     public function store(Request $request, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
     {
         $data = $request->validate(['title' => ['required', 'string', 'max:500'], 'parentId' => ['nullable', 'string', 'max:255'], 'commandId' => ['required', 'string', 'max:64']]);
@@ -19,7 +22,7 @@ final class TaskController extends Controller
         if ($data['parentId'] ?? null) {
             abort_unless(collect($tasks)->contains(fn (array $task): bool => (string) ($task['id'] ?? '') === $data['parentId']), 422, 'A tarefa pai não pertence ao projeto selecionado.');
         }
-        $task = $gateway->createTask(decrypt($integration->access_token_encrypted), array_filter(['content' => $data['title'], 'project_id' => $project->todoist_project_id, 'parent_id' => $data['parentId'] ?? null]));
+        $task = $gateway->createTask($this->tokens->accessToken($integration), array_filter(['content' => $data['title'], 'project_id' => $project->todoist_project_id, 'parent_id' => $data['parentId'] ?? null]));
         $audit->record($request->user()->id, $project->id, 'task.created', 'user', 'todoist_task', (string) ($task['id'] ?? ''), $data['commandId'], null, ['parent_id' => $data['parentId'] ?? null]);
 
         return response()->json(['data' => $task], 201);
@@ -51,7 +54,7 @@ final class TaskController extends Controller
         abort_if(collect($tasks)->contains(fn (array $task): bool => (string) ($task['parent_id'] ?? '') === $taskId), 422, 'Exclua ou mova as subtarefas antes de remover um grupo.');
         $incoming = DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('successor_todoist_task_id', $taskId)->where('status', 'active')->get();
         $outgoing = DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('predecessor_todoist_task_id', $taskId)->where('status', 'active')->get();
-        $gateway->deleteTask(decrypt($integration->access_token_encrypted), $taskId);
+        $gateway->deleteTask($this->tokens->accessToken($integration), $taskId);
         DB::transaction(function () use ($project, $taskId, $incoming, $outgoing, $data): void {
             DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where(fn ($query) => $query->where('predecessor_todoist_task_id', $taskId)->orWhere('successor_todoist_task_id', $taskId))->where('status', 'active')->update(['status' => 'removed', 'updated_at' => now()]);
             if ($data['preserveContinuity']) {
@@ -80,9 +83,9 @@ final class TaskController extends Controller
         $source = collect($tasks)->first(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId);
         abort_unless($source, 404, 'Tarefa não pertence ao projeto selecionado.');
         $attributes = array_filter(['content' => $data['title'], 'priority' => $data['priority'] ?? null], fn ($value) => $value !== null);
-        $task = $gateway->updateTask(decrypt($integration->access_token_encrypted), $taskId, $attributes);
+        $task = $gateway->updateTask($this->tokens->accessToken($integration), $taskId, $attributes);
         if (array_key_exists('completed', $data)) {
-            $gateway->setTaskCompletion(decrypt($integration->access_token_encrypted), $taskId, $data['completed']);
+            $gateway->setTaskCompletion($this->tokens->accessToken($integration), $taskId, $data['completed']);
         }
         $audit->record($request->user()->id, $project->id, 'task.updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['title' => $source['content'] ?? null, 'priority' => $source['priority'] ?? null, 'completed' => $source['is_completed'] ?? null], ['title' => $data['title'], 'priority' => $data['priority'] ?? $source['priority'] ?? null, 'completed' => $data['completed'] ?? $source['is_completed'] ?? null]);
 
@@ -120,7 +123,7 @@ final class TaskController extends Controller
         abort_unless($integration?->access_token_encrypted, 409, 'Conecte sua conta Todoist primeiro.');
         $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         abort_unless($project, 409, 'Selecione um projeto Todoist primeiro.');
-        $snapshot = $gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+        $snapshot = $gateway->projectSnapshot($this->tokens->accessToken($integration), $project->todoist_project_id);
 
         return [$project, $integration, $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? []];
     }

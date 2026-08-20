@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Contracts\TodoistGateway;
 use App\Http\Controllers\Controller;
 use App\Services\AuditWriter;
+use App\Services\TodoistAccessTokenService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -26,18 +27,18 @@ final class TodoistController extends Controller
         return response()->json(['connected' => $integration !== null, 'integration_status' => $storedIntegration?->status ?? 'disconnected', 'sync_state' => $storedIntegration?->sync_state ?? 'unknown', 'last_sync_error' => $storedIntegration?->last_sync_error, 'last_synced_at' => $storedIntegration?->last_synced_at, 'pending_operations' => $pendingOperations, 'conflict_operations' => $conflictOperations, 'project' => $project ? ['id' => $project->id, 'todoist_project_id' => $project->todoist_project_id, 'name' => $project->display_name] : null]);
     }
 
-    public function projects(Request $request, TodoistGateway $gateway): JsonResponse
+    public function projects(Request $request, TodoistGateway $gateway, TodoistAccessTokenService $tokens): JsonResponse
     {
-        $token = $this->token($request);
+        $token = $this->token($request, $tokens);
         $projects = $gateway->projects($token);
 
         return response()->json(['data' => $projects['results'] ?? $projects]);
     }
 
-    public function selectProject(Request $request, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
+    public function selectProject(Request $request, TodoistGateway $gateway, AuditWriter $audit, TodoistAccessTokenService $tokens): JsonResponse
     {
         $data = $request->validate(['todoist_project_id' => ['required', 'string', 'max:64'], 'commandId' => ['required', 'string', 'max:64']]);
-        $projects = $gateway->projects($this->token($request));
+        $projects = $gateway->projects($this->token($request, $tokens));
         $project = collect($projects['results'] ?? $projects)->first(fn (array $project): bool => (string) ($project['id'] ?? '') === $data['todoist_project_id']);
         abort_unless($project, 422, 'O projeto selecionado não pertence à conta Todoist conectada.');
         $displayName = (string) ($project['name'] ?? $project['content'] ?? 'Projeto Todoist');
@@ -70,7 +71,7 @@ final class TodoistController extends Controller
         $data = $request->validate(['commandId' => ['required', 'string', 'max:64']]);
         $projectId = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->value('id');
         DB::transaction(function () use ($request): void {
-            DB::table('todoist_integrations')->where('user_id', $request->user()->id)->update(['status' => 'disconnected', 'access_token_encrypted' => null, 'updated_at' => now()]);
+            DB::table('todoist_integrations')->where('user_id', $request->user()->id)->update(['status' => 'disconnected', 'access_token_encrypted' => null, 'refresh_token_encrypted' => null, 'access_token_expires_at' => null, 'updated_at' => now()]);
             DB::table('gantt_projects')->where('user_id', $request->user()->id)->update(['status' => 'archived', 'updated_at' => now()]);
         });
         $audit->record($request->user()->id, $projectId, 'todoist.integration.disconnected', 'user', 'todoist_integration', null, $data['commandId']);
@@ -78,11 +79,11 @@ final class TodoistController extends Controller
         return response()->json(['message' => 'Conta Todoist desconectada.']);
     }
 
-    private function token(Request $request): string
+    private function token(Request $request, TodoistAccessTokenService $tokens): string
     {
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         abort_unless($integration?->access_token_encrypted, 409, 'Conecte sua conta Todoist primeiro.');
 
-        return decrypt($integration->access_token_encrypted);
+        return $tokens->accessToken($integration);
     }
 }

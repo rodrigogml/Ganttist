@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
+import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
 import type { Task, Workspace } from '../types'
 
@@ -28,6 +29,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     error.value = ''
     try {
       const response = await fetch('/api/v1/workspace')
+      if (useAuthStore().handleUnauthorized(response)) return
       if (!response.ok) throw new Error('Não foi possível carregar o projeto.')
       workspace.value = parseWorkspaceResponse(await response.json())
       stale.value = false
