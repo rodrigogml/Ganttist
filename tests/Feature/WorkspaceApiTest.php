@@ -53,8 +53,10 @@ final class WorkspaceApiTest extends TestCase
         $section = collect($response->json('data.tasks'))->firstWhere('id', 'section:fake-section');
         self::assertSame('task', $parentTask['kind']);
         self::assertTrue($parentTask['has_children']);
-        self::assertSame('2026-08-17', $parentTask['start']);
-        self::assertSame('2026-08-18', $parentTask['finish']);
+        self::assertNull($parentTask['start']);
+        self::assertNull($parentTask['finish']);
+        self::assertSame('2026-08-17', $parentTask['considered_start']);
+        self::assertSame('2026-08-18', $parentTask['considered_deadline']);
         self::assertTrue($parentTask['derived']);
         self::assertTrue($parentTask['contains_critical']);
         self::assertSame('section', $section['kind']);
@@ -65,6 +67,7 @@ final class WorkspaceApiTest extends TestCase
         self::assertSame('synced', $response->json('data.tasks.2.sync_status'));
         self::assertTrue(collect($response->json('data.tasks'))->firstWhere('id', 'fake-task-1')['calendar_inconsistent']);
         self::assertSame('MANUAL', $response->json('data.calendar.rescheduling_mode'));
+        self::assertSame('PRESERVE_DURATION', $response->json('data.calendar.projection_policy'));
         self::assertSame(1, $response->json('meta.version'));
     }
 

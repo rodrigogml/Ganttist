@@ -4,6 +4,10 @@ declare(strict_types=1);
 
 namespace App\Support;
 
+use DateTimeImmutable;
+use DateTimeZone;
+use Throwable;
+
 final class TodoistTask
 {
     /** @param array<string, mixed> $task */
@@ -28,6 +32,21 @@ final class TodoistTask
     public static function completed(array $task): bool
     {
         return (bool) ($task['is_completed'] ?? $task['checked'] ?? false);
+    }
+
+    /** @param array<string, mixed> $task */
+    public static function completionDate(array $task, string $timezone): ?string
+    {
+        $value = $task['completed_at'] ?? null;
+        if (! is_string($value) || trim($value) === '') {
+            return null;
+        }
+
+        try {
+            return (new DateTimeImmutable($value))->setTimezone(new DateTimeZone($timezone))->format('Y-m-d');
+        } catch (Throwable) {
+            return null;
+        }
     }
 
     private static function civilDate(mixed $value): ?string

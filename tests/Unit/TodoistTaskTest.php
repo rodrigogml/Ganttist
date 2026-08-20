@@ -27,5 +27,7 @@ final class TodoistTaskTest extends TestCase
         self::assertNull(TodoistTask::start(['due_date' => '   ']));
         self::assertNull(TodoistTask::deadline(['deadline' => ['date' => '2026-02-30']]));
         self::assertFalse(TodoistTask::completed($legacy));
+        self::assertSame('2026-08-20', TodoistTask::completionDate(['completed_at' => '2026-08-21T01:30:00Z'], 'America/Sao_Paulo'));
+        self::assertNull(TodoistTask::completionDate(['completed_at' => 'invalid'], 'America/Sao_Paulo'));
     }
 }

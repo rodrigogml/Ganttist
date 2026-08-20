@@ -4,7 +4,7 @@ import { createPinia } from 'pinia'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
 
-const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: '2026-08-17', finish: '2026-08-18', progress: 0, status: 'running', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'running', critical: false }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, unscheduled: 0 } }
+const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
 const secondWorkspace = { ...firstWorkspace, project: { ...firstWorkspace.project, id: 'p2', name: 'Projeto B' }, tasks: [{ ...firstWorkspace.tasks[0], title: 'Grupo atualizado' }, firstWorkspace.tasks[1]] }
 const selectionWorkspace = { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], id: 'parent', title: 'Tarefa pai', has_children: true }, { ...firstWorkspace.tasks[1], level: 2, parent_id: 'parent' }, { ...firstWorkspace.tasks[1], id: 'sibling', title: 'Outra tarefa' }] }
 const chainWorkspace = { ...firstWorkspace, tasks: [
@@ -108,7 +108,7 @@ describe('workspace interaction', () => {
     const fetch = vi.fn(async (url: string, options?: RequestInit) => {
       if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
       if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
-      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: reconciled ? { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], start: '2026-08-20', finish: '2026-08-20' }] } : firstWorkspace }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: reconciled ? { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], start: '2026-08-20', finish: '2026-08-20', considered_start: '2026-08-20', considered_deadline: '2026-08-20' }] } : firstWorkspace }) }
       if (url === '/api/v1/schedule/simulate') return { ok: true, json: async () => ({ data: { command_id: 'cmd-1', changes: [{ task_id: 'child', start: '2026-08-20', finish: '2026-08-20' }] } }) }
       if (url === '/api/v1/schedule/apply' && options?.method === 'POST') return { ok: true, json: async () => ({ data: { operation_id: 'op-1', state: 'pending' } }) }
       if (url === '/api/v1/schedule/operations/op-1') { reconciled = true; return { ok: true, json: async () => ({ data: { operation_id: 'op-1', state: 'completed', items: [{ state: 'applied' }] } }) } }
@@ -140,15 +140,15 @@ describe('workspace interaction', () => {
   it('moves an empty timeblock ghost by whole days, cancels with Escape and persists a drop directly', async () => {
     let reconciled = false
     const dragWorkspace = { ...firstWorkspace, calendar: { timezone: 'America/Sao_Paulo', working_days: [1, 2, 3, 4, 5] }, tasks: [
-      { ...firstWorkspace.tasks[1], id: 'planned', title: 'Planejada', level: 0, parent_id: null, start: '2026-08-17', finish: '2026-08-19' },
-      { ...firstWorkspace.tasks[1], id: 'single-day', title: 'Sem prazo', level: 0, parent_id: null, start: '2026-08-18', finish: null },
-      { ...firstWorkspace.tasks[1], id: 'empty', title: 'Sem data', level: 0, parent_id: null, has_children: true, start: '', finish: '', status: 'unscheduled' },
-      { ...firstWorkspace.tasks[1], id: 'empty-child', title: 'Sem data filha', level: 1, parent_id: 'empty', start: null, finish: null, status: 'unscheduled' },
+      { ...firstWorkspace.tasks[1], id: 'planned', title: 'Planejada', level: 0, parent_id: null, start: '2026-08-17', finish: '2026-08-19', considered_start: '2026-08-17', considered_deadline: '2026-08-19' },
+      { ...firstWorkspace.tasks[1], id: 'single-day', title: 'Sem prazo', level: 0, parent_id: null, start: '2026-08-18', finish: null, considered_start: '2026-08-18', considered_deadline: '2026-08-18' },
+      { ...firstWorkspace.tasks[1], id: 'empty', title: 'Sem data', level: 0, parent_id: null, has_children: true, start: '', finish: '', considered_start: null, considered_deadline: null, status: 'opened' },
+      { ...firstWorkspace.tasks[1], id: 'empty-child', title: 'Sem data filha', level: 1, parent_id: 'empty', start: null, finish: null, considered_start: null, considered_deadline: null, status: 'opened' },
     ] }
     const fetch = vi.fn(async (url: string, options?: RequestInit) => {
       if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
       if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
-      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: reconciled ? { ...dragWorkspace, tasks: [{ ...dragWorkspace.tasks[0], start: '2026-08-19', finish: '2026-08-21' }, ...dragWorkspace.tasks.slice(1)] } : dragWorkspace }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: reconciled ? { ...dragWorkspace, tasks: [{ ...dragWorkspace.tasks[0], start: '2026-08-19', finish: '2026-08-21', considered_start: '2026-08-19', considered_deadline: '2026-08-21' }, ...dragWorkspace.tasks.slice(1)] } : dragWorkspace }) }
       if (url === '/api/v1/tasks/planned/dates' && options?.method === 'PUT') { reconciled = true; return { ok: true, json: async () => ({ data: { task_id: 'planned', start: '2026-08-19', finish: '2026-08-21', deadline: '2026-08-21' } }) } }
       throw new Error(`Unexpected request ${url}`)
     })
@@ -292,6 +292,12 @@ describe('workspace interaction', () => {
       expect(row.find('.task-row').exists()).toBe(true)
       expect(row.find('.bar-lane').exists()).toBe(true)
     }
+    const sectionRow = wrapper.findAll('.gantt-row')[0]
+    expect(sectionRow.get('.task-assignee').text()).toBe('')
+    expect(sectionRow.get('.task-status').text()).toBe('')
+    expect(sectionRow.get('.task-bar').classes()).toContain('summary')
+    expect(sectionRow.get('.task-bar').classes()).not.toContain('provisional')
+    expect(sectionRow.find('.group-line').exists()).toBe(true)
 
     await wrapper.findAll('.task-bar')[0].trigger('click')
     const chart = wrapper.get('.gantt-scroll')

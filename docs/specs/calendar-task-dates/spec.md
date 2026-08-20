@@ -55,6 +55,8 @@ Como planejador, quero distinguir tarefas nÃ£o programadas de datas calculadas
 - **FR-006**: Datas de grupo DEVEM ser derivadas do menor inÃ­cio e maior fim dos descendentes planejados.
 - **FR-007**: Grupo nÃ£o pode ser movido ou redimensionado diretamente.
 - **FR-008**: O sistema DEVE distinguir e comunicar datas invÃ¡lidas, nÃ£o Ãºteis, virtuais e persistidas.
+- **FR-009**: O Gantt DEVE permitir escolher `PRESERVE_DURATION` ou `PRESERVE_DEADLINE` para a projeção de tarefas deslocadas por desbloqueio, usando preservação de duração como padrão.
+- **FR-010**: Alterar a política de projeção DEVE recalcular somente valores derivados e NÃO DEVE escrever datas ou deadlines no Todoist.
 
 ### Key Entities
 
@@ -63,6 +65,7 @@ Como planejador, quero distinguir tarefas nÃ£o programadas de datas calculadas
 - **Atividade nÃ£o programada**: tarefa sem inÃ­cio persistido, mantida na hierarquia.
 - **Data virtual**: referÃªncia calculada nÃ£o persistida para atividade sem data.
 - **Grupo**: intervalo derivado de descendentes planejados.
+- **Política de projeção**: regra por Gantt que determina se um deslocamento virtual preserva duração útil ou prazo de entrega.
 
 ## Success Criteria
 

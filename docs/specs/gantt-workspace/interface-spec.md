@@ -35,14 +35,14 @@
 **Purpose**: apresentar uma Ãºnica projeÃ§Ã£o confiÃ¡vel de Ã¡rvore e cronograma de um projeto selecionado.
 **Actors and Permissions**: usuÃ¡rio autenticado, dono do Gantt.
 **Entry and Navigation**: seleÃ§Ã£o de projeto abre o workspace; busca, histÃ³rico e configuraÃ§Ãµes retornam preservando foco/contexto.
-**Content and Data**: barra do sistema; resumo; Ã¡rvore por seÃ§Ãµes/tarefas/subtarefas; timeline; grupos derivados; tarefas sem data; estado de sincronizaÃ§Ã£o.
-**Actions and Behavior**: expandir/recolher, selecionar item, abrir painel, navegar no tempo, abrir filtros/configuraÃ§Ãµes e solicitar recarga. Grupos nÃ£o sÃ£o editÃ¡veis diretamente.
+**Content and Data**: barra do sistema; resumo; Ã¡rvore por seÃ§Ãµes/tarefas/subtarefas; timeline; grupos derivados; campos explícitos do Todoist; data, deadline e desbloqueio considerados; status calculado; estado de sincronizaÃ§Ã£o.
+**Actions and Behavior**: expandir/recolher, selecionar item, abrir painel, navegar no tempo, filtrar por `COMPLETED`, `BLOCKED`, `SCHEDULED`, `LATE` ou `OPENED`, abrir configuraÃ§Ãµes e solicitar recarga. Grupos nÃ£o sÃ£o editÃ¡veis diretamente; status calculado não é editável.
 **Validation and Feedback**: respostas exibem somente projeÃ§Ã£o autorizada; projeto vazio, integraÃ§Ã£o ausente e falha de sincronizaÃ§Ã£o tÃªm explicaÃ§Ã£o e aÃ§Ã£o de recuperaÃ§Ã£o.
 **Responsive/Adaptive Behavior**: desktop mostra Ã¡rvore e timeline lado a lado; tablet reduz colunas; telefone usa Ã¡rvore e timeline/painel em Ã¡reas alternÃ¡veis, preservando seleÃ§Ã£o.
 **Accessibility**: estrutura de Ã¡rvore navegÃ¡vel por teclado, foco visÃ­vel, relaÃ§Ã£o entre linha e barra, sem depender apenas de cor; alvos touch adequados.
 **Localization**: `pt-BR`; datas respeitam locale e timezone de planejamento.
 **Components and Design System**: barra do sistema, Ã¡rvore virtualizada, timeline, badge de estado, painel e mensagens compartilhadas.
-**Integration and Contracts**: projeÃ§Ã£o de workspace e eventos de atualizaÃ§Ã£o; cliente nÃ£o calcula grupos, estados ou criticidade.
+**Integration and Contracts**: projeÃ§Ã£o de workspace e eventos de atualizaÃ§Ã£o; cliente nÃ£o calcula grupos, datas consideradas, desbloqueio, status ou criticidade. O contrato distingue `start`/`finish` explícitos de `considered_start`/`considered_deadline` calculados.
 **Telemetry**: abertura, tempo atÃ© pronto, projeto vazio, erro, recarga e alternÃ¢ncia de viewport; sem tÃ­tulos de tarefa.
 **Wireframe Requirement**: REQUIRED
 **Wireframe**: wireframes/int-workspace-001.md
@@ -71,7 +71,7 @@ Desktop, tablet e telefone compartilham o mesmo estado de negÃ³cio; apenas a d
 
 | Interaction ID | User Stories | Functional Requirements | Success Criteria | Contracts |
 |---|---|---|---|---|
-| INT-WORKSPACE-001 | US-1â€“3 | FR-001â€“007 | SC-001â€“003 | workspace/eventos |
+| INT-WORKSPACE-001 | US-1â€“3 | FR-001â€“017 | SC-001â€“005 | workspace/eventos |
 
 ## Wireframes
 

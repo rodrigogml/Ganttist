@@ -14,12 +14,12 @@ describe('workspace visibility', () => {
     store.workspace = {
       project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' },
       tasks: [
-        { id: 'group', title: 'Grupo', kind: 'section', level: 0, start: null, finish: null, progress: 0, status: 'running', critical: false },
-        { id: 'task', title: 'Tarefa escondida', kind: 'task', level: 1, parent_id: 'group', start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'running', critical: false },
-        { id: 'other', title: 'Outra tarefa', kind: 'task', level: 0, start: '2026-08-18', finish: '2026-08-18', progress: 0, status: 'running', critical: false },
+        { id: 'group', title: 'Grupo', kind: 'section', level: 0, start: null, finish: null, progress: 0, status: 'opened', critical: false },
+        { id: 'task', title: 'Tarefa escondida', kind: 'task', level: 1, parent_id: 'group', start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'opened', critical: false },
+        { id: 'other', title: 'Outra tarefa', kind: 'task', level: 0, start: '2026-08-18', finish: '2026-08-18', progress: 0, status: 'opened', critical: false },
       ],
       dependencies: [{ id: 'd', from: 'task', to: 'other', type: 'FS', critical: false }],
-      stats: { progress: 0, completed: 0, total: 2, critical: 0, unscheduled: 0 },
+      stats: { progress: 0, completed: 0, total: 2, critical: 0, opened: 2, blocked: 0, scheduled: 0, late: 0, without_dates: 0 },
     }
     store.hiddenGroups = new Set(['group'])
     store.search = 'sem resultado'
@@ -36,8 +36,8 @@ describe('workspace visibility', () => {
     const store = useWorkspaceStore()
     store.workspace = {
       project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' },
-      tasks: [{ id: 'task', title: 'Antes', kind: 'task', level: 0, start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'running', critical: false }],
-      dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, unscheduled: 0 },
+      tasks: [{ id: 'task', title: 'Antes', kind: 'task', level: 0, start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'opened', critical: false }],
+      dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 },
     }
     store.selected = ['task']
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => workspaceResponse({ ...store.workspace, tasks: [{ ...store.workspace!.tasks[0], title: 'Depois' }] }) }))
@@ -51,7 +51,7 @@ describe('workspace visibility', () => {
 
   it('coalesces concurrent event refreshes into one workspace request', async () => {
     const store = useWorkspaceStore()
-    const workspace = { project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, unscheduled: 0 } }
+    const workspace = { project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, opened: 0, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
     let resolveResponse!: (value: unknown) => void
     const response = new Promise(resolve => { resolveResponse = resolve })
     const fetch = vi.fn().mockReturnValue(response)
@@ -68,7 +68,7 @@ describe('workspace visibility', () => {
 
   it('keeps the last projection when the API response violates the workspace contract', async () => {
     const store = useWorkspaceStore()
-    store.workspace = { project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, unscheduled: 0 } }
+    store.workspace = { project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, opened: 0, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: { project: {}, tasks: [], dependencies: [], stats: {} } }) }))
 
     await store.load()

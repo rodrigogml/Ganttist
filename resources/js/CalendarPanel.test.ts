@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import CalendarPanel from './CalendarPanel.vue'
 
-const calendar = { version: 1, workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], reschedulingMode: 'MANUAL', deadlinePolicy: 'ANTERIOR', allowUnscheduledTasks: true, exceptions: [] }
+const calendar = { version: 1, workingDays: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], reschedulingMode: 'MANUAL', projectionPolicy: 'PRESERVE_DURATION', deadlinePolicy: 'ANTERIOR', allowUnscheduledTasks: true, exceptions: [] }
 
 describe('calendar impact confirmation', () => {
   afterEach(() => vi.unstubAllGlobals())
@@ -23,6 +23,8 @@ describe('calendar impact confirmation', () => {
     await wrapper.get('footer .primary').trigger('click')
     await flushPromises()
     expect(fetch).toHaveBeenCalledWith('/api/v1/calendar/simulate', expect.objectContaining({ method: 'POST' }))
+    const simulationRequest = fetch.mock.calls.find(([url]) => url === '/api/v1/calendar/simulate')
+    expect(JSON.parse(String(simulationRequest?.[1]?.body)).projectionPolicy).toBe('PRESERVE_DURATION')
     expect(fetch).not.toHaveBeenCalledWith('/api/v1/calendar', expect.objectContaining({ method: 'PUT' }))
     expect(wrapper.text()).toContain('Impacto previsto')
 

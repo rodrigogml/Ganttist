@@ -17,7 +17,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const hiddenGroups = ref(new Set<string>())
   const tasks = computed(() => (workspace.value?.tasks ?? []).filter(task => {
     if (search.value && !task.title.toLocaleLowerCase('pt-BR').includes(search.value.toLocaleLowerCase('pt-BR'))) return false
-    if (statusFilter.value !== 'all' && task.status !== statusFilter.value) return false
+    if (statusFilter.value !== 'all' && task.kind === 'task' && task.status !== statusFilter.value) return false
     return true
   }))
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)

@@ -53,6 +53,8 @@ Como planejador, quero usar um grupo como predecessor quando seu escopo inteiro 
 - **FR-006**: O sistema DEVE calcular caminho crÃ­tico e folga sobre atividades executÃ¡veis, respeitando calendÃ¡rio e grupos derivados.
 - **FR-007**: A criticidade DEVE ser recalculada apÃ³s mudanÃ§as que alterem rede, datas, calendÃ¡rio, conclusÃ£o ou simulaÃ§Ã£o.
 - **FR-008**: RelaÃ§Ãµes DEVEM permanecer compreensÃ­veis mesmo quando uma ponta estiver oculta por filtro ou recolhimento.
+- **FR-009**: Somente uma relação `FS` com predecessora não concluída DEVE produzir status `BLOCKED`; `SS`, `FF` e `SF` continuam aplicando suas restrições temporais sem bloquear o status de disponibilidade.
+- **FR-010**: Para projeção, uma predecessora `FS` concluída libera pela data efetiva de conclusão; uma não concluída projeta desbloqueio no primeiro dia útil posterior ao seu deadline considerado.
 
 ### Key Entities
 
