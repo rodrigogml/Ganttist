@@ -2,7 +2,11 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
-import type { Task, Workspace } from '../types'
+import type { Task, TaskStatus, Workspace } from '../types'
+
+export type WorkspaceStatusFilter = 'all' | 'unblocked' | TaskStatus
+
+const unblockedStatuses = new Set<TaskStatus>(['opened', 'scheduled', 'late'])
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const workspace = ref<Workspace | null>(null)
@@ -11,13 +15,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const stale = ref(false)
   const error = ref('')
   const search = ref('')
-  const statusFilter = ref('all')
+  const statusFilter = ref<WorkspaceStatusFilter>('all')
   const selected = ref<string[]>([])
   const zoom = ref<'day' | 'week' | 'month'>('week')
   const hiddenGroups = ref(new Set<string>())
   const tasks = computed(() => (workspace.value?.tasks ?? []).filter(task => {
     if (search.value && !task.title.toLocaleLowerCase('pt-BR').includes(search.value.toLocaleLowerCase('pt-BR'))) return false
-    if (statusFilter.value !== 'all' && task.kind === 'task' && task.status !== statusFilter.value) return false
+    if (task.kind === 'task' && statusFilter.value === 'unblocked' && !unblockedStatuses.has(task.status)) return false
+    if (task.kind === 'task' && statusFilter.value !== 'all' && statusFilter.value !== 'unblocked' && task.status !== statusFilter.value) return false
     return true
   }))
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)

@@ -95,6 +95,44 @@ describe('workspace interaction', () => {
     wrapper.unmount()
   })
 
+  it('groups unlocked status filters under one selectable virtual parent', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: firstWorkspace }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    await wrapper.findAll('.commands button').find(button => button.text().includes('Filtros'))!.trigger('click')
+
+    const popover = wrapper.get('.filter-popover')
+    const group = popover.get('.filter-status-group')
+    const parent = group.get('.filter-status-parent')
+    const children = group.findAll('.filter-status-children button')
+    expect(parent.text()).toContain('Desbloqueadas')
+    expect(parent.attributes('aria-pressed')).toBe('false')
+    expect(children.map(button => button.text())).toEqual(['Abertas', 'Agendadas', 'Atrasadas'])
+    expect(popover.text().indexOf('Desbloqueadas')).toBeLessThan(popover.text().indexOf('Abertas'))
+    expect(popover.text().indexOf('Atrasadas')).toBeLessThan(popover.text().indexOf('Bloqueadas'))
+
+    await parent.trigger('click')
+    expect(parent.classes()).toContain('active')
+    expect(parent.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('.commands .count').text()).toBe('1')
+
+    await children[1].trigger('click')
+    expect(children[1].classes()).toContain('active')
+    expect(children[1].attributes('aria-pressed')).toBe('true')
+    expect(parent.classes()).toContain('contains-active')
+    expect(parent.classes()).not.toContain('active')
+    wrapper.unmount()
+  })
+
   it('returns to the login screen when an interaction detects an expired session', async () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/v1/me') return { ok: true, status: 200, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }

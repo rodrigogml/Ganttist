@@ -32,6 +32,28 @@ describe('workspace visibility', () => {
     expect(store.statusFilter).toBe('all')
   })
 
+  it('filters all unlocked states as one virtual parent while preserving individual choices', () => {
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'opened', title: 'Aberta', status: 'opened' },
+        { ...base, id: 'scheduled', title: 'Agendada', status: 'scheduled' },
+        { ...base, id: 'late', title: 'Atrasada', status: 'late' },
+        { ...base, id: 'blocked', title: 'Bloqueada', status: 'blocked' },
+        { ...base, id: 'completed', title: 'Concluída', status: 'completed' },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 1, total: 5, critical: 0, opened: 1, blocked: 1, scheduled: 1, late: 1, without_dates: 5 },
+    }
+
+    store.statusFilter = 'unblocked'
+    expect(store.tasks.map(task => task.id)).toEqual(['opened', 'scheduled', 'late'])
+
+    store.statusFilter = 'scheduled'
+    expect(store.tasks.map(task => task.id)).toEqual(['scheduled'])
+  })
+
   it('reconciles an already-open workspace without resetting selection or replacing it with an error', async () => {
     const store = useWorkspaceStore()
     store.workspace = {

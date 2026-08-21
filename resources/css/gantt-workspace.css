@@ -1009,13 +1009,56 @@
 }
 
 .task-row.opened .status-label {
-  background: #efedff;
-  color: #6558d0;
+  background: #e9f8f2;
+  color: #2f8b69;
 }
 
 .task-row.opened .status-label i,
 .legend.opened {
-  background: var(--violet);
+  background: var(--green);
+}
+
+.filter-popover {
+  width: 190px;
+}
+
+.filter-popover > button,
+.filter-status-group button {
+  width: 100%;
+}
+
+.filter-status-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-status-parent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 700;
+}
+
+.filter-status-parent span {
+  width: 10px;
+  color: #8b91a0;
+  text-align: center;
+}
+
+.filter-status-parent.contains-active:not(.active) {
+  color: #5145b8;
+}
+
+.filter-status-children {
+  display: flex;
+  flex-direction: column;
+  margin-left: 12px;
+  padding-left: 9px;
+  border-left: 1px solid #dedafa;
+}
+
+.filter-popover .filter-status-children button {
+  padding-left: 10px;
 }
 
 .task-row.blocked .status-label {
