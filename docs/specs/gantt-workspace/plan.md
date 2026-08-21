@@ -33,6 +33,10 @@ Construir projeÃ§Ã£o autorizada de um projeto Todoist: Ã¡rvore preservada,
 
 Evoluir `app/Http/Controllers/Api/WorkspaceController.php`, serviÃ§o de projeÃ§Ã£o em `app/Domain`/`app/Services`, consultas de configuraÃ§Ã£o em `database`, tipos/store em `resources/js`, e testes de contrato em `tests/Feature`. A projeÃ§Ã£o nÃ£o pode conter regra matemÃ¡tica duplicada no controller.
 
+Gestos temporais serão isolados de `App.vue` por uma máquina de estados/composable em `resources/js/composables`, com utilitários puros de snap e mapeamento de endpoints em `resources/js/utils`. O endpoint de datas aceitará intents explícitos `MOVE`, `RESIZE_START` e `RESIZE_END`; apenas o primeiro desloca início e deadline juntos. Resize persiste diretamente os campos nativos escolhidos e, em seguida, força reconciliação da projeção. A criação gráfica reutiliza `DependencyController`, cuja validação de escopo, grupos, duplicidade e ciclo permanece autoritativa.
+
+O cliente usa um único conjunto de listeners globais durante cada gesto e um único overlay SVG para preview de conexão, evitando listeners permanentes por timeblock. Atualizações de ponteiro são quantizadas por largura de coluna e limitadas a uma mutação visual por frame. Grupos/seções continuam derivados e não recebem resize.
+
 ## ConvenÃ§Ãµes de Borda
 
 | Camada | Case style | ValidaÃ§Ã£o | Fonte da verdade |

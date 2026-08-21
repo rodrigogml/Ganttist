@@ -186,13 +186,67 @@ describe('workspace interaction', () => {
     window.dispatchEvent(new MouseEvent('pointerup', { clientX: 184, bubbles: true }))
     await flushPromises()
     const request = fetch.mock.calls.find(([url]) => url === '/api/v1/tasks/planned/dates')
-    expect(JSON.parse(String((request?.[1] as RequestInit).body))).toEqual({ start: '2026-08-19', commandId: 'drag-command' })
+    expect(JSON.parse(String((request?.[1] as RequestInit).body))).toEqual({ intent: 'MOVE', start: '2026-08-19', commandId: 'drag-command' })
     expect(fetch.mock.calls.some(([url]) => url === '/api/v1/schedule/simulate')).toBe(false)
     expect(wrapper.get('[aria-label^="Planejada:"]').attributes('style')).toContain('width: 126px')
     await wrapper.findAll('.gantt-row').find(row => row.text().includes('Sem prazo'))!.trigger('dblclick')
     const dateInputs = wrapper.findAll<HTMLInputElement>('.drawer input[type="date"]')
     expect(dateInputs[0].element.value).toBe('2026-08-18')
     expect(dateInputs[1].element.value).toBe('')
+    wrapper.unmount()
+  })
+
+  it('resizes a timeblock by snapped days and creates graphical dependency types with undo', async () => {
+    let resized = false
+    const gestureWorkspace = { ...firstWorkspace, calendar: { timezone: 'America/Sao_Paulo', working_days: [1, 2, 3, 4, 5] }, tasks: [
+      { ...firstWorkspace.tasks[1], id: 'source', title: 'Origem', level: 0, parent_id: null, start: '2026-08-17', finish: '2026-08-19', considered_start: '2026-08-17', considered_deadline: '2026-08-19', earliest_start: null },
+      { ...firstWorkspace.tasks[1], id: 'target', title: 'Destino', level: 0, parent_id: null, start: '2026-08-21', finish: null, considered_start: '2026-08-21', considered_deadline: '2026-08-21', earliest_start: '2026-08-19' },
+    ], dependencies: [] }
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: resized ? { ...gestureWorkspace, tasks: [{ ...gestureWorkspace.tasks[0], finish: '2026-08-21', considered_deadline: '2026-08-21' }, gestureWorkspace.tasks[1]] } : gestureWorkspace }) }
+      if (url === '/api/v1/tasks/source/dates' && options?.method === 'PUT') { resized = true; return { ok: true, json: async () => ({ data: { task_id: 'source', start: '2026-08-17', deadline: '2026-08-21' } }) } }
+      if (url === '/api/v1/tasks/target/dates' && options?.method === 'PUT') return { ok: true, json: async () => ({ data: { task_id: 'target', start: '2026-08-19', deadline: '2026-08-21' } }) }
+      if (url === '/api/v1/dependencies' && options?.method === 'POST') return { ok: true, json: async () => ({ data: { id: 'dep-new', from: 'source', to: 'target', type: 'SF', critical: false } }) }
+      if (url === '/api/v1/dependencies/dep-new' && options?.method === 'DELETE') return { ok: true, json: async () => ({ data: { id: 'dep-new' } }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.stubGlobal('crypto', { randomUUID: () => 'gesture-command' })
+
+    const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    const sourceBar = wrapper.get('[aria-label^="Origem:"]')
+    await sourceBar.get('.timeblock-grip.finish').trigger('pointerdown', { clientX: 100 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 184, bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.drag-ghost.gesture-resize').attributes('style')).toContain('width: 210px')
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 184, bubbles: true }))
+    await flushPromises()
+
+    const resizeRequest = fetch.mock.calls.find(([url]) => url === '/api/v1/tasks/source/dates')
+    expect(JSON.parse(String((resizeRequest?.[1] as RequestInit).body))).toEqual({ intent: 'RESIZE_END', deadline: '2026-08-21', commandId: 'gesture-command' })
+
+    const targetBar = wrapper.get('[aria-label^="Destino:"]')
+    await targetBar.get('.timeblock-grip.start').trigger('pointerdown', { clientX: 300 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 90, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { clientX: 90, bubbles: true }))
+    await flushPromises()
+    const startResizeRequest = fetch.mock.calls.find(([url]) => url === '/api/v1/tasks/target/dates')
+    expect(JSON.parse(String((startResizeRequest?.[1] as RequestInit).body))).toEqual({ intent: 'RESIZE_START', start: '2026-08-19', deadline: '2026-08-21', commandId: 'gesture-command' })
+
+    await wrapper.get('[aria-label="Conector de início de Origem"]').trigger('keydown', { key: 'Enter' })
+    await wrapper.get('[aria-label="Conector de fim de Destino"]').trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    const dependencyRequest = fetch.mock.calls.find(([url, options]) => url === '/api/v1/dependencies' && (options as RequestInit)?.method === 'POST')
+    expect(JSON.parse(String((dependencyRequest?.[1] as RequestInit).body))).toEqual({ from: 'source', to: 'target', type: 'SF', commandId: 'gesture-command' })
+    expect(wrapper.get('.toast').text()).toContain('Desfazer')
+    await wrapper.get('.toast button').trigger('click')
+    await flushPromises()
+    expect(fetch).toHaveBeenCalledWith('/api/v1/dependencies/dep-new', expect.objectContaining({ method: 'DELETE' }))
     wrapper.unmount()
   })
 

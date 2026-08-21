@@ -203,6 +203,7 @@ final class WorkspaceController extends Controller
                 $item['considered_start'] = $projection->consideredStart->format('Y-m-d');
                 $item['considered_deadline'] = $projection->consideredDeadline->format('Y-m-d');
                 $item['unlock_date'] = $projection->unlockDate?->format('Y-m-d');
+                $item['earliest_start'] = $projection->earliestStart?->format('Y-m-d');
                 $item['status'] = $projection->status->value;
                 $item['virtual_start'] = $item['start'] === null ? $item['considered_start'] : null;
             }
@@ -284,6 +285,7 @@ final class WorkspaceController extends Controller
             $task['considered_start'] = $task['start'] ?? '2026-08-20';
             $task['considered_deadline'] = $task['finish'] ?? $task['considered_start'];
             $task['unlock_date'] = null;
+            $task['earliest_start'] = null;
 
             return $task;
         }, $tasks);

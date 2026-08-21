@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Services\TodoistSnapshotStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -19,21 +20,38 @@ final class TaskApiTest extends TestCase
         $projectId = (string) Str::ulid();
         DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $snapshotStore = app(TodoistSnapshotStore::class);
+        $snapshotStore->put($projectId, ['tasks' => ['stale']]);
 
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'commandId' => 'invalid-date-update', 'start' => '2026-08-20'])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20'])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20', 'finish' => '2026-08-25', 'commandId' => 'invalid-finish'])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20', 'commandId' => 'move-task'])
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'MOVE', 'start' => '2026-08-20'])->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'MOVE', 'start' => '2026-08-20', 'finish' => '2026-08-25', 'commandId' => 'invalid-finish'])->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'MOVE', 'start' => '2026-08-20', 'commandId' => 'move-task'])
             ->assertOk()
             ->assertJsonPath('data.start', '2026-08-20')
             ->assertJsonPath('data.finish', '2026-08-22')
             ->assertJsonPath('data.deadline', '2026-08-22');
+        self::assertNull($snapshotStore->get($projectId));
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.dates_updated', 'causation_id' => 'move-task']);
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['start' => '2026-08-25', 'commandId' => 'schedule-empty-task'])
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'MOVE', 'start' => '2026-08-25', 'commandId' => 'schedule-empty-task'])
             ->assertOk()
             ->assertJsonPath('data.start', '2026-08-25')
             ->assertJsonPath('data.finish', null)
             ->assertJsonPath('data.deadline', null);
+
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'RESIZE_START', 'start' => '2026-08-18', 'deadline' => '2026-08-20', 'commandId' => 'resize-start'])
+            ->assertOk()
+            ->assertJsonPath('data.start', '2026-08-18')
+            ->assertJsonPath('data.deadline', '2026-08-20');
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'RESIZE_END', 'deadline' => '2026-08-28', 'commandId' => 'resize-end'])
+            ->assertOk()
+            ->assertJsonPath('data.deadline', '2026-08-28');
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'RESIZE_START', 'start' => '2026-08-21', 'deadline' => '2026-08-20', 'commandId' => 'invalid-range'])
+            ->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'RESIZE_END', 'deadline' => '2026-08-28', 'commandId' => 'completed-resize'])
+            ->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-group/dates', ['intent' => 'RESIZE_END', 'deadline' => '2026-08-28', 'commandId' => 'group-resize'])
+            ->assertUnprocessable();
     }
 
     public function test_direct_task_update_requires_a_command_and_is_audited(): void

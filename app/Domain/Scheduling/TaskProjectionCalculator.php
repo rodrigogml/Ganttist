@@ -67,6 +67,7 @@ final readonly class TaskProjectionCalculator
             $duration = $this->calendar->countWorkDays($baseStart, $baseDeadline);
             $consideredStart = $baseStart;
             $unlockDate = null;
+            $earliestStart = null;
             $blocked = false;
 
             foreach ($incoming[$id] ?? [] as $dependency) {
@@ -84,6 +85,7 @@ final readonly class TaskProjectionCalculator
                     $unlockDate = $unlockDate === null || $candidate > $unlockDate ? $candidate : $unlockDate;
                     $blocked = $blocked || ! $predecessorInput->completed;
                 }
+                $earliestStart = $earliestStart === null || $candidate > $earliestStart ? $candidate : $earliestStart;
                 if ($candidate > $consideredStart) {
                     $consideredStart = $candidate;
                 }
@@ -103,7 +105,7 @@ final readonly class TaskProjectionCalculator
                 $consideredDeadline < $today => ProjectedTaskStatus::Late,
                 default => ProjectedTaskStatus::Opened,
             };
-            $result[$id] = new TaskProjection($id, $consideredStart, $consideredDeadline, $unlockDate, $completionDate, $status);
+            $result[$id] = new TaskProjection($id, $consideredStart, $consideredDeadline, $unlockDate, $earliestStart, $completionDate, $status);
         }
 
         return $result;

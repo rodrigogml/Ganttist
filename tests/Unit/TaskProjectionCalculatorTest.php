@@ -44,6 +44,7 @@ final class TaskProjectionCalculatorTest extends TestCase
         self::assertSame(ProjectedTaskStatus::Scheduled, $result['successor']->status);
         self::assertSame('2026-08-24', $result['successor']->consideredStart->format('Y-m-d'));
         self::assertNull($result['successor']->unlockDate);
+        self::assertSame('2026-08-24', $result['successor']->earliestStart?->format('Y-m-d'));
     }
 
     public function test_completed_fs_predecessor_unlocks_on_its_effective_completion_date(): void

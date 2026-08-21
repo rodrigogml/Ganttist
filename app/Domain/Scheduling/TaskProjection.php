@@ -13,6 +13,7 @@ final readonly class TaskProjection
         public DateTimeImmutable $consideredStart,
         public DateTimeImmutable $consideredDeadline,
         public ?DateTimeImmutable $unlockDate,
+        public ?DateTimeImmutable $earliestStart,
         public DateTimeImmutable $effectiveCompletionDate,
         public ProjectedTaskStatus $status,
     ) {}

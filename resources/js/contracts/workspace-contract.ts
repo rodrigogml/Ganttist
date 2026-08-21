@@ -26,7 +26,7 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
     if (!['completed', 'blocked', 'scheduled', 'late', 'opened'].includes(item.status as string)) throw new Error('Contrato de workspace inválido: task.status.')
     if (item.start !== null && typeof item.start !== 'string') throw new Error('Contrato de workspace inválido: task.start.')
     if (item.finish !== null && typeof item.finish !== 'string') throw new Error('Contrato de workspace inválido: task.finish.')
-    for (const field of ['considered_start', 'considered_deadline', 'unlock_date']) if (item[field] !== undefined && item[field] !== null && typeof item[field] !== 'string') throw new Error(`Contrato de workspace inválido: task.${field}.`)
+    for (const field of ['considered_start', 'considered_deadline', 'unlock_date', 'earliest_start']) if (item[field] !== undefined && item[field] !== null && typeof item[field] !== 'string') throw new Error(`Contrato de workspace inválido: task.${field}.`)
     if (item.completed !== undefined && typeof item.completed !== 'boolean') throw new Error('Contrato de workspace inválido: task.completed.')
   }
   for (const dependency of data.dependencies) {

@@ -6,6 +6,7 @@ use App\Contracts\TodoistGateway;
 use App\Http\Controllers\Controller;
 use App\Services\AuditWriter;
 use App\Services\TodoistAccessTokenService;
+use App\Services\TodoistSnapshotStore;
 use App\Support\TodoistTask;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -94,36 +95,57 @@ final class TaskController extends Controller
         return response()->json(['data' => $task]);
     }
 
-    public function updateDates(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
+    public function updateDates(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit, TodoistSnapshotStore $snapshots): JsonResponse
     {
         $data = $request->validate([
-            'start' => ['required', 'date_format:Y-m-d'],
+            'intent' => ['required', 'in:MOVE,RESIZE_START,RESIZE_END'],
+            'start' => ['sometimes', 'date_format:Y-m-d'],
+            'deadline' => ['sometimes', 'date_format:Y-m-d'],
             'commandId' => ['required', 'string', 'max:64'],
             'finish' => ['prohibited'],
-            'deadline' => ['prohibited'],
         ]);
+        abort_if(in_array($data['intent'], ['MOVE', 'RESIZE_START'], true) && ! isset($data['start']), 422, 'Informe a nova data inicial.');
+        abort_if(in_array($data['intent'], ['RESIZE_START', 'RESIZE_END'], true) && ! isset($data['deadline']), 422, 'Informe a nova deadline.');
+        abort_if($data['intent'] === 'MOVE' && isset($data['deadline']), 422, 'Movimento não aceita deadline explícita.');
+        abort_if($data['intent'] === 'RESIZE_END' && isset($data['start']), 422, 'Resize final altera somente a deadline.');
         [$project, $integration, $tasks] = $this->authorizedTasks($request, $gateway);
         $source = collect($tasks)->first(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId);
         abort_unless($source, 404, 'Tarefa não pertence ao projeto selecionado.');
+        if ($data['intent'] !== 'MOVE') {
+            abort_if(TodoistTask::completed($source), 422, 'Tarefas concluídas não podem ser redimensionadas.');
+            abort_if(collect($tasks)->contains(fn (array $task): bool => (string) ($task['parent_id'] ?? '') === $taskId), 422, 'Grupos derivados não podem ser redimensionados diretamente.');
+        }
 
         $timezone = config('app.timezone', 'America/Sao_Paulo');
         $sourceStart = TodoistTask::start($source);
         $referenceStart = Carbon::createFromFormat('Y-m-d', $sourceStart ?? now($timezone)->toDateString(), $timezone)->startOfDay();
-        $targetStart = Carbon::createFromFormat('Y-m-d', $data['start'], $timezone)->startOfDay();
-        $dayDelta = (int) $referenceStart->diffInDays($targetStart, false);
         $sourceDeadline = TodoistTask::deadline($source);
-        $targetDeadline = $sourceDeadline
-            ? Carbon::createFromFormat('Y-m-d', $sourceDeadline, $timezone)->addDays($dayDelta)->toDateString()
-            : null;
+        if ($data['intent'] === 'MOVE') {
+            $targetStart = Carbon::createFromFormat('Y-m-d', $data['start'], $timezone)->startOfDay();
+            $dayDelta = (int) $referenceStart->diffInDays($targetStart, false);
+            $targetDeadline = $sourceDeadline
+                ? Carbon::createFromFormat('Y-m-d', $sourceDeadline, $timezone)->addDays($dayDelta)->toDateString()
+                : null;
+        } elseif ($data['intent'] === 'RESIZE_START') {
+            $targetStart = Carbon::createFromFormat('Y-m-d', $data['start'], $timezone)->startOfDay();
+            $targetDeadline = $data['deadline'];
+        } else {
+            $targetStart = $referenceStart;
+            $targetDeadline = $data['deadline'];
+        }
+        abort_if($targetDeadline !== null && $targetStart->toDateString() > $targetDeadline, 422, 'A deadline não pode ser anterior à data inicial.');
 
-        $gateway->updateTaskDates($this->tokens->accessToken($integration), $taskId, $data['start'], $targetDeadline);
+        $gateway->updateTaskDates($this->tokens->accessToken($integration), $taskId, $targetStart->toDateString(), $targetDeadline);
+        // The next workspace read must reconcile against Todoist instead of serving the pre-mutation cache.
+        $snapshots->forget($project->id);
         $before = ['start' => $sourceStart, 'deadline' => $sourceDeadline];
-        $after = ['start' => $data['start'], 'deadline' => $targetDeadline];
+        $after = ['start' => $targetStart->toDateString(), 'deadline' => $targetDeadline, 'intent' => $data['intent']];
         $audit->record($request->user()->id, $project->id, 'task.dates_updated', 'user', 'todoist_task', $taskId, $data['commandId'], $before, $after);
 
         return response()->json(['data' => [
             'task_id' => $taskId,
-            'start' => $data['start'],
+            'intent' => $data['intent'],
+            'start' => $targetStart->toDateString(),
             'finish' => $targetDeadline,
             'deadline' => $targetDeadline,
         ]]);
