@@ -6,7 +6,7 @@ import App from './App.vue'
 
 const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
 const secondWorkspace = { ...firstWorkspace, project: { ...firstWorkspace.project, id: 'p2', name: 'Projeto B' }, tasks: [{ ...firstWorkspace.tasks[0], title: 'Grupo atualizado' }, firstWorkspace.tasks[1]] }
-const selectionWorkspace = { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], id: 'parent', title: 'Tarefa pai', has_children: true }, { ...firstWorkspace.tasks[1], level: 2, parent_id: 'parent' }, { ...firstWorkspace.tasks[1], id: 'sibling', title: 'Outra tarefa' }] }
+const selectionWorkspace = { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], id: 'parent', title: 'Tarefa pai', description: 'Descrição do agrupador não exibida', priority: 4, has_children: true }, { ...firstWorkspace.tasks[1], description: 'Descrição da tarefa folha', priority: 2, level: 2, parent_id: 'parent' }, { ...firstWorkspace.tasks[1], id: 'sibling', title: 'Outra tarefa', description: 'Descrição da tarefa P4', priority: 1 }] }
 const chainWorkspace = { ...firstWorkspace, tasks: [
   { ...firstWorkspace.tasks[1], id: 'a', title: 'A', level: 0, parent_id: null, has_children: true },
   { ...firstWorkspace.tasks[1], id: 'b', title: 'B', level: 1, parent_id: 'a', has_children: true },
@@ -20,6 +20,20 @@ const routedWorkspace = { ...firstWorkspace, tasks: [
   { ...firstWorkspace.tasks[1], id: 'c1', title: 'C1', level: 3, parent_id: 'c', has_children: false },
   { ...firstWorkspace.tasks[1], id: 'c2', title: 'C2', level: 3, parent_id: 'c', has_children: false },
   { ...firstWorkspace.tasks[1], id: 'c3', title: 'C3', level: 3, parent_id: 'c', has_children: false },
+] }
+const relationWorkspace = { ...firstWorkspace, tasks: [
+  { ...firstWorkspace.tasks[1], id: 'current', title: 'Tarefa atual', level: 0, parent_id: null },
+  { ...firstWorkspace.tasks[1], id: 'predecessor', title: 'Predecessora com um título bastante extenso para truncamento', level: 0, parent_id: null },
+  { ...firstWorkspace.tasks[1], id: 'dependent', title: 'Dependente com outro título igualmente extenso', level: 0, parent_id: null },
+], dependencies: [
+  { id: 'incoming', from: 'predecessor', to: 'current', type: 'FS', critical: false },
+  { id: 'outgoing', from: 'current', to: 'dependent', type: 'SS', critical: false },
+] }
+const priorityWorkspace = { ...firstWorkspace, tasks: [
+  { ...firstWorkspace.tasks[1], id: 'priority-1', title: 'Urgente', description: 'Descrição urgente', level: 0, parent_id: null, priority: 4 },
+  { ...firstWorkspace.tasks[1], id: 'priority-2', title: 'Alta', description: '', level: 0, parent_id: null, priority: 3 },
+  { ...firstWorkspace.tasks[1], id: 'priority-3', title: 'Normal', level: 0, parent_id: null, priority: 2 },
+  { ...firstWorkspace.tasks[1], id: 'priority-4', title: 'Sem marcador', description: 'Descrição sem marcador', level: 0, parent_id: null, priority: 1 },
 ] }
 
 class FakeEventSource {
@@ -265,6 +279,21 @@ describe('workspace interaction', () => {
     await flushPromises()
     const rows = wrapper.findAll('.task-row')
 
+    expect(rows[0].find('.task-priority-flag').exists()).toBe(false)
+    expect(rows[0].find('.task-description').exists()).toBe(false)
+    expect(rows[1].find('.task-priority-flag').exists()).toBe(false)
+    expect(rows[1].find('.task-description').exists()).toBe(false)
+    expect(rows[2].get('.task-priority-flag').classes()).toContain('p3')
+    expect(rows[2].get('.task-priority-flag').attributes('aria-label')).toBe('Prioridade P3')
+    expect(rows[2].get('.task-terminal-slot').classes()).toContain('has-priority')
+    expect(rows[2].get('.task-terminal-slot').find('.task-priority-flag').exists()).toBe(true)
+    expect(rows[2].get('.task-title-line').find('.task-priority-flag').exists()).toBe(false)
+    expect(rows[2].get('.task-description').text()).toBe('Descrição da tarefa folha')
+    expect(rows[2].get('.task-description').attributes('title')).toBe('Descrição da tarefa folha')
+    expect(rows[3].find('.task-priority-flag').exists()).toBe(false)
+    expect(rows[3].get('.task-terminal-slot').classes()).not.toContain('has-priority')
+    expect(rows[3].get('.task-description').text()).toBe('Descrição da tarefa P4')
+
     await rows[0].trigger('click')
     expect(wrapper.find('.drawer.open').exists()).toBe(false)
     expect(wrapper.find('.gantt-card > .selection-bar').exists()).toBe(false)
@@ -301,7 +330,8 @@ describe('workspace interaction', () => {
     expect(rows[1].get('.tree-slot.current-branch').get('.tree-sibling-continuation').attributes('d')).toBe('M11 44 V100')
     expect(rows[2].get('.tree-slot.current-branch').find('.tree-sibling-continuation').exists()).toBe(false)
     expect(rows[2].find('.gantt-tree-toggle-spacer').exists()).toBe(true)
-    expect(rows[2].get('.gantt-tree-toggle-spacer').get('path').attributes('d')).toBe('M0 50 H22')
+    expect(rows[2].get('.gantt-tree-toggle-spacer').get('path').attributes('d')).toBe('M0 50 H6')
+    expect(rows[3].get('.gantt-tree-toggle-spacer').get('path').attributes('d')).toBe('M0 50 H22')
     await wrapper.findAll('.gantt-row')[2].trigger('mouseenter')
     expect(rows[0].classes()).toContain('hierarchy-ancestor')
     expect(rows[1].classes()).toContain('hierarchy-ancestor')
@@ -322,6 +352,34 @@ describe('workspace interaction', () => {
     expect(wrapper.findAll('.task-row')).toHaveLength(4)
     await wrapper.findAll('.gantt-tree-toggle')[1].trigger('click')
     expect(wrapper.findAll('.task-row')).toHaveLength(3)
+    wrapper.unmount()
+  })
+
+  it('maps Todoist priorities to leaf flags and keeps P4 unmarked', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: priorityWorkspace }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    const rows = wrapper.findAll('.task-row')
+
+    expect(rows[0].get('.task-priority-flag').classes()).toContain('p1')
+    expect(rows[1].get('.task-priority-flag').classes()).toContain('p2')
+    expect(rows[2].get('.task-priority-flag').classes()).toContain('p3')
+    expect(rows[3].find('.task-priority-flag').exists()).toBe(false)
+    expect(rows.every(row => row.find('.task-terminal-slot').exists())).toBe(true)
+    expect(rows.slice(0, 3).every(row => row.get('.task-terminal-slot').find('.task-priority-flag').exists())).toBe(true)
+    expect(rows.every(row => !row.get('.task-title-line').find('.task-priority-flag').exists())).toBe(true)
+    expect(rows[0].get('.task-description').text()).toBe('Descrição urgente')
+    expect(rows[1].find('.task-description').exists()).toBe(false)
+    expect(rows[3].get('.task-description').text()).toBe('Descrição sem marcador')
     wrapper.unmount()
   })
 
@@ -458,6 +516,38 @@ describe('workspace interaction', () => {
     await flushPromises()
     expect(wrapper.get('.drawer').classes()).not.toContain('open')
     expect(fetch).toHaveBeenCalledWith('/api/v1/tasks/child', expect.objectContaining({ method: 'PUT' }))
+    wrapper.unmount()
+  })
+
+  it('separates predecessors from dependents and exposes full related task titles', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: relationWorkspace }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    await wrapper.findAll('.gantt-row')[0].trigger('dblclick')
+
+    const groups = wrapper.findAll('.dependency-direction')
+    expect(groups).toHaveLength(2)
+    expect(groups[0].get('header').text()).toContain('Depende de')
+    expect(groups[0].get('.dependency-type').text()).toBe('[FS]')
+    expect(groups[0].get('.dependency-task-title').text()).toBe(relationWorkspace.tasks[1].title)
+    expect(groups[0].get('.dependency-task-title').attributes('title')).toBe(relationWorkspace.tasks[1].title)
+    expect(groups[1].get('header').text()).toContain('Dependentes')
+    expect(groups[1].get('.dependency-type').text()).toBe('[SS]')
+    expect(groups[1].get('.dependency-task-title').text()).toBe(relationWorkspace.tasks[2].title)
+    expect(groups[1].get('.dependency-delete').attributes('aria-label')).toContain(relationWorkspace.tasks[2].title)
+    expect(wrapper.get('.dependency-box').text()).not.toContain('→')
+
+    await groups[0].get('.dependency-delete').trigger('click')
+    expect(wrapper.get('.dependency-confirm').text()).toContain('Remover dependência?')
     wrapper.unmount()
   })
 

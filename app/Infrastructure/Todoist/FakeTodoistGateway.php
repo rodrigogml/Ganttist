@@ -16,9 +16,9 @@ final class FakeTodoistGateway implements TodoistGateway
     public function projectSnapshot(string $accessToken, string $projectId): array
     {
         return ['sections' => ['results' => [['id' => 'fake-section', 'name' => 'Entrega']]], 'tasks' => ['results' => [
-            ['id' => 'fake-group', 'content' => 'Preparação', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
-            ['id' => 'fake-task-1', 'content' => 'Preparar primeira entrega', 'parent_id' => 'fake-group', 'section_id' => 'fake-section', 'is_completed' => true, 'priority' => 2, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19'],
-            ['id' => 'fake-task-2', 'content' => 'Validar resultado', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
+            ['id' => 'fake-group', 'content' => 'Preparação', 'description' => 'Descrição de agrupador que não deve aparecer na árvore.', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
+            ['id' => 'fake-task-1', 'content' => 'Preparar primeira entrega', 'description' => 'Conferir o escopo acordado com o cliente.', 'parent_id' => 'fake-group', 'section_id' => 'fake-section', 'is_completed' => true, 'priority' => 2, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19'],
+            ['id' => 'fake-task-2', 'content' => 'Validar resultado', 'description' => '', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
         ]]];
     }
 

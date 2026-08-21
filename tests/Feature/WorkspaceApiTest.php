@@ -37,6 +37,7 @@ final class WorkspaceApiTest extends TestCase
 
     public function test_real_workspace_keeps_parent_task_distinct_from_todoist_section(): void
     {
+        $this->travelTo('2026-08-17 09:00:00');
         config()->set('services.todoist.demo_mode', false);
         config()->set('services.todoist.driver', 'fake');
         $user = User::factory()->create();
@@ -50,9 +51,12 @@ final class WorkspaceApiTest extends TestCase
 
         $response = $this->actingAs($user)->getJson('/api/v1/workspace')->assertOk();
         $parentTask = collect($response->json('data.tasks'))->firstWhere('id', 'fake-group');
+        $leafTask = collect($response->json('data.tasks'))->firstWhere('id', 'fake-task-1');
         $section = collect($response->json('data.tasks'))->firstWhere('id', 'section:fake-section');
         self::assertSame('task', $parentTask['kind']);
         self::assertTrue($parentTask['has_children']);
+        self::assertSame('Descrição de agrupador que não deve aparecer na árvore.', $parentTask['description']);
+        self::assertSame(1, $parentTask['priority']);
         self::assertNull($parentTask['start']);
         self::assertNull($parentTask['finish']);
         self::assertSame('2026-08-17', $parentTask['considered_start']);
@@ -61,6 +65,8 @@ final class WorkspaceApiTest extends TestCase
         self::assertTrue($parentTask['contains_critical']);
         self::assertSame('section', $section['kind']);
         self::assertTrue($section['has_children']);
+        self::assertSame('Conferir o escopo acordado com o cliente.', $leafTask['description']);
+        self::assertSame(2, $leafTask['priority']);
         self::assertSame(2, $response->json('data.stats.critical'));
         self::assertTrue($response->json('data.dependencies.0.critical'));
         self::assertTrue($response->json('data.tasks.2.planned'));

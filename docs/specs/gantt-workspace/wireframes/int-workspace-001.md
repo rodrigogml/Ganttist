@@ -5,9 +5,13 @@ Desktop: [Barra do sistema]
 ┌ Árvore/projeto ──────────┬ Timeline/Gantt ─────────────────────┐
 │ Seção ▾                  │ escala | hoje | estado sincronização │
 │   Grupo ⌄                │ [ resumo derivado ]                 │
-│     Tarefa               │   [ barra ]                          │
-│     Sem data             │                                      │
+│     ─⚑│Tarefa P1         │   [ barra ]                          │
+│        │descrição Todoist│                                      │
+│     ──│Tarefa P4         │                                      │
 └──────────────────────────┴──────────────────────────────────────┘
 
 Telefone: Barra → árvore OU timeline; painel abre em sobreposição.
 ```
+
+- Grupo/seção: título em linha única, sem prioridade nem descrição.
+- Folha: slot terminal fixo de 22 px antes do conteúdo; P1/P2/P3 substituem a extensão horizontal por bandeira ampliada, enquanto P4 mantém apenas a extensão. Título e descrição opcional começam no mesmo eixo em todas as folhas.

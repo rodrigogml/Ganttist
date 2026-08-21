@@ -26,6 +26,7 @@
 | INT-WORKSPACE-001 | SURF-WEB-OPERATIONS | SCREEN | MODIFIED | Workspace de projeto | projeto selecionado |
 | INT-WORKSPACE-002 | SURF-WEB-OPERATIONS | DIRECT MANIPULATION | NEW | Resize temporal do timeblock | hover, foco ou toque no timeblock |
 | INT-WORKSPACE-003 | SURF-WEB-OPERATIONS | DIRECT MANIPULATION | NEW | Criação gráfica de dependência | endpoint externo do timeblock |
+| INT-WORKSPACE-004 | SURF-WEB-OPERATIONS | PANEL | MODIFIED | Relações no editor de tarefa | duplo clique ou comando Editar |
 
 ## Interaction Details
 
@@ -37,11 +38,11 @@
 **Purpose**: apresentar uma Ãºnica projeÃ§Ã£o confiÃ¡vel de Ã¡rvore e cronograma de um projeto selecionado.
 **Actors and Permissions**: usuÃ¡rio autenticado, dono do Gantt.
 **Entry and Navigation**: seleÃ§Ã£o de projeto abre o workspace; busca, histÃ³rico e configuraÃ§Ãµes retornam preservando foco/contexto.
-**Content and Data**: barra do sistema; resumo; Ã¡rvore por seÃ§Ãµes/tarefas/subtarefas; timeline; grupos derivados; campos explícitos do Todoist; data, deadline e desbloqueio considerados; status calculado; estado de sincronizaÃ§Ã£o.
-**Actions and Behavior**: expandir/recolher, selecionar item, abrir painel, navegar no tempo, filtrar por `COMPLETED`, `BLOCKED`, `SCHEDULED`, `LATE` ou `OPENED`, abrir configuraÃ§Ãµes e solicitar recarga. Grupos nÃ£o sÃ£o editÃ¡veis diretamente; status calculado não é editável.
+**Content and Data**: barra do sistema; resumo; Ã¡rvore por seÃ§Ãµes/tarefas/subtarefas; timeline; grupos derivados; campos explícitos do Todoist; data, deadline e desbloqueio considerados; status calculado; estado de sincronizaÃ§Ã£o. Agrupadores usam uma linha apenas. Toda tarefa folha reserva, entre a árvore e o conteúdo textual, um slot terminal de largura idêntica ao controle de nó. P1/P2/P3 usam esse slot para uma bandeira que aproveita a altura do conjunto título/descrição; P4 mantém o slot sem marcador. Título e descrição nativa truncada começam sempre no mesmo eixo.
+**Actions and Behavior**: expandir/recolher, selecionar item, abrir painel, navegar no tempo, filtrar por `COMPLETED`, `BLOCKED`, `SCHEDULED`, `LATE` ou `OPENED`, abrir configuraÃ§Ãµes e solicitar recarga. Grupos nÃ£o sÃ£o editÃ¡veis diretamente; status calculado não é editável. Prioridade bruta Todoist é apresentada como `4→P1` vermelha, `3→P2` amarela, `2→P3` azul e `1→P4` sem marcador. Quando há bandeira, um segmento curto conecta visualmente a rota da árvore ao marcador sem atravessá-lo; sem bandeira, a extensão horizontal existente ocupa o slot reservado.
 **Validation and Feedback**: respostas exibem somente projeÃ§Ã£o autorizada; projeto vazio, integraÃ§Ã£o ausente e falha de sincronizaÃ§Ã£o tÃªm explicaÃ§Ã£o e aÃ§Ã£o de recuperaÃ§Ã£o.
 **Responsive/Adaptive Behavior**: desktop mostra Ã¡rvore e timeline lado a lado; tablet reduz colunas; telefone usa Ã¡rvore e timeline/painel em Ã¡reas alternÃ¡veis, preservando seleÃ§Ã£o.
-**Accessibility**: estrutura de Ã¡rvore navegÃ¡vel por teclado, foco visÃ­vel, relaÃ§Ã£o entre linha e barra, sem depender apenas de cor; alvos touch adequados.
+**Accessibility**: estrutura de Ã¡rvore navegÃ¡vel por teclado, foco visÃ­vel, relaÃ§Ã£o entre linha e barra, sem depender apenas de cor; alvos touch adequados. Bandeiras possuem nome acessível P1/P2/P3, forma distinguível além da cor e área visual ampliada; descrição completa fica disponível no atributo `title` quando truncada.
 **Localization**: `pt-BR`; datas respeitam locale e timezone de planejamento.
 **Components and Design System**: barra do sistema, Ã¡rvore virtualizada, timeline, badge de estado, painel e mensagens compartilhadas.
 **Integration and Contracts**: projeÃ§Ã£o de workspace e eventos de atualizaÃ§Ã£o; cliente nÃ£o calcula grupos, datas consideradas, desbloqueio, status ou criticidade. O contrato distingue `start`/`finish` explícitos de `considered_start`/`considered_deadline` calculados.
@@ -137,6 +138,42 @@
 | access-denied | sessão/projeto indisponível | entrar/selecionar projeto | initial |
 | partial-stale | portas desabilitadas até reconciliar | reconciliar | loading |
 
+### INT-WORKSPACE-004 — Relações no editor de tarefa
+
+**Surface**: SURF-WEB-OPERATIONS
+**Surface Type**: WEB
+**Change Type**: MODIFIED
+**Purpose**: permitir distinguir imediatamente predecessoras e sucessoras e reconhecer a tarefa relacionada mesmo em painéis estreitos.
+**Actors and Permissions**: usuário autenticado, dono do Gantt.
+**Entry and Navigation**: abrir o editor por duplo clique ou comando Editar; a região de relações aparece após os campos e a projeção.
+**Content and Data**: quadro “Depende de” lista relações cuja tarefa atual é sucessora; quadro “Dependentes” lista relações cuja tarefa atual é predecessora. Cada linha contém badge de tipo `FS`, `SS`, `FF` ou `SF`, título da outra tarefa e ícone de lixeira.
+**Actions and Behavior**: o título ocupa o espaço flexível e recebe ellipsis quando não couber; `title` e nome acessível preservam o texto completo. A lixeira abre a confirmação de remoção existente. O formulário de nova relação permanece separado abaixo das listas.
+**Validation and Feedback**: quadros vazios mostram “Nenhuma predecessora” ou “Nenhuma tarefa dependente”. Remoção mantém a relação visível até confirmação e, após sucesso, reconcilia o workspace; falha preserva a linha.
+**Responsive/Adaptive Behavior**: os dois quadros ficam empilhados em qualquer largura do drawer; título encolhe antes do badge e da lixeira, que permanecem integralmente visíveis. Escalas de texto/espaçamento seguem o tema do workspace.
+**Accessibility**: cada quadro é uma região rotulada; o título completo está em tooltip nativo; botão de lixeira tem `aria-label` com tipo e nome da tarefa; não se depende de seta, cor ou posição para comunicar a direção.
+**Localization**: rótulos em `pt-BR`; siglas FS/SS/FF/SF permanecem canônicas.
+**Components and Design System**: cartões, badges, ellipsis e botão iconográfico reutilizam tokens do drawer e foco visível da aplicação.
+**Integration and Contracts**: usa `workspace.dependencies`, `workspace.tasks` e `DELETE /api/v1/dependencies/{id}` sem alteração de payload.
+**Telemetry**: remoção por direção e tipo; títulos e IDs não entram em telemetria.
+**Wireframe Requirement**: REQUIRED
+**Wireframe**: wireframes/int-workspace-editor-relations.md
+
+**States**:
+
+| State | Expected Presentation | Available Actions | Transition/Exit |
+|---|---|---|---|
+| initial | editor fechado | abrir tarefa | loading/ready |
+| loading | relações indisponíveis durante carga do workspace | aguardar/fechar | ready/remote-error |
+| empty | os dois quadros mostram mensagens vazias independentes | adicionar relação | processing |
+| ready | listas separadas, títulos truncáveis e ações acessíveis | adicionar/remover/editar tarefa | processing |
+| processing | confirmação de remoção ou criação preserva as listas | confirmar/cancelar | success/validation-error/remote-error |
+| success | listas reconciliadas e toast breve | continuar | ready |
+| validation-error | motivo exibido sem remover a linha | corrigir/cancelar | ready |
+| remote-error | relação anterior preservada e erro explicado | tentar novamente | processing/ready |
+| offline | listas permanecem legíveis e mutação indisponível | retentar após rede | loading |
+| access-denied | editor fecha e fluxo de login é exibido | entrar novamente | initial |
+| partial-stale | listas do último snapshot marcadas pelo estado global | reconciliar | loading |
+
 ## Cross-Surface Rules
 
 Desktop, tablet e telefone compartilham o mesmo estado de negÃ³cio; apenas a disposiÃ§Ã£o e o mÃ©todo de entrada variam. Toda alteraÃ§Ã£o chega por projeÃ§Ã£o atualizada, nÃ£o por mutaÃ§Ã£o local persistente.
@@ -145,9 +182,10 @@ Desktop, tablet e telefone compartilham o mesmo estado de negÃ³cio; apenas a d
 
 | Interaction ID | User Stories | Functional Requirements | Success Criteria | Contracts |
 |---|---|---|---|---|
-| INT-WORKSPACE-001 | US-1â€“3 | FR-001â€“017 | SC-001â€“005 | workspace/eventos |
+| INT-WORKSPACE-001 | US-1â€“3 | FR-001â€“017, FR-029 | SC-001â€“005, SC-010 | workspace/eventos |
 | INT-WORKSPACE-002 | US-4 | FR-018â€“023, FR-026â€“027 | SC-006, SC-008 | task dates/workspace/eventos |
 | INT-WORKSPACE-003 | US-4 | FR-023â€“027 | SC-007â€“008 | dependencies/workspace/eventos |
+| INT-WORKSPACE-004 | US-4 | FR-025, FR-028 | SC-009 | dependencies/workspace |
 
 ## Wireframes
 
@@ -156,6 +194,7 @@ Desktop, tablet e telefone compartilham o mesmo estado de negÃ³cio; apenas a d
 | INT-WORKSPACE-001 | REQUIRED | wireframes/int-workspace-001.md | Hierarquia e timeline responsiva |
 | INT-WORKSPACE-002 | REQUIRED | wireframes/int-workspace-timeblock-gestures.md | Grips internos, ghost e limites |
 | INT-WORKSPACE-003 | REQUIRED | wireframes/int-workspace-timeblock-gestures.md | Portas externas, linha e targets |
+| INT-WORKSPACE-004 | REQUIRED | wireframes/int-workspace-editor-relations.md | Separação de predecessoras e sucessoras |
 
 ## Validation Summary
 

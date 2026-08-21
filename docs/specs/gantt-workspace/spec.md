@@ -106,6 +106,8 @@ Como planejador, quero redimensionar timeblocks e conectá-los diretamente na ti
 - **FR-025**: Autorrelação, duplicidade, tarefa fora do projeto, sucessora do tipo grupo e ciclo DEVEM ser rejeitados no cliente para feedback imediato e validados novamente no servidor antes da persistência.
 - **FR-026**: Após resize ou criação/remoção de dependência, o sistema DEVE reconciliar imediatamente o workspace e recalcular sucessoras recursivas, grupos, status, datas consideradas e caminho crítico, sem escrever automaticamente os valores derivados no Todoist.
 - **FR-027**: Operações por ponteiro DEVEM possuir alternativas por foco/teclado e alvos adaptados a toque; setas ajustam um dia quando um grip está focado, Enter/Espaço inicia ou confirma e Escape cancela.
+- **FR-028**: O editor de tarefa DEVE separar predecessoras (“Depende de”) de sucessoras (“Dependentes”); cada relação DEVE exibir tipo canônico, título da tarefa relacionada com truncamento visual e nome completo acessível por tooltip, além de ação de remoção por ícone com nome acessível.
+- **FR-029**: Linhas de tarefas-pai e seções DEVEM exibir apenas o título, sem prioridade ou descrição. Toda tarefa folha DEVE reservar um slot terminal fixo entre a árvore e seu conteúdo textual; para prioridades Todoist P1, P2 e P3, esse slot substitui a extensão horizontal da árvore por uma bandeira maior — respectivamente vermelha, amarela e azul —, enquanto P4 mantém o slot sem marcador. Título e descrição DEVEM começar no mesmo eixo em todas as folhas, e a segunda linha DEVE ser usada exclusivamente para a descrição nativa quando não vazia.
 
 ### Key Entities
 
@@ -131,3 +133,5 @@ Como planejador, quero redimensionar timeblocks e conectá-los diretamente na ti
 - **SC-006**: 100% dos drops de resize persistem datas civis alinhadas às colunas e nenhum intervalo resultante possui deadline anterior ao início.
 - **SC-007**: Os quatro pares de endpoints produzem deterministicamente FS, SS, FF e SF, e nenhum drop inválido persiste relação.
 - **SC-008**: Cancelar qualquer gesto antes do commit produz zero chamadas de mutação e preserva a projeção anterior.
+- **SC-009**: Para toda relação exibida no editor, o usuário identifica sem interpretar setas se a tarefa atual depende da relacionada ou se a relacionada depende da atual, e consegue acessar o título completo mesmo quando truncado.
+- **SC-010**: Toda tarefa folha reproduz a descrição do snapshot sem substituí-la por metadado de prioridade, enquanto agrupadores permanecem em linha única e as prioridades P1–P3 são distinguíveis por cor e nome acessível.

@@ -37,6 +37,10 @@ Gestos temporais serão isolados de `App.vue` por uma máquina de estados/compos
 
 O cliente usa um único conjunto de listeners globais durante cada gesto e um único overlay SVG para preview de conexão, evitando listeners permanentes por timeblock. Atualizações de ponteiro são quantizadas por largura de coluna e limitadas a uma mutação visual por frame. Grupos/seções continuam derivados e não recebem resize.
 
+No editor, relações são derivadas do contrato existente em duas coleções computadas: entradas (`to === tarefa atual`) e saídas (`from === tarefa atual`). A apresentação reutiliza o ID da relação para remoção e resolve o título pelo workspace, sem duplicar dados nem alterar o contrato da API.
+
+O mapper do workspace expõe `description` nativa e mantém `priority` no valor bruto da API Todoist. A SPA converte somente para apresentação (`4→P1`, `3→P2`, `2→P3`, `1→P4`) e nunca exibe prioridade ou descrição em linhas derivadas/agrupadoras.
+
 ## ConvenÃ§Ãµes de Borda
 
 | Camada | Case style | ValidaÃ§Ã£o | Fonte da verdade |

@@ -7,6 +7,60 @@
 .appearance-menu label { display: grid; gap: 5px; margin-top: 10px; color: #697085; font-size: 11px; font-weight: 700; }
 .appearance-menu select { width: 100%; padding: 7px 9px; border: 1px solid #dfe2ea; border-radius: 7px; background: #fff; color: #252a3a; font: inherit; }
 
+.text-compact {
+  --editor-body-font-size: 11px;
+  --editor-label-font-size: 10px;
+  --editor-helper-font-size: 9px;
+  --editor-caption-font-size: 8px;
+  --editor-input-font-size: 11px;
+  --editor-title-font-size: 17px;
+}
+
+.text-comfortable {
+  --editor-body-font-size: 13px;
+  --editor-label-font-size: 11px;
+  --editor-helper-font-size: 10px;
+  --editor-caption-font-size: 9px;
+  --editor-input-font-size: 13px;
+  --editor-title-font-size: 19px;
+}
+
+.text-large {
+  --editor-body-font-size: 15px;
+  --editor-label-font-size: 13px;
+  --editor-helper-font-size: 12px;
+  --editor-caption-font-size: 10px;
+  --editor-input-font-size: 15px;
+  --editor-title-font-size: 22px;
+}
+
+.space-compact {
+  --editor-header-padding: 18px;
+  --editor-body-padding: 16px;
+  --editor-body-gap: 14px;
+  --editor-control-gap: 5px;
+  --editor-card-padding: 10px;
+  --editor-input-height: 36px;
+}
+
+.space-comfortable {
+  --editor-header-padding: 22px;
+  --editor-body-padding: 20px;
+  --editor-body-gap: 18px;
+  --editor-control-gap: 7px;
+  --editor-card-padding: 13px;
+  --editor-input-height: 40px;
+}
+
+.space-spacious {
+  --editor-header-padding: 26px;
+  --editor-body-padding: 24px;
+  --editor-body-gap: 22px;
+  --editor-control-gap: 9px;
+  --editor-card-padding: 16px;
+  --editor-input-height: 44px;
+}
+
 .task-row.parent:not(.section) { background: linear-gradient(90deg, rgba(92, 82, 184, .045), transparent 72%); }
 .task-row.parent:not(.section) .task-name b { color: #34324f; font-weight: 800; }
 .task-bar.parent { background: #6255bd; box-shadow: 0 3px 9px rgba(70, 58, 155, .18); }
