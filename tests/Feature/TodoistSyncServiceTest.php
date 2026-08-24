@@ -137,7 +137,9 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertSame('new-token', decrypt($integration->access_token_encrypted));
         self::assertSame('new-refresh-token', decrypt($integration->refresh_token_encrypted));
         self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
-        Http::assertSentCount(5);
+        // The snapshot is a three-request pool (tasks, sections and collaborators),
+        // retried once after refreshing the expired access token.
+        Http::assertSentCount(7);
     }
 
     public function test_rate_limit_keeps_event_pending_and_marks_sync_as_degraded(): void
@@ -169,6 +171,21 @@ final class TodoistSyncServiceTest extends TestCase
             public function projectSnapshot(string $accessToken, string $projectId): array
             {
                 return ['tasks' => ['results' => [['id' => 'parent', 'content' => 'Grupo', 'is_completed' => false, 'due' => null, 'deadline_date' => null], ['id' => 'child', 'content' => 'Filha', 'parent_id' => 'parent', 'is_completed' => false, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19']]]];
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
             }
 
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array

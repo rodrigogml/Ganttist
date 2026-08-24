@@ -24,7 +24,8 @@ final class DependencyController extends Controller
     {
         $data = $request->validate(['from' => ['required', 'string', 'max:255'], 'to' => ['required', 'string', 'max:255', 'different:from'], 'type' => ['required', 'in:FS,SS,FF,SF'], 'commandId' => ['required', 'string', 'max:64']]);
         $project = $this->project($request);
-        abort_if(DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('predecessor_todoist_task_id', $data['from'])->where('successor_todoist_task_id', $data['to'])->where('type', $data['type'])->where('status', 'active')->exists(), 422, 'Essa dependência já existe.');
+        $dependencyByKey = fn () => DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('predecessor_todoist_task_id', $data['from'])->where('successor_todoist_task_id', $data['to'])->where('type', $data['type']);
+        abort_if($dependencyByKey()->where('status', 'active')->exists(), 422, 'Essa dependência já existe.');
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         abort_unless($integration, 409, 'Conecte uma integração Todoist ativa antes de criar dependências.');
         try {
@@ -36,8 +37,21 @@ final class DependencyController extends Controller
             abort(503, 'Não foi possível validar as tarefas no Todoist. Tente novamente.');
         }
         abort_if($this->wouldCycle($project->id, $data['from'], $data['to']), 422, 'Essa dependência criaria um ciclo no grafo.');
-        $id = (string) Str::ulid();
-        DB::table('task_dependencies')->insert(['id' => $id, 'gantt_project_id' => $project->id, 'predecessor_todoist_task_id' => $data['from'], 'successor_todoist_task_id' => $data['to'], 'type' => $data['type'], 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $id = DB::transaction(function () use ($dependencyByKey, $project, $data): string {
+            $existing = $dependencyByKey()->lockForUpdate()->first();
+            abort_if($existing?->status === 'active', 422, 'Essa dependência já existe.');
+
+            if ($existing) {
+                $dependencyByKey()->update(['status' => 'active', 'updated_at' => now()]);
+
+                return (string) $existing->id;
+            }
+
+            $id = (string) Str::ulid();
+            DB::table('task_dependencies')->insert(['id' => $id, 'gantt_project_id' => $project->id, 'predecessor_todoist_task_id' => $data['from'], 'successor_todoist_task_id' => $data['to'], 'type' => $data['type'], 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+
+            return $id;
+        }, 3);
         $audit->record($request->user()->id, $project->id, 'dependency.created', 'user', 'task_dependency', $id, $data['commandId'], null, ['from' => $data['from'], 'to' => $data['to'], 'type' => $data['type']]);
 
         return response()->json(['data' => ['id' => $id, 'from' => $data['from'], 'to' => $data['to'], 'type' => $data['type']]], 201);

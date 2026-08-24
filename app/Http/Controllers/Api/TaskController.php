@@ -79,20 +79,75 @@ final class TaskController extends Controller
         return response()->json(['data' => ['deleted_task_id' => $taskId, 'continuity_preserved' => $data['preserveContinuity']]]);
     }
 
-    public function update(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
+    public function update(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit, TodoistSnapshotStore $snapshots): JsonResponse
     {
-        $data = $request->validate(['title' => ['required', 'string', 'max:500'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'completed' => ['sometimes', 'boolean'], 'commandId' => ['required', 'string', 'max:64'], 'start' => ['prohibited'], 'finish' => ['prohibited']]);
-        [$project, $integration, $tasks] = $this->authorizedTasks($request, $gateway);
+        $data = $request->validate(['title' => ['required', 'string', 'max:500'], 'description' => ['sometimes', 'nullable', 'string', 'max:15000'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'assigneeId' => ['sometimes', 'nullable', 'string', 'max:255'], 'completed' => ['sometimes', 'boolean'], 'commandId' => ['required', 'string', 'max:64'], 'start' => ['prohibited'], 'finish' => ['prohibited']]);
+        [$project, $integration, $tasks, $snapshot] = $this->authorizedTasks($request, $gateway, true);
         $source = collect($tasks)->first(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId);
         abort_unless($source, 404, 'Tarefa não pertence ao projeto selecionado.');
-        $attributes = array_filter(['content' => $data['title'], 'priority' => $data['priority'] ?? null], fn ($value) => $value !== null);
+        $collaborators = $snapshot['collaborators']['results'] ?? [];
+        if (($data['assigneeId'] ?? null) !== null) {
+            abort_unless(collect($collaborators)->contains(fn (array $collaborator): bool => (string) ($collaborator['id'] ?? $collaborator['user_id'] ?? '') === $data['assigneeId']), 422, 'O responsável não pertence ao projeto selecionado.');
+        }
+        $attributes = ['content' => $data['title']];
+        if (array_key_exists('description', $data)) {
+            $attributes['description'] = $data['description'] ?? '';
+        }
+        if (array_key_exists('priority', $data)) {
+            $attributes['priority'] = $data['priority'];
+        }
+        if (array_key_exists('assigneeId', $data)) {
+            $attributes['assignee_id'] = $data['assigneeId'];
+        }
         $task = $gateway->updateTask($this->tokens->accessToken($integration), $taskId, $attributes);
         if (array_key_exists('completed', $data)) {
             $gateway->setTaskCompletion($this->tokens->accessToken($integration), $taskId, $data['completed']);
         }
-        $audit->record($request->user()->id, $project->id, 'task.updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['title' => $source['content'] ?? null, 'priority' => $source['priority'] ?? null, 'completed' => $source['is_completed'] ?? null], ['title' => $data['title'], 'priority' => $data['priority'] ?? $source['priority'] ?? null, 'completed' => $data['completed'] ?? $source['is_completed'] ?? null]);
+        $snapshots->forget($project->id);
+        $audit->record($request->user()->id, $project->id, 'task.updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['title' => $source['content'] ?? null, 'description' => $source['description'] ?? null, 'priority' => $source['priority'] ?? null, 'assignee_id' => $source['assignee_id'] ?? $source['responsible_uid'] ?? null, 'completed' => $source['is_completed'] ?? null], ['title' => $data['title'], 'description' => $data['description'] ?? $source['description'] ?? null, 'priority' => $data['priority'] ?? $source['priority'] ?? null, 'assignee_id' => $data['assigneeId'] ?? null, 'completed' => $data['completed'] ?? $source['is_completed'] ?? null]);
 
         return response()->json(['data' => $task]);
+    }
+
+    public function editorContext(Request $request, string $taskId, TodoistGateway $gateway): JsonResponse
+    {
+        [$project, $integration, $tasks, $snapshot] = $this->authorizedTasks($request, $gateway, true);
+        abort_unless(collect($tasks)->contains(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId), 404, 'Tarefa não pertence ao projeto selecionado.');
+        $comments = $gateway->comments($this->tokens->accessToken($integration), $taskId)['results'] ?? [];
+        $collaborators = $snapshot['collaborators']['results'] ?? [];
+
+        return response()->json(['data' => [
+            'collaborators' => collect($collaborators)->map(fn (array $item): array => ['id' => (string) ($item['id'] ?? $item['user_id'] ?? ''), 'name' => (string) ($item['name'] ?? $item['full_name'] ?? $item['email'] ?? 'Sem nome'), 'email' => $item['email'] ?? null])->values(),
+            'comments' => collect($comments)->map(fn (array $item): array => ['id' => (string) $item['id'], 'content' => (string) ($item['content'] ?? ''), 'author_id' => (string) ($item['posted_uid'] ?? ''), 'posted_at' => $item['posted_at'] ?? $item['posted'] ?? null, 'editable' => (string) ($item['posted_uid'] ?? '') === (string) ($integration->todoist_user_id ?? '')])->values(),
+        ]]);
+    }
+
+    public function createComment(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
+    {
+        $data = $request->validate(['content' => ['required', 'string', 'max:15000'], 'commandId' => ['required', 'string', 'max:64']]);
+        abort_if(trim($data['content']) === '', 422, 'Informe o conteúdo do comentário.');
+        [$project, $integration, $tasks] = $this->authorizedTasks($request, $gateway);
+        abort_unless(collect($tasks)->contains(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId), 404, 'Tarefa não pertence ao projeto selecionado.');
+        $comment = $gateway->createComment($this->tokens->accessToken($integration), $taskId, trim($data['content']));
+        $audit->record($request->user()->id, $project->id, 'task.comment_created', 'user', 'todoist_comment', (string) ($comment['id'] ?? ''), $data['commandId'], null, ['task_id' => $taskId]);
+
+        return response()->json(['data' => $comment], 201);
+    }
+
+    public function updateComment(Request $request, string $taskId, string $commentId, TodoistGateway $gateway, AuditWriter $audit): JsonResponse
+    {
+        $data = $request->validate(['content' => ['required', 'string', 'max:15000'], 'commandId' => ['required', 'string', 'max:64']]);
+        abort_if(trim($data['content']) === '', 422, 'Informe o conteúdo do comentário.');
+        [$project, $integration, $tasks] = $this->authorizedTasks($request, $gateway);
+        abort_unless(collect($tasks)->contains(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId), 404, 'Tarefa não pertence ao projeto selecionado.');
+        $comments = $gateway->comments($this->tokens->accessToken($integration), $taskId)['results'] ?? [];
+        $source = collect($comments)->first(fn (array $comment): bool => (string) ($comment['id'] ?? '') === $commentId);
+        abort_unless($source, 404, 'Comentário não pertence à tarefa selecionada.');
+        abort_unless((string) ($source['posted_uid'] ?? '') === (string) ($integration->todoist_user_id ?? ''), 403, 'Somente o autor pode editar este comentário.');
+        $comment = $gateway->updateComment($this->tokens->accessToken($integration), $commentId, trim($data['content']));
+        $audit->record($request->user()->id, $project->id, 'task.comment_updated', 'user', 'todoist_comment', $commentId, $data['commandId'], null, ['task_id' => $taskId]);
+
+        return response()->json(['data' => $comment]);
     }
 
     public function updateDates(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit, TodoistSnapshotStore $snapshots): JsonResponse
@@ -171,7 +226,7 @@ final class TaskController extends Controller
     }
 
     /** @return array{object, object, array<int, array<string, mixed>>} */
-    private function authorizedTasks(Request $request, TodoistGateway $gateway): array
+    private function authorizedTasks(Request $request, TodoistGateway $gateway, bool $includeSnapshot = false): array
     {
         $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
         abort_unless($integration?->access_token_encrypted, 409, 'Conecte sua conta Todoist primeiro.');
@@ -179,6 +234,8 @@ final class TaskController extends Controller
         abort_unless($project, 409, 'Selecione um projeto Todoist primeiro.');
         $snapshot = $gateway->projectSnapshot($this->tokens->accessToken($integration), $project->todoist_project_id);
 
-        return [$project, $integration, $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? []];
+        $result = [$project, $integration, $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? []];
+
+        return $includeSnapshot ? [...$result, $snapshot] : $result;
     }
 }

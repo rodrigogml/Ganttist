@@ -4,7 +4,7 @@ import { createPinia } from 'pinia'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
 
-const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
+const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false, comment_count: 3 }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
 const secondWorkspace = { ...firstWorkspace, project: { ...firstWorkspace.project, id: 'p2', name: 'Projeto B' }, tasks: [{ ...firstWorkspace.tasks[0], title: 'Grupo atualizado' }, firstWorkspace.tasks[1]] }
 const selectionWorkspace = { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], id: 'parent', title: 'Tarefa pai', description: 'Descrição do agrupador não exibida', priority: 4, has_children: true }, { ...firstWorkspace.tasks[1], description: 'Descrição da tarefa folha', priority: 2, level: 2, parent_id: 'parent' }, { ...firstWorkspace.tasks[1], id: 'sibling', title: 'Outra tarefa', description: 'Descrição da tarefa P4', priority: 1 }] }
 const chainWorkspace = { ...firstWorkspace, tasks: [
@@ -22,9 +22,10 @@ const routedWorkspace = { ...firstWorkspace, tasks: [
   { ...firstWorkspace.tasks[1], id: 'c3', title: 'C3', level: 3, parent_id: 'c', has_children: false },
 ] }
 const relationWorkspace = { ...firstWorkspace, tasks: [
-  { ...firstWorkspace.tasks[1], id: 'current', title: 'Tarefa atual', level: 0, parent_id: null },
+  { ...firstWorkspace.tasks[1], id: 'current', title: 'Tarefa atual', description: 'Descrição nativa', priority: 3, assignee_id: 'user-1', level: 0, parent_id: null },
   { ...firstWorkspace.tasks[1], id: 'predecessor', title: 'Predecessora com um título bastante extenso para truncamento', level: 0, parent_id: null },
   { ...firstWorkspace.tasks[1], id: 'dependent', title: 'Dependente com outro título igualmente extenso', level: 0, parent_id: null },
+  { ...firstWorkspace.tasks[1], id: 'available', title: 'Revisar documentação técnica', level: 0, parent_id: null },
 ], dependencies: [
   { id: 'incoming', from: 'predecessor', to: 'current', type: 'FS', critical: false },
   { id: 'outgoing', from: 'current', to: 'dependent', type: 'SS', critical: false },
@@ -44,7 +45,7 @@ class FakeEventSource {
 }
 
 describe('workspace interaction', () => {
-  afterEach(() => { sessionStorage.clear(); localStorage.clear(); vi.unstubAllGlobals() })
+  afterEach(() => { sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
   it('explains an expired session after reloading an authenticated tab', async () => {
     sessionStorage.setItem('ganttist.authenticated-session', '1')
@@ -477,6 +478,73 @@ describe('workspace interaction', () => {
     wrapper.unmount()
   })
 
+  it('selects optional columns and resizes the task column within persisted viewport limits', async () => {
+    vi.stubGlobal('innerWidth', 1600)
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(620)
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(1200)
+    const columnWorkspace = { ...firstWorkspace, tasks: [{ ...firstWorkspace.tasks[1], level: 0, parent_id: null }] }
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: columnWorkspace }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true, teleport: true } } })
+    await flushPromises()
+
+    expect(wrapper.get('.gantt-card').attributes('style')).toContain('grid-template-columns: 430px minmax(0,1fr)')
+    const resizer = wrapper.get('.task-column-resizer')
+    expect(resizer.attributes('role')).toBe('separator')
+    expect(resizer.attributes('aria-valuemin')).toBe('278')
+    expect(resizer.attributes('aria-valuemax')).toBe('400')
+
+    await wrapper.get('.column-picker-button').trigger('click')
+    const choices = wrapper.findAll<HTMLInputElement>('.column-picker-popover input')
+    expect(choices).toHaveLength(6)
+    expect(choices[0].element.disabled).toBe(true)
+    expect(choices[0].element.checked).toBe(true)
+    await choices[2].setValue(false)
+    await choices[3].setValue(true)
+    await choices[5].setValue(true)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.get('.gantt-head-left').text()).toContain('INÍCIO')
+    expect(wrapper.get('.gantt-head-left').text()).toContain('COMENT.')
+    expect(wrapper.get('.gantt-head-left').text()).not.toContain('STATUS')
+    const rowTexts = wrapper.findAll('.gantt-row').map(row => row.text())
+    expect(rowTexts.some(text => text.includes('Subtarefa'))).toBe(true)
+    const childRow = wrapper.findAll('.gantt-row').find(row => row.text().includes('Subtarefa'))!
+    expect(childRow.get('.task-date').text()).toBe('17/08/2026')
+    expect(childRow.get('.task-comments').text()).toContain('3')
+    expect(wrapper.get('.gantt-card').attributes('style')).toContain('grid-template-columns: 504px minmax(0,1fr)')
+
+    await resizer.trigger('pointerdown', { clientX: 278 })
+    window.dispatchEvent(new MouseEvent('pointermove', { clientX: 600, bubbles: true }))
+    window.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(resizer.attributes('aria-valuenow')).toBe('400')
+    expect(wrapper.get('.gantt-head-left').attributes('style')).toContain('400px 58px 92px 76px')
+
+    await resizer.trigger('keydown', { key: 'Home' })
+    expect(resizer.attributes('aria-valuenow')).toBe('278')
+    expect(localStorage.getItem('ganttist.task-column-width')).toBe('278')
+    expect(JSON.parse(localStorage.getItem('ganttist.workspace-columns')!).status).toBe(false)
+    wrapper.unmount()
+
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    const reloaded = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true, teleport: true } } })
+    await flushPromises()
+    expect(reloaded.get('.gantt-head-left').text()).toContain('INÍCIO')
+    expect(reloaded.get('.gantt-head-left').text()).toContain('COMENT.')
+    expect(reloaded.get('.gantt-head-left').text()).not.toContain('STATUS')
+    reloaded.unmount()
+  })
+
   it('opens the task editor on double click and protects dirty drafts', async () => {
     let saveSucceeds = false
     const fetch = vi.fn(async (url: string) => {
@@ -558,19 +626,25 @@ describe('workspace interaction', () => {
   })
 
   it('separates predecessors from dependents and exposes full related task titles', async () => {
-    const fetch = vi.fn(async (url: string) => {
+    let commentCreated = false
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
       if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
       if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
       if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: relationWorkspace }) }
+      if (url === '/api/v1/tasks/current/editor-context') return { ok: true, json: async () => ({ data: { collaborators: [{ id: 'user-1', name: 'Ada Lovelace' }], comments: commentCreated ? [{ id: 'comment-2', content: 'Novo comentário', author_id: 'user-1', editable: true }] : [{ id: 'comment-1', content: 'Comentário existente', author_id: 'user-1', editable: true }] } }) }
+      if (url === '/api/v1/tasks/current/comments' && options?.method === 'POST') { commentCreated = true; return { ok: true, json: async () => ({ data: { id: 'comment-2' } }) } }
+      if (url === '/api/v1/dependencies' && options?.method === 'POST') return { ok: true, json: async () => ({ data: { id: 'new-relation' } }) }
       throw new Error(`Unexpected request ${url}`)
     })
     vi.stubGlobal('fetch', fetch)
     window.fetch = fetch as unknown as typeof window.fetch
     vi.stubGlobal('EventSource', FakeEventSource)
+    vi.stubGlobal('crypto', { randomUUID: () => 'editor-command' })
 
     const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
     await flushPromises()
     await wrapper.findAll('.gantt-row')[0].trigger('dblclick')
+    await flushPromises()
 
     const groups = wrapper.findAll('.dependency-direction')
     expect(groups).toHaveLength(2)
@@ -583,6 +657,27 @@ describe('workspace interaction', () => {
     expect(groups[1].get('.dependency-task-title').text()).toBe(relationWorkspace.tasks[2].title)
     expect(groups[1].get('.dependency-delete').attributes('aria-label')).toContain(relationWorkspace.tasks[2].title)
     expect(wrapper.get('.dependency-box').text()).not.toContain('→')
+    expect(wrapper.findAll<HTMLTextAreaElement>('.drawer-body textarea')[0].element.value).toBe('Descrição nativa')
+    expect(wrapper.findAll<HTMLSelectElement>('.drawer-body select')[0].element.value).toBe('3')
+    expect(wrapper.findAll<HTMLSelectElement>('.drawer-body select')[1].element.value).toBe('user-1')
+    expect(wrapper.get('.comments-box').text()).toContain('Comentário existente')
+
+    await groups[0].get('.dependency-add').trigger('click')
+    const search = wrapper.get<HTMLInputElement>('.relation-search')
+    await search.setValue('documentação')
+    await wrapper.get('.relation-results [role="option"]').trigger('click')
+    expect(wrapper.find('.relation-preview').exists()).toBe(false)
+    await wrapper.findAll('.relation-modal fieldset button')[0].trigger('click')
+    expect(wrapper.get('.relation-preview').text()).toContain('Término da predecessora → início da sucessora')
+    await wrapper.findAll('.relation-modal footer button')[1].trigger('click')
+    await flushPromises()
+    const relationRequest = fetch.mock.calls.find(([url, options]) => url === '/api/v1/dependencies' && (options as RequestInit)?.method === 'POST')
+    expect(JSON.parse(String((relationRequest?.[1] as RequestInit).body))).toEqual({ from: 'available', to: 'current', type: 'FS', commandId: 'editor-command' })
+
+    await wrapper.findAll<HTMLTextAreaElement>('.comments-box textarea').at(-1)!.setValue('Novo comentário')
+    await wrapper.get('.comment-submit').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.comments-box').text()).toContain('Novo comentário')
 
     await groups[0].get('.dependency-delete').trigger('click')
     expect(wrapper.get('.dependency-confirm').text()).toContain('Remover dependência?')

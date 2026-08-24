@@ -2,13 +2,19 @@
 
 ```text
 Desktop: [Barra do sistema]
-┌ Árvore/projeto ──────────┬ Timeline/Gantt ─────────────────────┐
-│ Seção ▾                  │ escala | hoje | estado sincronização │
+┌ Colunas ⚙ ─────────────────────────────────────────────────────┐
+│ Tarefa         │ Resp. │ Status │ Início │ Prazo │ Coment. │ Gantt │
+├────────────────┼───────┼────────┼────────┼───────┼─────────┼───────┤
+│ Seção ▾        │       │        │        │       │         │ escala│
 │   Grupo ⌄                │ [ resumo derivado ]                 │
 │     ─⚑│Tarefa P1         │   [ barra ]                          │
 │        │descrição Todoist│                                      │
 │     ──│Tarefa P4         │                                      │
 └──────────────────────────┴──────────────────────────────────────┘
+
+Colunas ⚙: [✓ Tarefa (obrigatória)] [✓ Responsável] [✓ Status]
+           [ ] Início [ ] Deadline [ ] Comentários
+Resize Tarefa: mínimo = largura base; máximo = 25% da viewport.
 
 Telefone: Barra → árvore OU timeline; painel abre em sobreposição.
 

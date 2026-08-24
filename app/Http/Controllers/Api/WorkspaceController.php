@@ -60,6 +60,11 @@ final class WorkspaceController extends Controller
     {
         $tasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'];
         $sections = $snapshot['sections']['results'] ?? $snapshot['sections'];
+        $collaborators = $snapshot['collaborators']['results'] ?? [];
+        $collaboratorNames = [];
+        foreach ($collaborators as $collaborator) {
+            $collaboratorNames[(string) ($collaborator['id'] ?? $collaborator['user_id'] ?? '')] = (string) ($collaborator['name'] ?? $collaborator['full_name'] ?? $collaborator['email'] ?? '');
+        }
         $settings = DB::table('project_settings')->where('gantt_project_id', $project->id)->first();
         $projectionPolicy = ProjectionPolicy::fromSetting($settings?->projection_policy ?? null);
         $timezone = 'America/Sao_Paulo';
@@ -91,14 +96,15 @@ final class WorkspaceController extends Controller
             $sortIds($ids);
         }
         unset($ids);
-        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children, $calendar, $completionOverrides, $timezone): array {
+        $mapTask = function (string $id, int $level, ?string $displayParentId) use (&$mapTask, $nodes, $children, $calendar, $completionOverrides, $timezone, $collaboratorNames): array {
             $task = $nodes[$id]['task'];
             $start = TodoistTask::start($task);
             $finish = TodoistTask::deadline($task);
             $completed = TodoistTask::completed($task);
             $completionDate = $completionOverrides[$id] ?? TodoistTask::completionDate($task, $timezone);
             $description = trim((string) ($task['description'] ?? ''));
-            $item = ['id' => $id, 'title' => (string) $task['content'], 'description' => $description !== '' ? $description : null, 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'considered_start' => null, 'considered_deadline' => null, 'unlock_date' => null, 'completed' => $completed, 'planned' => $start !== null, 'derived' => false, 'virtual_start' => null, 'effective_completion' => $completionDate, 'calendar_inconsistent' => $start !== null && ! $calendar->isWorkDay(new DateTimeImmutable($start)), 'sync_status' => 'synced', 'progress' => $completed ? 100 : 0, 'status' => $completed ? 'completed' : 'opened', 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee' => null];
+            $assigneeId = (string) ($task['assignee_id'] ?? $task['responsible_uid'] ?? $task['assignee'] ?? '');
+            $item = ['id' => $id, 'title' => (string) $task['content'], 'description' => $description !== '' ? $description : null, 'kind' => 'task', 'level' => $level, 'parent_id' => $displayParentId, 'has_children' => ! empty($children[$id]), 'start' => $start, 'finish' => $finish, 'considered_start' => null, 'considered_deadline' => null, 'unlock_date' => null, 'completed' => $completed, 'planned' => $start !== null, 'derived' => false, 'virtual_start' => null, 'effective_completion' => $completionDate, 'calendar_inconsistent' => $start !== null && ! $calendar->isWorkDay(new DateTimeImmutable($start)), 'sync_status' => 'synced', 'progress' => $completed ? 100 : 0, 'status' => $completed ? 'completed' : 'opened', 'critical' => false, 'priority' => (int) ($task['priority'] ?? 1), 'assignee_id' => $assigneeId !== '' ? $assigneeId : null, 'assignee' => $assigneeId !== '' ? ($collaboratorNames[$assigneeId] ?? null) : null, 'comment_count' => max(0, (int) ($task['note_count'] ?? 0))];
             $result = [$item];
             foreach ($children[$id] ?? [] as $childId) {
                 $result = [...$result, ...$mapTask($childId, $level + 1, $id)];

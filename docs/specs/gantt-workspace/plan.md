@@ -39,6 +39,10 @@ O cliente usa um único conjunto de listeners globais durante cada gesto e um ú
 
 No editor, relações são derivadas do contrato existente em duas coleções computadas: entradas (`to === tarefa atual`) e saídas (`from === tarefa atual`). A apresentação reutiliza o ID da relação para remoção e resolve o título pelo workspace, sem duplicar dados nem alterar o contrato da API.
 
+O editor consulta colaboradores e comentários somente ao abrir uma tarefa. Campos nativos usam o gateway Todoist (`description`, `priority`, `assignee_id`); comentários possuem endpoints próprios de listagem, criação e edição, e são reconciliados após mutação. A criação de relação deixa de renderizar um select completo: busca local normalizada percorre o snapshot paginado, limita a lista apresentada e só habilita o tipo após escolher a outra tarefa. A direção do quadro determina `from`/`to`; um SVG compacto reutiliza a semântica dos endpoints do Gantt para pré-visualizar FS/SS/FF/SF.
+
+As colunas fixas são definidas por um catálogo frontend com ID, rótulo e largura estável. A largura total sticky é sempre derivada da largura de Tarefa mais as colunas opcionais visíveis e alimenta cabeçalho, linhas, origem da timeline, virtualização e autoscroll pelo mesmo valor. Somente Tarefa possui resize nesta entrega; seu valor é limitado entre a largura base existente e `25vw`. Preferências ficam em `localStorage`, com validação e fallback. “Comentários” usa `note_count` já presente no objeto de tarefa Todoist v1, evitando requisições N+1 ao endpoint de comentários.
+
 O mapper do workspace expõe `description` nativa e mantém `priority` no valor bruto da API Todoist. A SPA converte somente para apresentação (`4→P1`, `3→P2`, `2→P3`, `1→P4`) e nunca exibe prioridade ou descrição em linhas derivadas/agrupadoras.
 
 ## ConvenÃ§Ãµes de Borda

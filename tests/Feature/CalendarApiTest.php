@@ -47,6 +47,21 @@ final class CalendarApiTest extends TestCase
                 return ['tasks' => ['results' => [['id' => 'task-1', 'content' => 'Entrega', 'is_completed' => false, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19']]]];
             }
 
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
+            }
+
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
             {
                 return [];

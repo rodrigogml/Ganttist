@@ -59,6 +59,27 @@ final class DependencyApiTest extends TestCase
             ->assertJsonPath('message', 'Essa dependência criaria um ciclo no grafo.');
     }
 
+    public function test_removed_dependency_is_reactivated_instead_of_violating_the_unique_key(): void
+    {
+        $user = $this->userWithActiveFakeProject();
+        $payload = ['from' => 'fake-task-1', 'to' => 'fake-task-2', 'type' => 'FS'];
+
+        $created = $this->actingAs($user)->postJson('/api/v1/dependencies', [...$payload, 'commandId' => 'dependency-first-create'])
+            ->assertCreated();
+        $dependencyId = $created->json('data.id');
+
+        $this->actingAs($user)->deleteJson('/api/v1/dependencies/'.$dependencyId, ['commandId' => 'dependency-remove'])
+            ->assertOk();
+
+        $this->actingAs($user)->postJson('/api/v1/dependencies', [...$payload, 'commandId' => 'dependency-recreate'])
+            ->assertCreated()
+            ->assertJsonPath('data.id', $dependencyId);
+
+        self::assertSame(1, DB::table('task_dependencies')->where('gantt_project_id', DB::table('gantt_projects')->where('user_id', $user->id)->value('id'))->where('predecessor_todoist_task_id', $payload['from'])->where('successor_todoist_task_id', $payload['to'])->where('type', $payload['type'])->count());
+        self::assertDatabaseHas('task_dependencies', ['id' => $dependencyId, 'status' => 'active']);
+        self::assertDatabaseHas('audit_events', ['action' => 'dependency.created', 'causation_id' => 'dependency-recreate']);
+    }
+
     private function userWithActiveFakeProject(): User
     {
         config()->set('services.todoist.driver', 'fake');

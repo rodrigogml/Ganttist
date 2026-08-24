@@ -38,11 +38,11 @@
 **Purpose**: apresentar uma Ãºnica projeÃ§Ã£o confiÃ¡vel de Ã¡rvore e cronograma de um projeto selecionado.
 **Actors and Permissions**: usuÃ¡rio autenticado, dono do Gantt.
 **Entry and Navigation**: seleÃ§Ã£o de projeto abre o workspace; busca, histÃ³rico e configuraÃ§Ãµes retornam preservando foco/contexto.
-**Content and Data**: barra do sistema; resumo; Ã¡rvore por seÃ§Ãµes/tarefas/subtarefas; timeline; grupos derivados; campos explícitos do Todoist; data, deadline e desbloqueio considerados; status calculado; estado de sincronizaÃ§Ã£o. Agrupadores usam uma linha apenas. Toda tarefa folha reserva, entre a árvore e o conteúdo textual, um slot terminal de largura idêntica ao controle de nó. P1/P2/P3 usam esse slot para uma bandeira que aproveita a altura do conjunto título/descrição; P4 mantém o slot sem marcador. Título e descrição nativa truncada começam sempre no mesmo eixo. A etiqueta `OPENED` é verde. O filtro organiza “Abertas”, “Agendadas” e “Atrasadas” sob o agrupador virtual “Desbloqueadas”.
-**Actions and Behavior**: expandir/recolher, selecionar item, abrir painel, navegar no tempo, filtrar individualmente por `COMPLETED`, `BLOCKED`, `SCHEDULED`, `LATE` ou `OPENED`, selecionar o agrupador “Desbloqueadas” para combinar `OPENED`, `SCHEDULED` e `LATE`, abrir configuraÃ§Ãµes e solicitar recarga. Grupos nÃ£o sÃ£o editÃ¡veis diretamente; status calculado e o agrupador virtual não são editáveis nem persistidos. Prioridade bruta Todoist é apresentada como `4→P1` vermelha, `3→P2` amarela, `2→P3` azul e `1→P4` sem marcador. Quando há bandeira, um segmento curto conecta visualmente a rota da árvore ao marcador sem atravessá-lo; sem bandeira, a extensão horizontal existente ocupa o slot reservado.
+**Content and Data**: barra do sistema; resumo; Ã¡rvore por seÃ§Ãµes/tarefas/subtarefas; timeline; grupos derivados; campos explícitos do Todoist; data, deadline e desbloqueio considerados; status calculado; estado de sincronizaÃ§Ã£o. Agrupadores usam uma linha apenas. Toda tarefa folha reserva, entre a árvore e o conteúdo textual, um slot terminal de largura idêntica ao controle de nó. P1/P2/P3 usam esse slot para uma bandeira que aproveita a altura do conjunto título/descrição; P4 mantém o slot sem marcador. Título e descrição nativa truncada começam sempre no mesmo eixo. A etiqueta `OPENED` é verde. O filtro organiza “Abertas”, “Agendadas” e “Atrasadas” sob o agrupador virtual “Desbloqueadas”. Acima dos títulos fixos, o comando Colunas abre as opções Tarefa, Responsável, Status, Início, Deadline e Comentários; Tarefa é obrigatória.
+**Actions and Behavior**: expandir/recolher, selecionar item, abrir painel, navegar no tempo, filtrar estados, escolher colunas, redimensionar Tarefa e solicitar recarga. O seletor aplica cada opção imediatamente e persiste a configuração. O separador na borda direita de Tarefa aceita drag horizontal; setas ajustam em passos, Home restaura o mínimo e End aplica o máximo. A largura mínima é a largura atual da coluna e a máxima é 25% da viewport. Grupos nÃ£o sÃ£o editÃ¡veis diretamente; status calculado e o agrupador virtual não são editáveis nem persistidos. Prioridade bruta Todoist é apresentada como `4→P1` vermelha, `3→P2` amarela, `2→P3` azul e `1→P4` sem marcador.
 **Validation and Feedback**: respostas exibem somente projeÃ§Ã£o autorizada; projeto vazio, integraÃ§Ã£o ausente e falha de sincronizaÃ§Ã£o tÃªm explicaÃ§Ã£o e aÃ§Ã£o de recuperaÃ§Ã£o.
-**Responsive/Adaptive Behavior**: desktop mostra Ã¡rvore e timeline lado a lado; tablet reduz colunas; telefone usa Ã¡rvore e timeline/painel em Ã¡reas alternÃ¡veis, preservando seleÃ§Ã£o.
-**Accessibility**: estrutura de Ã¡rvore navegÃ¡vel por teclado, foco visÃ­vel, relaÃ§Ã£o entre linha e barra, sem depender apenas de cor; alvos touch adequados. Bandeiras possuem nome acessível P1/P2/P3, forma distinguível além da cor e área visual ampliada; descrição completa fica disponível no atributo `title` quando truncada. O filtro expõe grupos e estado selecionado semanticamente, mantém ordem de foco linear e não depende apenas da indentação; a etiqueta verde conserva o texto “Aberta”.
+**Responsive/Adaptive Behavior**: desktop mostra Ã¡rvore e timeline lado a lado; a largura máxima de Tarefa é recalculada ao redimensionar a viewport. Em tablet/telefone, 25% pode ficar abaixo da largura base e, nesse caso, a largura base prevalece com navegação horizontal; colunas opcionais podem ser ocultadas pelo usuário sem perder a configuração.
+**Accessibility**: estrutura de Ã¡rvore navegÃ¡vel por teclado, foco visÃ­vel, relaÃ§Ã£o entre linha e barra, sem depender apenas de cor; alvos touch adequados. O botão Colunas expõe `aria-expanded`; opções usam checkboxes e Tarefa é anunciada como obrigatória. O resize é um separador focável com orientação, valor atual/mínimo/máximo e operação por setas/Home/End. Bandeiras possuem nome acessível P1/P2/P3 e descrição completa fica disponível no atributo `title` quando truncada.
 **Localization**: `pt-BR`; datas respeitam locale e timezone de planejamento.
 **Components and Design System**: barra do sistema, Ã¡rvore virtualizada, timeline, badge de estado, painel e mensagens compartilhadas.
 **Integration and Contracts**: projeÃ§Ã£o de workspace e eventos de atualizaÃ§Ã£o; cliente nÃ£o calcula grupos, datas consideradas, desbloqueio, status ou criticidade. O contrato distingue `start`/`finish` explícitos de `considered_start`/`considered_deadline` calculados.
@@ -143,17 +143,17 @@
 **Surface**: SURF-WEB-OPERATIONS
 **Surface Type**: WEB
 **Change Type**: MODIFIED
-**Purpose**: permitir distinguir imediatamente predecessoras e sucessoras e reconhecer a tarefa relacionada mesmo em painéis estreitos.
+**Purpose**: editar os campos nativos e comentários da tarefa, distinguir predecessoras e sucessoras e criar relações com busca e prévia inequívoca.
 **Actors and Permissions**: usuário autenticado, dono do Gantt.
 **Entry and Navigation**: abrir o editor por duplo clique ou comando Editar; a região de relações aparece após os campos e a projeção.
-**Content and Data**: quadro “Depende de” lista relações cuja tarefa atual é sucessora; quadro “Dependentes” lista relações cuja tarefa atual é predecessora. Cada linha contém badge de tipo `FS`, `SS`, `FF` ou `SF`, título da outra tarefa e ícone de lixeira.
-**Actions and Behavior**: o título ocupa o espaço flexível e recebe ellipsis quando não couber; `title` e nome acessível preservam o texto completo. A lixeira abre a confirmação de remoção existente. O formulário de nova relação permanece separado abaixo das listas.
-**Validation and Feedback**: quadros vazios mostram “Nenhuma predecessora” ou “Nenhuma tarefa dependente”. Remoção mantém a relação visível até confirmação e, após sucesso, reconcilia o workspace; falha preserva a linha.
+**Content and Data**: campos de título, descrição, prioridade P1–P4 e responsável; comentários com autor, data e conteúdo; quadro “Depende de” lista relações cuja tarefa atual é sucessora; quadro “Dependentes” lista relações cuja tarefa atual é predecessora. Cada relação contém badge de tipo, título da outra tarefa e lixeira. Cada cabeçalho possui contador e botão `+`.
+**Actions and Behavior**: salvar campos nativos; criar ou editar comentário; remover relação; `+` abre o diálogo central na direção do quadro. O formulário permanente é removido. No diálogo, digitar qualquer trecho do título filtra a lista, escolher uma tarefa libera os tipos, e escolher FS/SS/FF/SF exibe a prévia acima da busca antes da confirmação.
+**Validation and Feedback**: responsável deve pertencer aos colaboradores atuais; comentário vazio não é enviado; quadros vazios preservam o `+`. Busca vazia orienta a digitação, nenhum resultado é explicitado e resultados visuais são limitados. Autorrelação, duplicidade, ciclo e grupo sucessor continuam validados no cliente e no servidor. Falha preserva rascunhos, comentários e relações anteriores.
 **Responsive/Adaptive Behavior**: os dois quadros ficam empilhados em qualquer largura do drawer; título encolhe antes do badge e da lixeira, que permanecem integralmente visíveis. Escalas de texto/espaçamento seguem o tema do workspace.
-**Accessibility**: cada quadro é uma região rotulada; o título completo está em tooltip nativo; botão de lixeira tem `aria-label` com tipo e nome da tarefa; não se depende de seta, cor ou posição para comunicar a direção.
+**Accessibility**: campos possuem rótulos; comentários anunciam autoria/data; cada quadro é região rotulada; `+` nomeia a direção. O diálogo move o foco inicial para a busca e fecha por Cancelar/Escape; busca usa combobox/listbox com resultado e seleção anunciados. A prévia possui descrição textual equivalente do tipo e não depende somente do desenho.
 **Localization**: rótulos em `pt-BR`; siglas FS/SS/FF/SF permanecem canônicas.
 **Components and Design System**: cartões, badges, ellipsis e botão iconográfico reutilizam tokens do drawer e foco visível da aplicação.
-**Integration and Contracts**: usa `workspace.dependencies`, `workspace.tasks` e `DELETE /api/v1/dependencies/{id}` sem alteração de payload.
+**Integration and Contracts**: usa workspace/dependencies, atualização de tarefa, colaboradores do projeto e comentários Todoist; cria relações pelo contrato existente de dependências.
 **Telemetry**: remoção por direção e tipo; títulos e IDs não entram em telemetria.
 **Wireframe Requirement**: REQUIRED
 **Wireframe**: wireframes/int-workspace-editor-relations.md
@@ -182,10 +182,10 @@ Desktop, tablet e telefone compartilham o mesmo estado de negÃ³cio; apenas a d
 
 | Interaction ID | User Stories | Functional Requirements | Success Criteria | Contracts |
 |---|---|---|---|---|
-| INT-WORKSPACE-001 | US-1â€“3 | FR-001â€“017, FR-029â€“030 | SC-001â€“005, SC-010â€“011 | workspace/eventos |
+| INT-WORKSPACE-001 | US-1â€“3 | FR-001â€“017, FR-029â€“030, FR-034 | SC-001â€“005, SC-010â€“011, SC-014 | workspace/eventos |
 | INT-WORKSPACE-002 | US-4 | FR-018â€“023, FR-026â€“027 | SC-006, SC-008 | task dates/workspace/eventos |
 | INT-WORKSPACE-003 | US-4 | FR-023â€“027 | SC-007â€“008 | dependencies/workspace/eventos |
-| INT-WORKSPACE-004 | US-4 | FR-025, FR-028 | SC-009 | dependencies/workspace |
+| INT-WORKSPACE-004 | US-4 | FR-025, FR-028, FR-031â€“033 | SC-009, SC-012â€“013 | tasks/comments/collaborators/dependencies/workspace |
 
 ## Wireframes
 

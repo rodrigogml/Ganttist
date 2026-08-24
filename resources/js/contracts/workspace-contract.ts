@@ -27,6 +27,8 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
     if (item.start !== null && typeof item.start !== 'string') throw new Error('Contrato de workspace inválido: task.start.')
     if (item.finish !== null && typeof item.finish !== 'string') throw new Error('Contrato de workspace inválido: task.finish.')
     if (item.description !== undefined && item.description !== null && typeof item.description !== 'string') throw new Error('Contrato de workspace inválido: task.description.')
+    if (item.assignee_id !== undefined && item.assignee_id !== null && typeof item.assignee_id !== 'string') throw new Error('Contrato de workspace inválido: task.assignee_id.')
+    if (item.comment_count !== undefined && (typeof item.comment_count !== 'number' || item.comment_count < 0)) throw new Error('Contrato de workspace inválido: task.comment_count.')
     for (const field of ['considered_start', 'considered_deadline', 'unlock_date', 'earliest_start']) if (item[field] !== undefined && item[field] !== null && typeof item[field] !== 'string') throw new Error(`Contrato de workspace inválido: task.${field}.`)
     if (item.completed !== undefined && typeof item.completed !== 'boolean') throw new Error('Contrato de workspace inválido: task.completed.')
   }

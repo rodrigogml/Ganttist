@@ -18,7 +18,7 @@ final class TaskApiTest extends TestCase
         config()->set('services.todoist.driver', 'fake');
         $user = User::factory()->create();
         $projectId = (string) Str::ulid();
-        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
         $snapshotStore = app(TodoistSnapshotStore::class);
         $snapshotStore->put($projectId, ['tasks' => ['stale']]);
@@ -63,9 +63,45 @@ final class TaskApiTest extends TestCase
         DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
 
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'priority' => 4, 'completed' => true])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'priority' => 4, 'completed' => true, 'commandId' => 'task-update'])->assertOk();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', [
+            'title' => 'Novo título',
+            'description' => 'Descrição revisada',
+            'priority' => 4,
+            'assigneeId' => 'fake-user',
+            'completed' => true,
+            'commandId' => 'task-update',
+        ])->assertOk()
+            ->assertJsonPath('data.content', 'Novo título')
+            ->assertJsonPath('data.description', 'Descrição revisada')
+            ->assertJsonPath('data.priority', 4)
+            ->assertJsonPath('data.assignee_id', 'fake-user');
 
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.updated', 'causation_id' => 'task-update']);
+    }
+
+    public function test_editor_context_exposes_collaborators_and_supports_comment_creation_and_editing(): void
+    {
+        config()->set('services.todoist.driver', 'fake');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+
+        $this->actingAs($user)->getJson('/api/v1/tasks/fake-task-1/editor-context')
+            ->assertOk()
+            ->assertJsonPath('data.collaborators.0.id', 'fake-user')
+            ->assertJsonPath('data.comments.0.content', 'Comentário de exemplo')
+            ->assertJsonPath('data.comments.0.editable', true);
+
+        $this->actingAs($user)->postJson('/api/v1/tasks/fake-task-1/comments', ['content' => '  Novo comentário  ', 'commandId' => 'comment-create'])
+            ->assertCreated()
+            ->assertJsonPath('data.content', 'Novo comentário');
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/comments/fake-comment', ['content' => 'Comentário revisado', 'commandId' => 'comment-update'])
+            ->assertOk()
+            ->assertJsonPath('data.content', 'Comentário revisado');
+
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.comment_created', 'causation_id' => 'comment-create']);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.comment_updated', 'causation_id' => 'comment-update']);
     }
 
     public function test_deletion_preview_requires_confirmation_and_can_preserve_route_continuity(): void

@@ -10,6 +10,12 @@ interface TodoistGateway
 
     public function projectSnapshot(string $accessToken, string $projectId): array;
 
+    public function comments(string $accessToken, string $taskId): array;
+
+    public function createComment(string $accessToken, string $taskId, string $content): array;
+
+    public function updateComment(string $accessToken, string $commentId, string $content): array;
+
     public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array;
 
     public function updateTask(string $accessToken, string $taskId, array $attributes): array;

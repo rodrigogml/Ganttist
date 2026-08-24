@@ -37,6 +37,9 @@ Route::prefix('v1')->group(function () {
             Route::put('/tasks/{taskId}/dates', [TaskController::class, 'updateDates']);
             Route::put('/tasks/{taskId}/completion-date', [TaskController::class, 'updateCompletionDate']);
             Route::put('/tasks/{taskId}', [TaskController::class, 'update']);
+            Route::get('/tasks/{taskId}/editor-context', [TaskController::class, 'editorContext']);
+            Route::post('/tasks/{taskId}/comments', [TaskController::class, 'createComment']);
+            Route::put('/tasks/{taskId}/comments/{commentId}', [TaskController::class, 'updateComment']);
             Route::get('/workspace', [WorkspaceController::class, 'show'])->middleware('throttle:120,1');
             Route::get('/calendar', [CalendarController::class, 'show']);
             Route::post('/calendar/simulate', [CalendarController::class, 'simulate'])->middleware('throttle:30,1');

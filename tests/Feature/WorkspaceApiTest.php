@@ -66,6 +66,7 @@ final class WorkspaceApiTest extends TestCase
         self::assertSame('section', $section['kind']);
         self::assertTrue($section['has_children']);
         self::assertSame('Conferir o escopo acordado com o cliente.', $leafTask['description']);
+        self::assertSame(2, $leafTask['comment_count']);
         self::assertSame(2, $leafTask['priority']);
         self::assertSame(2, $response->json('data.stats.critical'));
         self::assertTrue($response->json('data.dependencies.0.critical'));
@@ -95,6 +96,21 @@ final class WorkspaceApiTest extends TestCase
             public function projectSnapshot(string $accessToken, string $projectId): array
             {
                 throw new \LogicException('Não deve buscar novamente no Todoist.');
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
             }
 
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
@@ -172,6 +188,21 @@ final class WorkspaceApiTest extends TestCase
                 return ['tasks' => ['results' => [['id' => 'task-a', 'due' => null, 'deadline_date' => null], ['id' => 'task-b', 'due' => null, 'deadline_date' => null]]]];
             }
 
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
+            }
+
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
             {
                 if (++$this->calls === 1) {
@@ -229,6 +260,21 @@ final class WorkspaceApiTest extends TestCase
             public function projectSnapshot(string $accessToken, string $projectId): array
             {
                 return ['tasks' => ['results' => [['id' => 'task-a', 'due' => ['date' => '2026-08-18'], 'deadline_date' => '2026-08-18']]]];
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
             }
 
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array

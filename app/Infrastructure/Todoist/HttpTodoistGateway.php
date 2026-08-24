@@ -27,27 +27,46 @@ final class HttpTodoistGateway implements TodoistGateway
         $responses = Http::pool(fn (Pool $pool): array => [
             $pool->as('sections')->withToken($accessToken)->acceptJson()->timeout(15)->get($baseUrl.'/sections', ['project_id' => $projectId, 'limit' => 200]),
             $pool->as('tasks')->withToken($accessToken)->acceptJson()->timeout(15)->get($baseUrl.'/tasks', ['project_id' => $projectId, 'limit' => 200]),
+            $pool->as('collaborators')->withToken($accessToken)->acceptJson()->timeout(15)->get($baseUrl."/projects/{$projectId}/collaborators", ['limit' => 200]),
         ]);
 
         return [
             'project_id' => $projectId,
-            'sections' => $this->allPages($accessToken, '/sections', $projectId, $responses['sections']->throw()->json()),
-            'tasks' => $this->allPages($accessToken, '/tasks', $projectId, $responses['tasks']->throw()->json()),
+            'sections' => $this->allPages($accessToken, '/sections', ['project_id' => $projectId], $responses['sections']->throw()->json()),
+            'tasks' => $this->allPages($accessToken, '/tasks', ['project_id' => $projectId], $responses['tasks']->throw()->json()),
+            'collaborators' => $this->allPages($accessToken, "/projects/{$projectId}/collaborators", [], $responses['collaborators']->throw()->json()),
         ];
     }
 
     /** @param array<string, mixed> $firstPage */
-    private function allPages(string $accessToken, string $path, string $projectId, array $firstPage): array
+    private function allPages(string $accessToken, string $path, array $parameters, array $firstPage): array
     {
         $results = $firstPage['results'] ?? $firstPage;
         $cursor = $firstPage['next_cursor'] ?? null;
         while (is_string($cursor) && $cursor !== '') {
-            $page = $this->client($accessToken)->get($path, ['project_id' => $projectId, 'limit' => 200, 'cursor' => $cursor])->throw()->json();
+            $page = $this->client($accessToken)->get($path, [...$parameters, 'limit' => 200, 'cursor' => $cursor])->throw()->json();
             $results = [...$results, ...($page['results'] ?? [])];
             $cursor = $page['next_cursor'] ?? null;
         }
 
         return ['results' => $results, 'next_cursor' => null];
+    }
+
+    public function comments(string $accessToken, string $taskId): array
+    {
+        $firstPage = $this->client($accessToken)->get('/comments', ['task_id' => $taskId, 'limit' => 200])->throw()->json();
+
+        return $this->allPages($accessToken, '/comments', ['task_id' => $taskId], $firstPage);
+    }
+
+    public function createComment(string $accessToken, string $taskId, string $content): array
+    {
+        return $this->client($accessToken)->post('/comments', ['task_id' => $taskId, 'content' => $content])->throw()->json();
+    }
+
+    public function updateComment(string $accessToken, string $commentId, string $content): array
+    {
+        return $this->client($accessToken)->post("/comments/{$commentId}", ['content' => $content])->throw()->json();
     }
 
     public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
