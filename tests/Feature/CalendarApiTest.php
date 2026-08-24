@@ -16,9 +16,9 @@ final class CalendarApiTest extends TestCase
     public function test_owner_can_version_calendar_and_replace_exceptions(): void
     {
         [$user, $projectId] = $this->projectWithSettings();
-        $payload = ['commandId' => 'calendar-command', 'expectedVersion' => 1, 'workingDays' => ['monday', 'tuesday', 'wednesday', 'thursday'], 'reschedulingMode' => 'MANUAL', 'deadlinePolicy' => 'POSTERIOR', 'allowUnscheduledTasks' => true, 'exceptions' => [['date' => '2026-08-20', 'type' => 'NON_WORKING', 'description' => 'Feriado']]];
+        $payload = ['commandId' => 'calendar-command', 'expectedVersion' => 1, 'workingDays' => ['monday', 'tuesday', 'wednesday', 'thursday'], 'reschedulingMode' => 'MANUAL', 'projectionPolicy' => 'PRESERVE_DEADLINE', 'deadlinePolicy' => 'POSTERIOR', 'allowUnscheduledTasks' => true, 'exceptions' => [['date' => '2026-08-20', 'type' => 'NON_WORKING', 'description' => 'Feriado']]];
 
-        $this->actingAs($user)->putJson('/api/v1/calendar', $payload)->assertOk()->assertJsonPath('data.version', 2)->assertJsonPath('data.workingDays.3', 'thursday')->assertJsonPath('data.exceptions.0.type', 'NON_WORKING');
+        $this->actingAs($user)->putJson('/api/v1/calendar', $payload)->assertOk()->assertJsonPath('data.version', 2)->assertJsonPath('data.workingDays.3', 'thursday')->assertJsonPath('data.projectionPolicy', 'PRESERVE_DEADLINE')->assertJsonPath('data.exceptions.0.type', 'NON_WORKING');
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'calendar.updated', 'causation_id' => 'calendar-command']);
         $this->actingAs($user)->putJson('/api/v1/calendar', $payload)->assertStatus(409);
     }
@@ -47,6 +47,21 @@ final class CalendarApiTest extends TestCase
                 return ['tasks' => ['results' => [['id' => 'task-1', 'content' => 'Entrega', 'is_completed' => false, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19']]]];
             }
 
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
+            }
+
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
             {
                 return [];
@@ -66,7 +81,7 @@ final class CalendarApiTest extends TestCase
 
             public function deleteTask(string $accessToken, string $taskId): void {}
         });
-        $payload = ['commandId' => 'calendar-impact', 'expectedVersion' => 1, 'workingDays' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], 'reschedulingMode' => 'MANUAL', 'deadlinePolicy' => 'ANTERIOR', 'allowUnscheduledTasks' => true, 'exceptions' => [['date' => '2026-08-17', 'type' => 'NON_WORKING', 'description' => null]]];
+        $payload = ['commandId' => 'calendar-impact', 'expectedVersion' => 1, 'workingDays' => ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'], 'reschedulingMode' => 'MANUAL', 'projectionPolicy' => 'PRESERVE_DURATION', 'deadlinePolicy' => 'ANTERIOR', 'allowUnscheduledTasks' => true, 'exceptions' => [['date' => '2026-08-17', 'type' => 'NON_WORKING', 'description' => null]]];
         $this->actingAs($user)->postJson('/api/v1/calendar/simulate', $payload)->assertOk()->assertJsonCount(1, 'data.changes')->assertJsonPath('data.changes.0.after.start', '2026-08-18');
         $this->actingAs($user)->putJson('/api/v1/calendar', $payload)->assertUnprocessable();
         $this->actingAs($user)->putJson('/api/v1/calendar', $payload + ['confirmed' => true])->assertStatus(202)->assertJsonPath('operation_id', fn ($id) => is_string($id));

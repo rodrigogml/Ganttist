@@ -6,7 +6,7 @@
 |---|---|---|
 | `todoist_integrations` | ULID / `user_id` único | uma conta por usuário; token criptografado; estado de autorização. |
 | `gantt_projects` | ULID / `(user_id,todoist_project_id)` único | um Gantt por projeto Todoist e usuário. |
-| `project_settings` | ULID / `gantt_project_id` único | calendário, modo, políticas e versão otimista. |
+| `project_settings` | ULID / `gantt_project_id` único | calendário, modo, políticas, `autoScheduleBlockedTasks`, `clearParentTaskDates` e versões otimistas independentes por aba; ambas as autorizações iniciam desligadas. |
 | `calendar_exceptions` | ULID / `(gantt_project_id,date)` único | sobrepõe semana padrão. |
 | `task_dependencies` | ULID / par+tipo único | intraprojeto, acíclico; grupo apenas predecessor. |
 | `task_metadata` | ULID / tarefa+Gantt único | override de conclusão e metadados exclusivos. |

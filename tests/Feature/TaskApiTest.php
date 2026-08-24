@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Services\TodoistSnapshotStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -12,16 +14,45 @@ final class TaskApiTest extends TestCase
 {
     use RefreshDatabase;
 
-    public function test_direct_task_update_rejects_dates_and_keeps_schedule_on_the_operation_boundary(): void
+    public function test_direct_date_update_moves_start_and_explicit_deadline_by_the_same_number_of_days(): void
     {
         config()->set('services.todoist.driver', 'fake');
         $user = User::factory()->create();
         $projectId = (string) Str::ulid();
-        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
         DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $snapshotStore = app(TodoistSnapshotStore::class);
+        $snapshotStore->put($projectId, ['tasks' => ['stale']]);
 
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'commandId' => 'invalid-date-update', 'start' => '2026-08-20'])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['start' => '2026-08-20'])->assertStatus(410);
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'MOVE', 'start' => '2026-08-20'])->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'MOVE', 'start' => '2026-08-20', 'finish' => '2026-08-25', 'commandId' => 'invalid-finish'])->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'MOVE', 'start' => '2026-08-20', 'commandId' => 'move-task'])
+            ->assertOk()
+            ->assertJsonPath('data.start', '2026-08-20')
+            ->assertJsonPath('data.finish', '2026-08-22')
+            ->assertJsonPath('data.deadline', '2026-08-22');
+        self::assertNull($snapshotStore->get($projectId));
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.dates_updated', 'causation_id' => 'move-task']);
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'MOVE', 'start' => '2026-08-25', 'commandId' => 'schedule-empty-task'])
+            ->assertOk()
+            ->assertJsonPath('data.start', '2026-08-25')
+            ->assertJsonPath('data.finish', null)
+            ->assertJsonPath('data.deadline', null);
+
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'RESIZE_START', 'start' => '2026-08-18', 'deadline' => '2026-08-20', 'commandId' => 'resize-start'])
+            ->assertOk()
+            ->assertJsonPath('data.start', '2026-08-18')
+            ->assertJsonPath('data.deadline', '2026-08-20');
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'RESIZE_END', 'deadline' => '2026-08-28', 'commandId' => 'resize-end'])
+            ->assertOk()
+            ->assertJsonPath('data.deadline', '2026-08-28');
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-2/dates', ['intent' => 'RESIZE_START', 'start' => '2026-08-21', 'deadline' => '2026-08-20', 'commandId' => 'invalid-range'])
+            ->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/dates', ['intent' => 'RESIZE_END', 'deadline' => '2026-08-28', 'commandId' => 'completed-resize'])
+            ->assertUnprocessable();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-group/dates', ['intent' => 'RESIZE_END', 'deadline' => '2026-08-28', 'commandId' => 'group-resize'])
+            ->assertUnprocessable();
     }
 
     public function test_direct_task_update_requires_a_command_and_is_audited(): void
@@ -33,9 +64,54 @@ final class TaskApiTest extends TestCase
         DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
 
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'priority' => 4, 'completed' => true])->assertUnprocessable();
-        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', ['title' => 'Novo título', 'priority' => 4, 'completed' => true, 'commandId' => 'task-update'])->assertOk();
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', [
+            'title' => 'Novo título',
+            'description' => 'Descrição revisada',
+            'priority' => 4,
+            'assigneeId' => 'fake-user',
+            'completed' => true,
+            'commandId' => 'task-update',
+        ])->assertOk()
+            ->assertJsonPath('data.content', 'Novo título')
+            ->assertJsonPath('data.description', 'Descrição revisada')
+            ->assertJsonPath('data.priority', 4)
+            ->assertJsonPath('data.assignee_id', 'fake-user');
+
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', [
+            'title' => 'Novo título',
+            'dateMode' => 'clear_all',
+            'commandId' => 'clear-task-dates',
+        ])->assertOk()
+            ->assertJsonPath('data.due_string', 'no date')
+            ->assertJsonPath('data.deadline_date', null);
 
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.updated', 'causation_id' => 'task-update']);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.updated', 'causation_id' => 'clear-task-dates']);
+    }
+
+    public function test_editor_context_exposes_collaborators_and_supports_comment_creation_and_editing(): void
+    {
+        config()->set('services.todoist.driver', 'fake');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+
+        $this->actingAs($user)->getJson('/api/v1/tasks/fake-task-1/editor-context')
+            ->assertOk()
+            ->assertJsonPath('data.collaborators.0.id', 'fake-user')
+            ->assertJsonPath('data.comments.0.content', 'Comentário de exemplo')
+            ->assertJsonPath('data.comments.0.editable', true);
+
+        $this->actingAs($user)->postJson('/api/v1/tasks/fake-task-1/comments', ['content' => '  Novo comentário  ', 'commandId' => 'comment-create'])
+            ->assertCreated()
+            ->assertJsonPath('data.content', 'Novo comentário');
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/comments/fake-comment', ['content' => 'Comentário revisado', 'commandId' => 'comment-update'])
+            ->assertOk()
+            ->assertJsonPath('data.content', 'Comentário revisado');
+
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.comment_created', 'causation_id' => 'comment-create']);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.comment_updated', 'causation_id' => 'comment-update']);
     }
 
     public function test_deletion_preview_requires_confirmation_and_can_preserve_route_continuity(): void
@@ -68,5 +144,40 @@ final class TaskApiTest extends TestCase
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/completion-date', ['completionDate' => '2026-08-18', 'commandId' => 'completion-override'])->assertOk()->assertJsonPath('data.overridden', true);
         self::assertDatabaseHas('task_metadata', ['gantt_project_id' => $projectId, 'todoist_task_id' => 'fake-task-1', 'completion_date_override' => '2026-08-18']);
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.completion_date_overridden', 'causation_id' => 'completion-override']);
+    }
+
+    public function test_task_completion_is_written_to_todoist_from_the_cached_workspace(): void
+    {
+        config()->set('services.todoist.driver', 'fake');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, ['tasks' => ['results' => [['id' => 'fake-task-2', 'content' => 'Tarefa aberta', 'is_completed' => false]]]]);
+
+        $this->actingAs($user)->patchJson('/api/v1/tasks/fake-task-2/completion', ['completed' => true, 'commandId' => 'complete-from-context'])
+            ->assertOk()
+            ->assertJsonPath('data.completed', true)
+            ->assertJsonPath('data.unchanged', false);
+        self::assertTrue((bool) (app(TodoistSnapshotStore::class)->get($projectId)['tasks']['results'][0]['is_completed'] ?? false));
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.completion_updated', 'causation_id' => 'complete-from-context']);
+    }
+
+    public function test_task_completion_returns_a_controlled_error_when_todoist_rejects_it(): void
+    {
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, ['tasks' => ['results' => [['id' => 'task', 'content' => 'Tarefa aberta', 'is_completed' => false]]]]);
+        Http::fake(['*/sync' => Http::response([
+            'error' => 'Bad Request',
+            'error_extra' => ['retry_after' => 7],
+        ], 400)]);
+
+        $this->actingAs($user)->patchJson('/api/v1/tasks/task/completion', ['completed' => true, 'commandId' => 'completion-rejected'])
+            ->assertStatus(503)
+            ->assertJsonPath('message', 'O Todoist pediu para tentar novamente em 7 segundos.');
+        Http::assertSentCount(1);
     }
 }

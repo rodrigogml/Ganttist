@@ -48,7 +48,7 @@ final class CalendarController extends Controller
             $settings = DB::table('project_settings')->where('gantt_project_id', $project->id)->first();
             abort_unless($settings, 409, 'Configuração do projeto indisponível.');
             $workDays = array_fill_keys($data['workingDays'], true);
-            $values = ['rescheduling_mode' => $data['reschedulingMode'], 'non_working_deadline_policy' => $data['deadlinePolicy'], 'allow_unscheduled_tasks' => $data['allowUnscheduledTasks'], 'version' => $settings->version + 1, 'updated_at' => now()];
+            $values = ['rescheduling_mode' => $data['reschedulingMode'], 'projection_policy' => $data['projectionPolicy'], 'non_working_deadline_policy' => $data['deadlinePolicy'], 'allow_unscheduled_tasks' => $data['allowUnscheduledTasks'], 'version' => $settings->version + 1, 'updated_at' => now()];
             foreach (self::DAYS as $day) {
                 $values[$day] = isset($workDays[$day]);
             }
@@ -83,7 +83,7 @@ final class CalendarController extends Controller
         return $request->validate([
             'commandId' => ['required', 'string', 'max:64'], 'expectedVersion' => ['required', 'integer', 'min:1'],
             'workingDays' => ['required', 'array', 'min:1'], 'workingDays.*' => ['string', 'in:'.implode(',', self::DAYS)],
-            'reschedulingMode' => ['required', 'in:MANUAL,AUTOMATIC'], 'deadlinePolicy' => ['required', 'in:ANTERIOR,POSTERIOR'], 'allowUnscheduledTasks' => ['required', 'boolean'],
+            'reschedulingMode' => ['required', 'in:MANUAL,AUTOMATIC'], 'projectionPolicy' => ['required', 'in:PRESERVE_DURATION,PRESERVE_DEADLINE'], 'deadlinePolicy' => ['required', 'in:ANTERIOR,POSTERIOR'], 'allowUnscheduledTasks' => ['required', 'boolean'],
             'exceptions' => ['present', 'array'], 'exceptions.*.date' => ['required', 'date_format:Y-m-d'], 'exceptions.*.type' => ['required', 'in:NON_WORKING,WORKING'], 'exceptions.*.description' => ['nullable', 'string', 'max:255'], 'confirmed' => ['sometimes', 'boolean'],
         ]);
     }
@@ -106,6 +106,6 @@ final class CalendarController extends Controller
         $settings = DB::table('project_settings')->where('gantt_project_id', $projectId)->first();
         abort_unless($settings, 409, 'Configuração do projeto indisponível.');
 
-        return ['version' => $settings->version, 'workingDays' => array_values(array_filter(self::DAYS, fn (string $day): bool => (bool) $settings->{$day})), 'reschedulingMode' => $settings->rescheduling_mode, 'deadlinePolicy' => $settings->non_working_deadline_policy, 'allowUnscheduledTasks' => (bool) $settings->allow_unscheduled_tasks, 'exceptions' => DB::table('calendar_exceptions')->where('gantt_project_id', $projectId)->orderBy('date')->get()->map(fn (object $exception): array => ['date' => $exception->date, 'type' => $exception->type, 'description' => $exception->description])->all()];
+        return ['version' => $settings->version, 'workingDays' => array_values(array_filter(self::DAYS, fn (string $day): bool => (bool) $settings->{$day})), 'reschedulingMode' => $settings->rescheduling_mode, 'projectionPolicy' => $settings->projection_policy, 'deadlinePolicy' => $settings->non_working_deadline_policy, 'allowUnscheduledTasks' => (bool) $settings->allow_unscheduled_tasks, 'exceptions' => DB::table('calendar_exceptions')->where('gantt_project_id', $projectId)->orderBy('date')->get()->map(fn (object $exception): array => ['date' => $exception->date, 'type' => $exception->type, 'description' => $exception->description])->all()];
     }
 }

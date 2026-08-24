@@ -2,12 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Exceptions\DependencySnapshotUnavailable;
 use App\Http\Controllers\Controller;
 use App\Services\AuditWriter;
 use App\Services\DependencyScopeValidator;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class DependencyController extends Controller
@@ -22,23 +24,44 @@ final class DependencyController extends Controller
 
     public function store(Request $request, DependencyScopeValidator $scopeValidator, AuditWriter $audit): JsonResponse
     {
+        $startedAt = hrtime(true);
         $data = $request->validate(['from' => ['required', 'string', 'max:255'], 'to' => ['required', 'string', 'max:255', 'different:from'], 'type' => ['required', 'in:FS,SS,FF,SF'], 'commandId' => ['required', 'string', 'max:64']]);
         $project = $this->project($request);
-        abort_if(DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('predecessor_todoist_task_id', $data['from'])->where('successor_todoist_task_id', $data['to'])->where('type', $data['type'])->where('status', 'active')->exists(), 422, 'Essa dependência já existe.');
-        $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
-        abort_unless($integration, 409, 'Conecte uma integração Todoist ativa antes de criar dependências.');
+        Log::debug('dependency.create.started', $this->logContext($project->id, $data));
+        $dependencyByKey = fn () => DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('predecessor_todoist_task_id', $data['from'])->where('successor_todoist_task_id', $data['to'])->where('type', $data['type']);
+        abort_if($dependencyByKey()->where('status', 'active')->exists(), 422, 'Essa dependência já existe.');
         try {
-            $scopeValidator->validate($project, $integration, $data['from'], $data['to']);
+            $scopeSource = $scopeValidator->validate($project, $data['from'], $data['to']);
+            Log::debug('dependency.create.scope_validated', [...$this->logContext($project->id, $data), 'scope_source' => $scopeSource, 'elapsed_ms' => $this->elapsedMs($startedAt)]);
+        } catch (DependencySnapshotUnavailable $exception) {
+            Log::notice('dependency.create.snapshot_unavailable', [...$this->logContext($project->id, $data), 'elapsed_ms' => $this->elapsedMs($startedAt)]);
+            abort(409, $exception->getMessage());
         } catch (\InvalidArgumentException $exception) {
+            Log::debug('dependency.create.scope_rejected', [...$this->logContext($project->id, $data), 'reason' => $exception->getMessage(), 'elapsed_ms' => $this->elapsedMs($startedAt)]);
             abort(422, $exception->getMessage());
         } catch (\Throwable $exception) {
             report($exception);
-            abort(503, 'Não foi possível validar as tarefas no Todoist. Tente novamente.');
+            Log::error('dependency.create.failed', [...$this->logContext($project->id, $data), 'stage' => 'scope_validation', 'exception' => $exception::class, 'elapsed_ms' => $this->elapsedMs($startedAt)]);
+            abort(500, 'Não foi possível validar as tarefas do workspace. Tente novamente.');
         }
         abort_if($this->wouldCycle($project->id, $data['from'], $data['to']), 422, 'Essa dependência criaria um ciclo no grafo.');
-        $id = (string) Str::ulid();
-        DB::table('task_dependencies')->insert(['id' => $id, 'gantt_project_id' => $project->id, 'predecessor_todoist_task_id' => $data['from'], 'successor_todoist_task_id' => $data['to'], 'type' => $data['type'], 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $id = DB::transaction(function () use ($dependencyByKey, $project, $data): string {
+            $existing = $dependencyByKey()->lockForUpdate()->first();
+            abort_if($existing?->status === 'active', 422, 'Essa dependência já existe.');
+
+            if ($existing) {
+                $dependencyByKey()->update(['status' => 'active', 'updated_at' => now()]);
+
+                return (string) $existing->id;
+            }
+
+            $id = (string) Str::ulid();
+            DB::table('task_dependencies')->insert(['id' => $id, 'gantt_project_id' => $project->id, 'predecessor_todoist_task_id' => $data['from'], 'successor_todoist_task_id' => $data['to'], 'type' => $data['type'], 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+
+            return $id;
+        }, 3);
         $audit->record($request->user()->id, $project->id, 'dependency.created', 'user', 'task_dependency', $id, $data['commandId'], null, ['from' => $data['from'], 'to' => $data['to'], 'type' => $data['type']]);
+        Log::debug('dependency.create.persisted', [...$this->logContext($project->id, $data), 'dependency_id' => $id, 'elapsed_ms' => $this->elapsedMs($startedAt)]);
 
         return response()->json(['data' => ['id' => $id, 'from' => $data['from'], 'to' => $data['to'], 'type' => $data['type']]], 201);
     }
@@ -83,5 +106,22 @@ final class DependencyController extends Controller
         }
 
         return false;
+    }
+
+    /** @param array{from: string, to: string, type: string, commandId: string} $data */
+    private function logContext(string $projectId, array $data): array
+    {
+        return [
+            'project_id' => $projectId,
+            'command_id' => $data['commandId'],
+            'from_hash' => substr(hash('sha256', $data['from']), 0, 12),
+            'to_hash' => substr(hash('sha256', $data['to']), 0, 12),
+            'type' => $data['type'],
+        ];
+    }
+
+    private function elapsedMs(int $startedAt): int
+    {
+        return (int) round((hrtime(true) - $startedAt) / 1_000_000);
     }
 }

@@ -23,11 +23,12 @@ final class WebhookController extends Controller
             abort(422, 'Payload de webhook invÃ¡lido.');
         }
         abort_unless(is_array($payload), 422, 'Payload de webhook invÃ¡lido.');
+        $payload['delivery_id'] = $request->header('X-Todoist-Delivery-ID');
         $eventId = $sync->markEvent($payload, true);
-        if ($eventId !== null && config('queue.default') !== 'sync') {
+        if ($eventId !== null) {
             ProcessTodoistEvent::dispatch($eventId)->onQueue('sync');
         }
 
-        return response()->json(['accepted' => true], 202);
+        return response()->json(['accepted' => true]);
     }
 }

@@ -5,12 +5,13 @@ declare(strict_types=1);
 namespace App\Services;
 
 use App\Contracts\TodoistGateway;
+use App\Support\TodoistTask;
 use Illuminate\Http\Client\RequestException;
 use Illuminate\Support\Facades\DB;
 
 final readonly class RecalculationProcessor
 {
-    public function __construct(private TodoistGateway $gateway, private AuditWriter $audit) {}
+    public function __construct(private TodoistGateway $gateway, private AuditWriter $audit, private TodoistAccessTokenService $tokens) {}
 
     /** @return 'completed'|'retry'|'failed' */
     public function process(string $recalculationId): string
@@ -27,7 +28,7 @@ final readonly class RecalculationProcessor
             return 'failed';
         }
         try {
-            $remoteSnapshot = $this->gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+            $remoteSnapshot = $this->gateway->projectSnapshot($this->tokens->accessToken($integration), $project->todoist_project_id);
             $remoteTasks = $remoteSnapshot['tasks']['results'] ?? $remoteSnapshot['tasks'] ?? [];
             $remoteById = [];
             foreach ($remoteTasks as $remoteTask) {
@@ -43,8 +44,8 @@ final readonly class RecalculationProcessor
         foreach (DB::table('recalculation_items')->where('recalculation_id', $recalculationId)->whereIn('state', ['pending', 'pending_retry'])->orderBy('sequence')->get() as $item) {
             $before = json_decode($item->before_state, true, flags: JSON_THROW_ON_ERROR);
             $remoteTask = $remoteById[$item->todoist_task_id] ?? null;
-            $remoteStart = $remoteTask['due']['date'] ?? null;
-            $remoteFinish = $remoteTask['deadline_date'] ?? $remoteStart;
+            $remoteStart = $remoteTask ? TodoistTask::start($remoteTask) : null;
+            $remoteFinish = $remoteTask ? TodoistTask::finish($remoteTask) : null;
             if ($remoteTask === null || $remoteStart !== ($before['start'] ?? null) || $remoteFinish !== ($before['finish'] ?? null)) {
                 DB::table('recalculation_items')->where('id', $item->id)->update(['state' => 'stale', 'error' => 'snapshot_changed', 'updated_at' => now()]);
                 $this->finish($recalculation, 'conflict', 'snapshot_changed');
@@ -54,7 +55,7 @@ final readonly class RecalculationProcessor
             DB::table('recalculation_items')->where('id', $item->id)->update(['state' => 'applying', 'attempts' => $item->attempts + 1, 'updated_at' => now()]);
             try {
                 $after = json_decode($item->after_state, true, flags: JSON_THROW_ON_ERROR);
-                $this->gateway->updateTaskDates(decrypt($integration->access_token_encrypted), $item->todoist_task_id, $after['start'], $after['finish']);
+                $this->gateway->updateTaskDates($this->tokens->accessToken($integration), $item->todoist_task_id, $after['start'], $after['finish']);
                 DB::table('recalculation_items')->where('id', $item->id)->update(['state' => 'applied', 'error' => null, 'updated_at' => now()]);
             } catch (\Throwable $exception) {
                 $temporary = ! $exception instanceof RequestException || $exception->response?->status() === 429 || $exception->response?->serverError();

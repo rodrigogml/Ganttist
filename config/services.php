@@ -7,6 +7,7 @@ return [
         'demo_mode' => env('GANTTIST_DEMO_MODE', false),
         'client_id' => env('TODOIST_CLIENT_ID'),
         'client_secret' => env('TODOIST_CLIENT_SECRET'),
+        'oauth_token_url' => env('TODOIST_OAUTH_TOKEN_URL', 'https://api.todoist.com/oauth/access_token'),
         'webhook_secret' => env('TODOIST_WEBHOOK_SECRET'),
         'test_token' => env('TODOIST_TEST_TOKEN'),
         'api_url' => env('TODOIST_API_URL', 'https://api.todoist.com/api/v1'),

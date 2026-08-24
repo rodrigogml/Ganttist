@@ -12,11 +12,11 @@ final class EventStreamController extends Controller
     public function __invoke(Request $request, WorkspaceEventFeed $feed)
     {
         $userId = $request->user()->id;
+        $lastEventId = $this->cursor($request, $userId);
 
-        return response()->stream(function () use ($userId, $feed): void {
+        return response()->stream(function () use ($userId, $feed, $lastEventId): void {
             set_time_limit(0);
-            $lastEventId = $this->cursor($request, $userId);
-            for ($attempt = 0; $attempt < 24; $attempt++) {
+            for ($attempt = 0; $attempt < 60; $attempt++) {
                 $events = $feed->after($userId, $lastEventId);
                 if ($events->isNotEmpty()) {
                     foreach ($events as $event) {
@@ -30,7 +30,7 @@ final class EventStreamController extends Controller
                     @ob_flush();
                 }
                 flush();
-                sleep(5);
+                usleep(1000000);
             }
         }, 200, ['Content-Type' => 'text/event-stream', 'Cache-Control' => 'no-cache', 'X-Accel-Buffering' => 'no']);
     }

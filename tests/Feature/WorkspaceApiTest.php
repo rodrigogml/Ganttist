@@ -3,8 +3,10 @@
 namespace Tests\Feature;
 
 use App\Contracts\TodoistGateway;
+use App\Infrastructure\Todoist\FakeTodoistGateway;
 use App\Models\User;
 use App\Services\RecalculationProcessor;
+use App\Services\TodoistSnapshotStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -33,8 +35,9 @@ final class WorkspaceApiTest extends TestCase
             ->assertOk()->assertJsonPath('data.changes.0.start', '2026-08-20');
     }
 
-    public function test_real_workspace_derives_parent_group_from_todoist_snapshot(): void
+    public function test_real_workspace_keeps_parent_task_distinct_from_todoist_section(): void
     {
+        $this->travelTo('2026-08-17 09:00:00');
         config()->set('services.todoist.demo_mode', false);
         config()->set('services.todoist.driver', 'fake');
         $user = User::factory()->create();
@@ -47,19 +50,114 @@ final class WorkspaceApiTest extends TestCase
         DB::table('task_dependencies')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'predecessor_todoist_task_id' => 'fake-group', 'successor_todoist_task_id' => 'fake-task-2', 'type' => 'FS', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
 
         $response = $this->actingAs($user)->getJson('/api/v1/workspace')->assertOk();
-        $group = collect($response->json('data.tasks'))->firstWhere('id', 'fake-group');
-        self::assertSame('group', $group['kind']);
-        self::assertSame('2026-08-17', $group['start']);
-        self::assertSame('2026-08-18', $group['finish']);
-        self::assertTrue($group['derived']);
-        self::assertTrue($group['contains_critical']);
+        $parentTask = collect($response->json('data.tasks'))->firstWhere('id', 'fake-group');
+        $leafTask = collect($response->json('data.tasks'))->firstWhere('id', 'fake-task-1');
+        $section = collect($response->json('data.tasks'))->firstWhere('id', 'section:fake-section');
+        self::assertSame('task', $parentTask['kind']);
+        self::assertTrue($parentTask['has_children']);
+        self::assertSame('Descrição de agrupador que não deve aparecer na árvore.', $parentTask['description']);
+        self::assertSame(1, $parentTask['priority']);
+        self::assertNull($parentTask['start']);
+        self::assertNull($parentTask['finish']);
+        self::assertSame('2026-08-17', $parentTask['considered_start']);
+        self::assertSame('2026-08-18', $parentTask['considered_deadline']);
+        self::assertTrue($parentTask['derived']);
+        self::assertTrue($parentTask['contains_critical']);
+        self::assertSame('section', $section['kind']);
+        self::assertTrue($section['has_children']);
+        self::assertSame('Conferir o escopo acordado com o cliente.', $leafTask['description']);
+        self::assertSame(2, $leafTask['comment_count']);
+        self::assertSame(2, $leafTask['priority']);
         self::assertSame(2, $response->json('data.stats.critical'));
         self::assertTrue($response->json('data.dependencies.0.critical'));
         self::assertTrue($response->json('data.tasks.2.planned'));
         self::assertSame('synced', $response->json('data.tasks.2.sync_status'));
         self::assertTrue(collect($response->json('data.tasks'))->firstWhere('id', 'fake-task-1')['calendar_inconsistent']);
         self::assertSame('MANUAL', $response->json('data.calendar.rescheduling_mode'));
+        self::assertSame('PRESERVE_DURATION', $response->json('data.calendar.projection_policy'));
         self::assertSame(1, $response->json('meta.version'));
+    }
+
+    public function test_workspace_reuses_the_snapshot_just_reconciled_by_an_event(): void
+    {
+        config()->set('services.todoist.demo_mode', false);
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Teste', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, (new FakeTodoistGateway)->projectSnapshot('fake', 'fake-project'));
+        app()->instance(TodoistGateway::class, new class implements TodoistGateway
+        {
+            public function projects(string $accessToken): array
+            {
+                return [];
+            }
+
+            public function projectSnapshot(string $accessToken, string $projectId): array
+            {
+                throw new \LogicException('Não deve buscar novamente no Todoist.');
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
+            {
+                return [];
+            }
+
+            public function updateTask(string $accessToken, string $taskId, array $attributes): array
+            {
+                return [];
+            }
+
+            public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void {}
+
+            public function createTask(string $accessToken, array $attributes): array
+            {
+                return [];
+            }
+
+            public function deleteTask(string $accessToken, string $taskId): void {}
+        });
+
+        $this->actingAs($user)->getJson('/api/v1/workspace')->assertOk()->assertJsonPath('data.tasks.1.id', 'fake-group');
+    }
+
+    public function test_workspace_keeps_completed_history_when_its_original_section_is_unavailable(): void
+    {
+        config()->set('services.todoist.demo_mode', false);
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Histórico', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, [
+            'sections' => ['results' => []],
+            'collaborators' => ['results' => []],
+            'tasks' => ['results' => [
+                ['id' => 'historical-parent', 'content' => 'Marco concluído', 'section_id' => 'archived-section', 'is_completed' => true, 'completed_at' => '2026-07-10T12:00:00Z'],
+                ['id' => 'historical-child', 'content' => 'Evidência concluída', 'section_id' => 'archived-section', 'parent_id' => 'historical-parent', 'is_completed' => true, 'completed_at' => '2026-07-09T12:00:00Z'],
+            ]],
+        ]);
+
+        $tasks = collect($this->actingAs($user)->getJson('/api/v1/workspace')->assertOk()->json('data.tasks'));
+
+        self::assertSame('completed', $tasks->firstWhere('id', 'historical-parent')['status']);
+        self::assertSame(0, $tasks->firstWhere('id', 'historical-parent')['level']);
+        self::assertSame('historical-parent', $tasks->firstWhere('id', 'historical-child')['parent_id']);
+        self::assertSame(1, $tasks->firstWhere('id', 'historical-child')['level']);
     }
 
     public function test_schedule_apply_persists_an_idempotent_operation_without_calling_todoist(): void
@@ -112,6 +210,21 @@ final class WorkspaceApiTest extends TestCase
             public function projectSnapshot(string $accessToken, string $projectId): array
             {
                 return ['tasks' => ['results' => [['id' => 'task-a', 'due' => null, 'deadline_date' => null], ['id' => 'task-b', 'due' => null, 'deadline_date' => null]]]];
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
             }
 
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
@@ -171,6 +284,21 @@ final class WorkspaceApiTest extends TestCase
             public function projectSnapshot(string $accessToken, string $projectId): array
             {
                 return ['tasks' => ['results' => [['id' => 'task-a', 'due' => ['date' => '2026-08-18'], 'deadline_date' => '2026-08-18']]]];
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
             }
 
             public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array

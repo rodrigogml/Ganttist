@@ -8,28 +8,31 @@ use App\Contracts\TodoistGateway;
 use App\Domain\Scheduling\Dependency;
 use App\Domain\Scheduling\TaskPlan;
 use App\Domain\Scheduling\WorkCalendar;
+use App\Support\TodoistTask;
 use DateTimeImmutable;
 use Illuminate\Support\Facades\DB;
 
 final readonly class AuthorizedPlanningSnapshot
 {
-    public function __construct(private TodoistGateway $gateway, private ProjectCalendarService $calendars) {}
+    public function __construct(private TodoistGateway $gateway, private ProjectCalendarService $calendars, private TodoistAccessTokenService $tokens) {}
 
     /** @return array{tasks: array<string, TaskPlan>, dependencies: list<Dependency>, calendar: WorkCalendar} */
     public function load(object $project, object $integration): array
     {
         $calendar = $this->calendars->forProject($project->id);
-        $snapshot = $this->gateway->projectSnapshot(decrypt($integration->access_token_encrypted), $project->todoist_project_id);
+        $snapshot = $this->gateway->projectSnapshot($this->tokens->accessToken($integration), $project->todoist_project_id);
         $sourceTasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
         $knownIds = array_fill_keys(array_map(fn (array $task): string => (string) $task['id'], $sourceTasks), true);
         $completionOverrides = DB::table('task_metadata')->where('gantt_project_id', $project->id)->whereNotNull('completion_date_override')->pluck('completion_date_override', 'todoist_task_id')->all();
         $tasks = [];
         foreach ($sourceTasks as $task) {
             $id = (string) $task['id'];
-            $start = isset($task['due']['date']) ? new DateTimeImmutable($task['due']['date']) : null;
-            $deadline = isset($task['deadline_date']) ? new DateTimeImmutable($task['deadline_date']) : null;
+            $startDate = TodoistTask::start($task);
+            $finishDate = TodoistTask::finish($task);
+            $start = $startDate ? new DateTimeImmutable($startDate) : null;
+            $deadline = $finishDate ? new DateTimeImmutable($finishDate) : null;
             $parentId = isset($task['parent_id']) && isset($knownIds[(string) $task['parent_id']]) ? (string) $task['parent_id'] : null;
-            $tasks[$id] = TaskPlan::fromDates($id, (string) $task['content'], $start, $deadline, $calendar, (bool) ($task['is_completed'] ?? false), isset($completionOverrides[$id]) ? new DateTimeImmutable($completionOverrides[$id]) : null, $parentId);
+            $tasks[$id] = TaskPlan::fromDates($id, (string) $task['content'], $start, $deadline, $calendar, TodoistTask::completed($task), isset($completionOverrides[$id]) ? new DateTimeImmutable($completionOverrides[$id]) : null, $parentId);
         }
         $dependencies = [];
         foreach (DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('status', 'active')->get() as $dependency) {

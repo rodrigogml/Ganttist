@@ -16,7 +16,7 @@
 | `APP_KEY` | criptografia de tokens e sessões | segredo gerado por ambiente |
 | `DB_*` | MySQL de produção | infraestrutura |
 | `TODOIST_CLIENT_ID` / `TODOIST_CLIENT_SECRET` | OAuth Todoist | aplicativo Todoist de produção |
-| `TODOIST_WEBHOOK_SECRET` | validação HMAC | configuração do webhook Todoist |
+| `TODOIST_WEBHOOK_SECRET` | validação HMAC; deve corresponder ao Client Secret usado pelo Todoist | aplicativo Todoist de produção |
 | `MAIL_*` | envio passwordless | provedor SMTP transacional |
 | `APP_URL` | callback OAuth e cookies | URL HTTPS pública |
 
@@ -26,7 +26,7 @@
 2. Configurar segredos e `APP_DEBUG=false`; executar `php artisan migrate --force`.
 3. Publicar assets gerados por `npm run build`, executar `php artisan route:cache` e habilitar HTTPS/cookies seguros.
    Execute `php artisan app:production-readiness` antes de promover a instância.
-4. Configurar callback OAuth e webhook HTTPS no Todoist; validar HMAC e reconciliação com conta de homologação.
+4. Configurar callback OAuth e o webhook `${APP_URL}/api/v1/webhooks/todoist` no Todoist, assinando os eventos de item/projeto/seção necessários. O endpoint deve ser público e responder HTTP 200; validar HMAC, `X-Todoist-Delivery-ID`, enfileiramento e reconciliação com conta de homologação.
 5. Configurar SMTP e executar login passwordless com caixa de teste.
 6. Registrar benchmark 2k/5k, SSE multiaba e exploração visual no aceite de release.
 

@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\Api\AuditController;
+use App\Http\Controllers\Api\AutomationSettingsController;
 use App\Http\Controllers\Api\CalendarController;
 use App\Http\Controllers\Api\DependencyController;
 use App\Http\Controllers\Api\EventStreamController;
@@ -28,6 +29,7 @@ Route::prefix('v1')->group(function () {
             Route::get('/events', EventStreamController::class);
             Route::get('/audit-events', [AuditController::class, 'index']);
             Route::get('/todoist/status', [TodoistController::class, 'status']);
+            Route::post('/todoist/sync', [TodoistController::class, 'sync'])->middleware('throttle:6,1');
             Route::get('/todoist/projects', [TodoistController::class, 'projects']);
             Route::post('/todoist/project', [TodoistController::class, 'selectProject']);
             Route::delete('/todoist/integration', [TodoistController::class, 'disconnect']);
@@ -36,11 +38,17 @@ Route::prefix('v1')->group(function () {
             Route::delete('/tasks/{taskId}', [TaskController::class, 'destroy']);
             Route::put('/tasks/{taskId}/dates', [TaskController::class, 'updateDates']);
             Route::put('/tasks/{taskId}/completion-date', [TaskController::class, 'updateCompletionDate']);
+            Route::patch('/tasks/{taskId}/completion', [TaskController::class, 'setCompletion']);
             Route::put('/tasks/{taskId}', [TaskController::class, 'update']);
+            Route::get('/tasks/{taskId}/editor-context', [TaskController::class, 'editorContext']);
+            Route::post('/tasks/{taskId}/comments', [TaskController::class, 'createComment']);
+            Route::put('/tasks/{taskId}/comments/{commentId}', [TaskController::class, 'updateComment']);
             Route::get('/workspace', [WorkspaceController::class, 'show'])->middleware('throttle:120,1');
             Route::get('/calendar', [CalendarController::class, 'show']);
             Route::post('/calendar/simulate', [CalendarController::class, 'simulate'])->middleware('throttle:30,1');
             Route::put('/calendar', [CalendarController::class, 'update'])->middleware('throttle:20,1');
+            Route::get('/settings/automation', [AutomationSettingsController::class, 'show']);
+            Route::put('/settings/automation', [AutomationSettingsController::class, 'update'])->middleware('throttle:20,1');
             Route::post('/schedule/simulate', ScheduleSimulationController::class)->middleware('throttle:30,1');
             Route::post('/schedule/apply', ScheduleApplyController::class)->middleware('throttle:10,1');
             Route::get('/schedule/operations/{operationId}', [ScheduleOperationController::class, 'show']);

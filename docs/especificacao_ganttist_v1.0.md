@@ -109,6 +109,8 @@ As tarefas que possuírem filhos poderão funcionar visualmente como agrupadores
 
 As tarefas-folha representam as atividades efetivamente executáveis no gráfico.
 
+As datas de uma tarefa-pai serão sempre calculadas a partir das tarefas descendentes apenas para planejamento e desenho no Gantt. O Ganttist jamais preencherá ou atualizará automaticamente a data ou o deadline dessa tarefa no Todoist. Mediante autorização opcional do usuário, poderá somente limpar ambos os campos de tarefas que possuam filhos.
+
 O sistema deverá apresentar controles para expandir ou recolher os níveis da hierarquia.
 
 ---
@@ -169,7 +171,7 @@ Elas deverão:
 - permanecer exatamente em sua posição correta dentro da hierarquia original de seção, tarefa e subtarefa;
 - aparecer normalmente na árvore/tabela à esquerda;
 - possuir diferenciação visual clara indicando que ainda não estão planejadas;
-- não possuir barra temporal no gráfico de Gantt enquanto não tiverem uma data inicial;
+- possuir um timeblock provisório de um dia na faixa de hoje enquanto não tiverem uma data inicial, sem persistir essa referência até uma ação explícita do usuário;
 - não ser movidas para uma seção artificial de "Não planejadas";
 - continuar visíveis mesmo quando não puderem participar do posicionamento temporal do gráfico.
 
@@ -257,7 +259,8 @@ Se uma tarefa não possuir data inicial e também não possuir predecessoras cap
 
 - ela será considerada visualmente não programada;
 - continuará aparecendo normalmente na hierarquia à esquerda;
-- não possuirá time block persistido enquanto continuar sem data no Todoist;
+- possuirá um time block visual provisório de um dia na faixa de hoje, distinguível de uma data persistida;
+- esse posicionamento não será gravado no Todoist enquanto o usuário não concluir um drag ou edição de data;
 - para fins de cálculo, utilizará a data virtual definida posteriormente neste documento, baseada em `OperationalToday`.
 
 #### 5.9.3 Tarefa sem data inicial e com predecessoras
@@ -357,7 +360,8 @@ Uma tarefa sem data inicial continuará sendo considerada visualmente **não pro
 
 - permanecerá em sua posição hierárquica;
 - receberá destaque visual de tarefa não programada;
-- não terá um time block persistido como tarefa planejada enquanto continuar sem data no Todoist.
+- terá um time block provisório de um dia exibido na faixa de hoje;
+- esse time block representa uma referência visual e não uma data persistida enquanto não houver drop ou confirmação equivalente.
 
 Entretanto, para fins de cálculo, o sistema deverá atribuir a ela uma **data virtual igual à data atual** quando nenhuma outra restrição determinar uma data posterior.
 
@@ -373,6 +377,20 @@ Exemplo:
 Se a tarefa sem data possuir predecessoras, sua data virtual deverá ser calculada respeitando essas precedências. A data efetiva calculada será a mais tardia entre a referência de hoje e as restrições impostas pelas predecessoras.
 
 A interface deverá permitir indicar visualmente a referência temporal calculada para hoje sem confundi-la com uma tarefa efetivamente programada no Todoist.
+
+#### 5.12.5.1 Drag direto de timeblocks
+
+O drag horizontal de uma tarefa folha será uma edição direta de sua data inicial no Todoist:
+
+- durante o movimento, somente um ghost sem texto será deslocado dentro da linha original;
+- o encaixe ocorrerá exclusivamente em colunas de dias civis inteiros;
+- `Esc` cancelará o gesto sem persistência;
+- no drop, a nova data inicial será gravada imediatamente;
+- quando existir `deadline`, ele receberá o mesmo deslocamento em dias civis, preservando a duração;
+- quando não existir `deadline`, ele continuará ausente;
+- falha de persistência restaurará integralmente a posição anterior.
+
+Timeblocks planejados terão largura igual a um número inteiro de colunas, cobrindo da data inicial ao `deadline` inclusive. Sem `deadline`, terão exatamente uma coluna. Nenhum texto será exibido dentro do timeblock no MVP atual.
 
 #### 5.12.6 Opção para eliminar tarefas sem data
 
@@ -1339,7 +1357,7 @@ Exibição numérica avançada de slack poderá ser avaliada futuramente.
 
 Durante drag contínuo não será necessário executar o cálculo completo a cada pixel.
 
-A interface poderá apresentar preview local e executar o cálculo consistente no drop.
+A interface apresentará um ghost local encaixado em dias inteiros e executará a persistência consistente no drop. Para o deslocamento direto de uma única tarefa, a escrita será imediata no Todoist; operações compostas e cascatas continuarão usando o fluxo de simulação quando aplicável.
 
 A implementação deverá priorizar correção matemática antes de otimizações prematuras.
 
@@ -4556,9 +4574,9 @@ No modo automático, o core deverá corrigir a inconsistência conforme as regra
 
 ### 19A.17 Exceção para datas de grupos
 
-Datas de tarefas-pai são derivadas pelo core.
+Datas de tarefas-pai são derivadas pelo core somente para cálculo e exibição no Gantt.
 
-Se forem alteradas diretamente no Todoist, o core deverá recalculá-las e restaurar os valores derivados corretos.
+O core nunca deverá gravar no Todoist os valores derivados. Sem autorização de limpeza, datas alteradas diretamente no Todoist permanecem intactas na origem e são ignoradas na projeção do agrupador. Com a autorização habilitada, o core deverá apenas remover a data e o deadline da tarefa-pai.
 
 ### 19A.18 Abertura de projeto
 

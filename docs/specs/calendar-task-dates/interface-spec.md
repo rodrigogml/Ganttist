@@ -36,7 +36,7 @@
 **Purpose**: permitir definir semana Ãºtil, exceÃ§Ãµes e polÃ­tica temporal do Gantt antes de confirmar impactos.
 **Actors and Permissions**: dono do Gantt.
 **Entry and Navigation**: configuraÃ§Ãµes do projeto; retorno preserva workspace.
-**Content and Data**: dias da semana, exceÃ§Ãµes por data/descriÃ§Ã£o, timezone de planejamento, polÃ­tica de deadline, modo manual/automÃ¡tico e opÃ§Ã£o sobre tarefas sem data.
+**Content and Data**: dias da semana, exceÃ§Ãµes por data/descriÃ§Ã£o, timezone de planejamento, polÃ­tica de deadline em dia não útil, modo manual/automÃ¡tico, política de projeção por desbloqueio e opÃ§Ã£o sobre tarefas sem data.
 **Actions and Behavior**: adicionar/remover exceÃ§Ã£o; salvar; solicitar simulaÃ§Ã£o quando houver impacto; confirmar ou cancelar aplicaÃ§Ã£o.
 **Validation and Feedback**: ao menos um dia Ãºtil; data vÃ¡lida; conflito de exceÃ§Ã£o explicado; modo manual nunca persiste impacto sem confirmaÃ§Ã£o.
 **Responsive/Adaptive Behavior**: grade semanal vira lista no telefone; exceÃ§Ãµes em painel/pÃ¡gina dedicada; nÃ£o exige arraste.
@@ -72,14 +72,14 @@
 **Purpose**: explicar e editar inÃ­cio/fim/duraÃ§Ã£o vÃ¡lidos sem confundir dado Todoist, valor derivado e referÃªncia virtual.
 **Actors and Permissions**: dono do Gantt.
 **Entry and Navigation**: painel de tarefa e seleÃ§Ã£o de barra; retorno ao workspace.
-**Content and Data**: inÃ­cio, deadline, duraÃ§Ã£o Ãºtil, estado, calendÃ¡rio aplicÃ¡vel e aviso de nÃ£o planejada/virtual/inconsistÃªncia.
-**Actions and Behavior**: definir/remover data, mover/redimensionar quando permitido e abrir simulaÃ§Ã£o; grupo Ã© somente leitura.
-**Validation and Feedback**: dias bloqueados impedem/encaixam aÃ§Ã£o conforme configuraÃ§Ã£o; deadline invÃ¡lido explicado; ausÃªncia de data nÃ£o Ã© tratada como barra persistida.
+**Content and Data**: inÃ­cio e deadline explícitos, data e deadline considerados, data de desbloqueio, duraÃ§Ã£o Ãºtil, status calculado, calendÃ¡rio aplicÃ¡vel e aviso de valor virtual/inconsistÃªncia.
+**Actions and Behavior**: definir/remover data, alterar a conclusão nativa, mover quando permitido e abrir simulaÃ§Ã£o; status calculado e grupo sÃ£o somente leitura.
+**Validation and Feedback**: dias bloqueados impedem/encaixam aÃ§Ã£o conforme configuraÃ§Ã£o; deadline invÃ¡lido explicado; ausÃªncia de data usa timeblock provisÃ³rio de um dia em hoje, visualmente distinto e sem persistÃªncia atÃ© uma aÃ§Ã£o explÃ­cita.
 **Responsive/Adaptive Behavior**: painel lateral desktop, folha/modal telefone; entrada de data acessÃ­vel sem depender de drag.
 **Accessibility**: campos rotulados, mensagens associadas, equivalentes de teclado para aÃ§Ãµes de barra.
 **Localization**: datas civis em formato local, sem horÃ¡rio.
 **Components and Design System**: painel, seletor de data, badge de estado e aviso de derivaÃ§Ã£o.
-**Integration and Contracts**: intenÃ§Ã£o de ediÃ§Ã£o e projeÃ§Ã£o calculada; datas derivadas retornam identificadas.
+**Integration and Contracts**: intenÃ§Ã£o de ediÃ§Ã£o e projeÃ§Ã£o calculada; datas derivadas retornam identificadas e nunca são enviadas ao Todoist sem uma ação futura explícita.
 **Telemetry**: ediÃ§Ã£o, bloqueio por calendÃ¡rio, simulaÃ§Ã£o e confirmaÃ§Ã£o.
 **Wireframe Requirement**: N/A
 **Wireframe**: N/A â€” extensÃ£o do painel de tarefa jÃ¡ estruturado.

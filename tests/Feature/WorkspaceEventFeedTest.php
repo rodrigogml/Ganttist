@@ -40,6 +40,20 @@ final class WorkspaceEventFeedTest extends TestCase
         self::assertSame('01J00000000000000000000008', $method->invoke($controller, $request, $user->id));
     }
 
+    public function test_event_stream_captures_the_reconnect_cursor_before_opening_the_stream(): void
+    {
+        $user = User::factory()->create();
+        $request = Request::create('/api/v1/events');
+        $request->headers->set('Last-Event-ID', '01J00000000000000000000008');
+        $request->setUserResolver(fn () => $user);
+
+        $response = app(EventStreamController::class)($request, app(WorkspaceEventFeed::class));
+        $reflection = new \ReflectionFunction($response->getCallback());
+        $usedVariables = $reflection->getStaticVariables();
+
+        self::assertSame('01J00000000000000000000008', $usedVariables['lastEventId']);
+    }
+
     private function event(string $id, string $userId, string $action, string $causationId): void
     {
         DB::table('audit_events')->insert(['id' => $id, 'user_id' => $userId, 'action' => $action, 'origin' => 'worker', 'causation_id' => $causationId, 'occurred_at' => now(), 'created_at' => now(), 'updated_at' => now()]);

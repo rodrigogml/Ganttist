@@ -1,5 +1,19 @@
 # Evidência automatizada de escala
 
+## Execução no staging
+
+**Data:** 2026-08-18 11:16 BRT
+
+**URL:** `https://ganttist.rodrigogml.eng.br/benchmark`
+**Navegador:** Chromium headless (Linux, viewport padrão)
+
+| Cenário | Geração | Janela inicial | Nós no DOM | Resultado |
+|---:|---:|---:|---:|---|
+| 2.000 tarefas | 5,9 ms | 2,0 ms | 32 | aprovado |
+| 5.000 tarefas | 1,6 ms | 0,4 ms | 32 | aprovado |
+
+O benchmark foi aberto com `?size=2000` e `?size=5000` e o DOM resultante foi coletado após a execução do JavaScript. Os tempos são amostras de uma execução e não substituem a matriz de dispositivos reais.
+
 ## Cobertura local
 
 O renderer usa `virtualWindow` para limitar a janela vertical. A suíte Vitest amostra todas as posições de scroll a cada 17 linhas nos cenários de 2.000 e 5.000 tarefas e verifica que:

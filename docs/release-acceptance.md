@@ -1,6 +1,6 @@
 ﻿# Aceite do MVP â€” evidÃªncia de execuÃ§Ã£o
 
-**Data da Ãºltima execuÃ§Ã£o:** 2026-08-17
+**Data da Ãºltima execuÃ§Ã£o:** 2026-08-18
 **Escopo:** critÃ©rios de aceite da especificaÃ§Ã£o do cliente Â§Â§18N e 32.
 **Ambiente local:** PHP 8.3.7, MySQL (`granttist`), frontend Vite/Vitest.
 
@@ -23,6 +23,8 @@
 | RegressÃ£o geral | PHPUnit | 72 testes / 301 asserÃ§Ãµes aprovadas |
 | RegressÃ£o frontend | Vitest, `vue-tsc`, build Vite | 13 testes, tipos e build aprovados |
 | Escala algorÃ­tmica local | amostragem de scroll da janela virtual em 2k/5k | aprovado; hardware real pendente |
+| Benchmark no staging | Chromium headless em `/benchmark?size=2000` e `?size=5000` | aprovado; 32 nós no DOM em ambos os cenários |
+| Health/readiness/métricas no staging | `GET /api/v1/health`, `/api/v1/ready`, `/api/v1/metrics` | aprovado; HTTP 200, banco/fila disponíveis, métricas sem pendências |
 
 ## Gates que requerem ambiente externo
 
@@ -32,7 +34,7 @@
 | Webhook pÃºblico e replay | pendente | endpoint HTTPS pÃºblico, segredo e entrega real assinada |
 | E-mail passwordless | pendente | SMTP de homologaÃ§Ã£o e caixa de teste |
 | SSE em mÃºltiplas abas | pendente | duas sessÃµes autenticadas em ambiente com conexÃ£o longa |
-| Escala 2k/5k e dispositivos | pendente | navegador/dispositivo de referÃªncia e resultados registrados pelo benchmark |
+| Escala 2k/5k e dispositivos | parcial | benchmark Chromium registrado; matriz manual de dispositivos ainda pendente |
 | Workers, scheduler, alertas, backup e restauraÃ§Ã£o | pendente | infraestrutura de staging, execuÃ§Ã£o monitorada e runbook aprovado |
 | ExploraÃ§Ã£o visual/interativa | pendente | rodada manual registrada por responsÃ¡vel de produto/QA |
 

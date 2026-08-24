@@ -1,0 +1,4 @@
+SHELL=/bin/sh
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+* * * * * www-data cd /opt/Ganttist && /usr/bin/flock -n /tmp/ganttist-www-data-todoist-sync.lock /usr/bin/php artisan todoist:sync --no-interaction >> /opt/Ganttist/storage/logs/scheduler.log 2>&1

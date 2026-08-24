@@ -27,6 +27,7 @@
 | Aplicar | `operationId`, `expectedVersion` | estado de operação e itens |
 | Dependência | IDs de pontas, tipo, `commandId` | dependência validada/projeção |
 | Calendário | patch de configurações, `expectedVersion`, `commandId` | configuração versionada/operação quando houver impacto |
+| Automação | `autoScheduleBlockedTasks`, `clearParentTaskDates`, `expectedVersion`, `commandId` | configuração versionada; aplicação assíncrona auditada; pais nunca recebem datas derivadas |
 
 O backend busca tarefas, duração e dependências persistidas antes de calcular. Payload que tentar substituir esses dados é inválido.
 

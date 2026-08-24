@@ -6,11 +6,18 @@ const emit = defineEmits<{ ready: [] }>()
 const connected = ref(false), integrationStatus = ref('disconnected'), projects = ref<Project[]>([]), selected = ref(''), loading = ref(true), saving = ref(false), error = ref('')
 
 async function load() {
+  const callbackStatus = new URLSearchParams(window.location.search).get('todoist')
+  if (callbackStatus === 'authorization_failed') error.value = 'Não foi possível concluir a autorização do Todoist. Tente conectar novamente.'
+  else if (callbackStatus === 'authorization_expired') error.value = 'A autorização do Todoist expirou ou já foi utilizada. Inicie uma nova conexão.'
+  else if (callbackStatus === 'authorization_cancelled') error.value = 'A autorização do Todoist foi cancelada.'
+  if (callbackStatus) window.history.replaceState({}, document.title, window.location.pathname)
   try {
-    const status = await fetch('/api/v1/todoist/status', { headers: { Accept: 'application/json' } }).then(response => response.json())
+    const response = await fetch('/api/v1/todoist/status', { headers: { Accept: 'application/json' } })
+    if (!response.ok) throw new Error('Não foi possível carregar a configuração do Todoist.')
+    const status = await response.json()
     connected.value = status.connected; integrationStatus.value = status.integration_status
     if (connected.value && !status.project) projects.value = (await fetch('/api/v1/todoist/projects', { headers: { Accept: 'application/json' } }).then(response => response.json())).data
-    else if (status.project) emit('ready')
+    else if (connected.value && status.project) emit('ready')
   } catch { error.value = 'Não foi possível carregar a configuração do Todoist.' } finally { loading.value = false }
 }
 async function selectProject() {
