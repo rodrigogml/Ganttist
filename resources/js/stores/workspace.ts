@@ -15,12 +15,26 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const error = ref('')
   const search = ref('')
   const statusFilters = ref<TaskStatus[]>([...workspaceTaskStatuses])
+  const assigneeFilters = ref<string[]>([])
+  const periodStart = ref('')
+  const periodEnd = ref('')
   const selected = ref<string[]>([])
   const zoom = ref<'day' | 'week' | 'month'>('week')
   const hiddenGroups = ref(new Set<string>())
   const tasks = computed(() => (workspace.value?.tasks ?? []).filter(task => {
     if (search.value && !task.title.toLocaleLowerCase('pt-BR').includes(search.value.toLocaleLowerCase('pt-BR'))) return false
     if (task.kind === 'task' && !statusFilters.value.includes(task.status)) return false
+    if (task.kind === 'task' && assigneeFilters.value.length) {
+      const assignee = task.assignee_id ?? '__unassigned__'
+      if (!assigneeFilters.value.includes(assignee)) return false
+    }
+    if (task.kind === 'task' && (periodStart.value || periodEnd.value)) {
+      const today = new Date().toISOString().slice(0, 10)
+      const start = task.considered_start ?? task.start ?? today
+      const finish = task.considered_deadline ?? task.finish ?? start
+      if (periodStart.value && finish < periodStart.value) return false
+      if (periodEnd.value && start > periodEnd.value) return false
+    }
     return true
   }))
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
@@ -76,6 +90,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     hiddenGroups.value = next
     search.value = ''
     statusFilters.value = [...workspaceTaskStatuses]
+    assigneeFilters.value = []
+    periodStart.value = ''
+    periodEnd.value = ''
   }
 
   function setStatusFilters(statuses: readonly TaskStatus[]): void {
@@ -95,6 +112,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       : [...statusFilters.value, ...unblockedTaskStatuses])
   }
 
+  function toggleAssigneeFilter(assigneeId: string): void {
+    assigneeFilters.value = assigneeFilters.value.includes(assigneeId)
+      ? assigneeFilters.value.filter(current => current !== assigneeId)
+      : [...assigneeFilters.value, assigneeId]
+  }
+
   function updateTask(task: Task): void {
     if (!workspace.value) return
     workspace.value.tasks = workspace.value.tasks.map(current => current.id === task.id ? task : current)
@@ -105,5 +128,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     workspace.value.dependencies = [...workspace.value.dependencies, dependency]
   }
 
-  return { workspace, loading, refreshing, stale, error, search, statusFilters, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, updateTask, addDependency }
+  return { workspace, loading, refreshing, stale, error, search, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
 })

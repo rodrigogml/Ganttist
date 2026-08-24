@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
 import CalendarPanel from './CalendarPanel.vue'
 
-const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false, comment_count: 3 }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
+const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false, comment_count: 3, assignee_id: 'person-1', assignee: 'Pessoa' }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
 const secondWorkspace = { ...firstWorkspace, project: { ...firstWorkspace.project, id: 'p2', name: 'Projeto B' }, tasks: [{ ...firstWorkspace.tasks[0], title: 'Grupo atualizado' }, firstWorkspace.tasks[1]] }
 const selectionWorkspace = { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], id: 'parent', title: 'Tarefa pai', description: 'Descrição do agrupador não exibida', priority: 4, has_children: true }, { ...firstWorkspace.tasks[1], description: 'Descrição da tarefa folha', priority: 2, level: 2, parent_id: 'parent' }, { ...firstWorkspace.tasks[1], id: 'sibling', title: 'Outra tarefa', description: 'Descrição da tarefa P4', priority: 1 }] }
 const chainWorkspace = { ...firstWorkspace, tasks: [
@@ -179,6 +179,35 @@ describe('workspace interaction', () => {
     wrapper.unmount()
   })
 
+  it('changes Todoist priority from the four context-menu controls', async () => {
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: firstWorkspace }) }
+      if (url === '/api/v1/tasks/child' && options?.method === 'PUT') return { ok: true, json: async () => ({ data: {} }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    wrapper.get('.task-row[data-task-id="child"]').element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 180 }))
+    await wrapper.vm.$nextTick()
+    const priorityControls = document.querySelectorAll<HTMLButtonElement>('.task-context-priority')
+
+    expect(priorityControls).toHaveLength(4)
+    expect(document.querySelector('.task-context-priority[aria-label="Sem prioridade"]')?.classList).toContain('active')
+    document.querySelector<HTMLButtonElement>('.task-context-priority[aria-label="Prioridade 1"]')?.click()
+    await flushPromises()
+
+    const priorityRequest = fetch.mock.calls.find(([url, options]) => url === '/api/v1/tasks/child' && (options as RequestInit)?.method === 'PUT')
+    expect(JSON.parse(String((priorityRequest?.[1] as RequestInit).body))).toMatchObject({ title: 'Subtarefa', priority: 4 })
+    expect(document.querySelector('.task-context-menu')).toBeNull()
+    wrapper.unmount()
+  })
+
   it('combines status filters as checkboxes and closes the menu after an outside click', async () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
@@ -192,7 +221,7 @@ describe('workspace interaction', () => {
 
     const wrapper = mount(App, { global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
     await flushPromises()
-    await wrapper.findAll('.commands button').find(button => button.text().includes('Filtros'))!.trigger('click')
+    await wrapper.get('.filter-trigger').trigger('click')
 
     const popover = wrapper.get('.filter-popover')
     const group = popover.get('.filter-status-group')
@@ -208,17 +237,36 @@ describe('workspace interaction', () => {
     await parent.get('input').trigger('change')
     expect(parentInput.checked).toBe(false)
     expect(children.every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
-    expect(wrapper.get('.commands .count').text()).toBe('2')
+    expect(wrapper.get('.filter-trigger .count').text()).toBe('1')
     expect(wrapper.text()).not.toContain('Subtarefa')
 
     await children[1].trigger('change')
     expect((children[1].element as HTMLInputElement).checked).toBe(true)
     expect(parentInput.indeterminate).toBe(true)
-    expect(wrapper.get('.commands .count').text()).toBe('3')
+    expect(wrapper.get('.filter-trigger .count').text()).toBe('1')
+
+    const filterSections = popover.findAll('.filter-section')
+    expect(filterSections).toHaveLength(3)
+    expect(filterSections[1].text()).toContain('Responsável')
+    expect(filterSections[1].text()).toContain('Pessoa')
+    await filterSections[1].get('input').trigger('change')
+    expect(wrapper.get('.filter-trigger .count').text()).toBe('2')
+    const periodInputs = filterSections[2].findAll<HTMLInputElement>('input[type="date"]')
+    await periodInputs[0].setValue('2026-08-18')
+    expect(wrapper.get('.filter-trigger .count').text()).toBe('3')
 
     document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
     await wrapper.vm.$nextTick()
     expect(wrapper.find('.filter-popover').exists()).toBe(false)
+
+    await wrapper.get('.appearance-btn').trigger('click')
+    expect(wrapper.find('.appearance-menu').exists()).toBe(true)
+    await wrapper.get('.sync-pill').trigger('click')
+    expect(wrapper.find('.sync-diagnostics').exists()).toBe(true)
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.appearance-menu').exists()).toBe(false)
+    expect(wrapper.find('.sync-diagnostics').exists()).toBe(false)
     wrapper.unmount()
   })
 
@@ -305,7 +353,8 @@ describe('workspace interaction', () => {
     const provisionalLeaf = wrapper.get('[aria-label^="Sem data filha:"]')
     expect(planned.text()).toBe('')
     expect(provisional.text()).toBe('')
-    expect(provisional.classes()).toContain('provisional')
+    expect(provisional.classes()).toContain('summary')
+    expect(provisional.classes()).not.toContain('provisional')
     expect(provisional.attributes('style')).toContain('width: 42px')
     expect(provisional.attributes('style')?.match(/left: [^;]+/)?.[0]).toBe(wrapper.get('.today-line').attributes('style')?.match(/left: [^;]+/)?.[0])
     expect(provisionalLeaf.attributes('style')).toContain('width: 42px')
@@ -410,6 +459,14 @@ describe('workspace interaction', () => {
     expect(rows[0].find('.task-description').exists()).toBe(false)
     expect(rows[1].find('.task-priority-flag').exists()).toBe(false)
     expect(rows[1].find('.task-description').exists()).toBe(false)
+    expect(rows[1].get('.task-assignee').text()).toBe('')
+    expect(rows[1].get('.task-status').text()).toBe('')
+    expect(rows[1].classes()).not.toContain('calendar-inconsistent')
+    const parentBar = wrapper.get('[aria-label^="Tarefa pai:"]')
+    expect(parentBar.classes()).toContain('summary')
+    expect(parentBar.classes()).not.toContain('critical')
+    expect(parentBar.classes()).not.toContain('provisional')
+    expect(parentBar.classes()).not.toContain('calendar-inconsistent')
     expect(rows[2].get('.task-priority-flag').classes()).toContain('p3')
     expect(rows[2].get('.task-priority-flag').attributes('aria-label')).toBe('Prioridade P3')
     expect(rows[2].get('.task-terminal-slot').classes()).toContain('has-priority')
@@ -710,6 +767,38 @@ describe('workspace interaction', () => {
     await flushPromises()
     expect(wrapper.get('.drawer').classes()).not.toContain('open')
     expect(fetch).toHaveBeenCalledWith('/api/v1/tasks/child', expect.objectContaining({ method: 'PUT' }))
+    wrapper.unmount()
+  })
+
+  it('clears a task schedule directly instead of trying to simulate an undated task', async () => {
+    let datesCleared = false
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: datesCleared ? { ...firstWorkspace, tasks: [firstWorkspace.tasks[0], { ...firstWorkspace.tasks[1], start: null, finish: null, considered_start: null, considered_deadline: null }] } : firstWorkspace }) }
+      if (url === '/api/v1/tasks/child/editor-context') return { ok: true, json: async () => ({ data: { collaborators: [], comments: [] } }) }
+      if (url === '/api/v1/tasks/child' && options?.method === 'PUT') { datesCleared = true; return { ok: true, json: async () => ({ data: {} }) } }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+    vi.stubGlobal('crypto', { randomUUID: () => 'clear-date-command' })
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    await wrapper.find('.task-row[data-task-id="child"]').trigger('dblclick')
+    const dateInputs = wrapper.findAll<HTMLInputElement>('.drawer input[type="date"]')
+    await dateInputs[0].setValue('')
+    await wrapper.get('.drawer footer .primary').trigger('click')
+    await flushPromises()
+
+    const update = fetch.mock.calls.find(([url, options]) => url === '/api/v1/tasks/child' && (options as RequestInit)?.method === 'PUT')
+    expect(JSON.parse(String((update?.[1] as RequestInit).body))).toMatchObject({ dateMode: 'clear_all', commandId: 'clear-date-command' })
+    expect(fetch.mock.calls.some(([url]) => url === '/api/v1/schedule/simulate')).toBe(false)
+    expect(fetch.mock.calls.filter(([url]) => url === '/api/v1/workspace')).toHaveLength(2)
+    expect(wrapper.get('[aria-label^="Subtarefa:"]').attributes('style')?.match(/left: [^;]+/)?.[0]).toBe(wrapper.get('.today-line').attributes('style')?.match(/left: [^;]+/)?.[0])
+    expect(wrapper.get('.toast').text()).toContain('Alterações salvas no Todoist')
     wrapper.unmount()
   })
 

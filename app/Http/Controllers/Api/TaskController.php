@@ -83,7 +83,7 @@ final class TaskController extends Controller
 
     public function update(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit, TodoistSnapshotStore $snapshots): JsonResponse
     {
-        $data = $request->validate(['title' => ['required', 'string', 'max:500'], 'description' => ['sometimes', 'nullable', 'string', 'max:15000'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'assigneeId' => ['sometimes', 'nullable', 'string', 'max:255'], 'completed' => ['sometimes', 'boolean'], 'commandId' => ['required', 'string', 'max:64'], 'start' => ['prohibited'], 'finish' => ['prohibited']]);
+        $data = $request->validate(['title' => ['required', 'string', 'max:500'], 'description' => ['sometimes', 'nullable', 'string', 'max:15000'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'assigneeId' => ['sometimes', 'nullable', 'string', 'max:255'], 'completed' => ['sometimes', 'boolean'], 'dateMode' => ['sometimes', 'in:clear_all,clear_deadline'], 'commandId' => ['required', 'string', 'max:64'], 'start' => ['prohibited'], 'finish' => ['prohibited']]);
         [$project, $integration, $tasks, $snapshot] = $this->authorizedTasks($request, $gateway, true);
         $source = collect($tasks)->first(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId);
         abort_unless($source, 404, 'Tarefa não pertence ao projeto selecionado.');
@@ -101,12 +101,18 @@ final class TaskController extends Controller
         if (array_key_exists('assigneeId', $data)) {
             $attributes['assignee_id'] = $data['assigneeId'];
         }
+        if (($data['dateMode'] ?? null) === 'clear_all') {
+            $attributes['due_string'] = 'no date';
+            $attributes['deadline_date'] = null;
+        } elseif (($data['dateMode'] ?? null) === 'clear_deadline') {
+            $attributes['deadline_date'] = null;
+        }
         $task = $gateway->updateTask($this->tokens->accessToken($integration), $taskId, $attributes);
         if (array_key_exists('completed', $data)) {
             $gateway->setTaskCompletion($this->tokens->accessToken($integration), $taskId, $data['completed']);
         }
         $snapshots->forget($project->id);
-        $audit->record($request->user()->id, $project->id, 'task.updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['title' => $source['content'] ?? null, 'description' => $source['description'] ?? null, 'priority' => $source['priority'] ?? null, 'assignee_id' => $source['assignee_id'] ?? $source['responsible_uid'] ?? null, 'completed' => $source['is_completed'] ?? null], ['title' => $data['title'], 'description' => $data['description'] ?? $source['description'] ?? null, 'priority' => $data['priority'] ?? $source['priority'] ?? null, 'assignee_id' => $data['assigneeId'] ?? null, 'completed' => $data['completed'] ?? $source['is_completed'] ?? null]);
+        $audit->record($request->user()->id, $project->id, 'task.updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['title' => $source['content'] ?? null, 'description' => $source['description'] ?? null, 'priority' => $source['priority'] ?? null, 'assignee_id' => $source['assignee_id'] ?? $source['responsible_uid'] ?? null, 'completed' => $source['is_completed'] ?? null, 'date_mode' => null], ['title' => $data['title'], 'description' => $data['description'] ?? $source['description'] ?? null, 'priority' => $data['priority'] ?? $source['priority'] ?? null, 'assignee_id' => $data['assigneeId'] ?? null, 'completed' => $data['completed'] ?? $source['is_completed'] ?? null, 'date_mode' => $data['dateMode'] ?? null]);
 
         return response()->json(['data' => $task]);
     }

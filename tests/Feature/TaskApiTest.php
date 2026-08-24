@@ -77,7 +77,16 @@ final class TaskApiTest extends TestCase
             ->assertJsonPath('data.priority', 4)
             ->assertJsonPath('data.assignee_id', 'fake-user');
 
+        $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1', [
+            'title' => 'Novo título',
+            'dateMode' => 'clear_all',
+            'commandId' => 'clear-task-dates',
+        ])->assertOk()
+            ->assertJsonPath('data.due_string', 'no date')
+            ->assertJsonPath('data.deadline_date', null);
+
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.updated', 'causation_id' => 'task-update']);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.updated', 'causation_id' => 'clear-task-dates']);
     }
 
     public function test_editor_context_exposes_collaborators_and_supports_comment_creation_and_editing(): void
