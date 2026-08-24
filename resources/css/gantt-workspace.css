@@ -1295,12 +1295,8 @@ body.resizing-task-column * {
 }
 
 .filter-popover {
-  width: 190px;
-}
-
-.filter-popover > button,
-.filter-status-group button {
-  width: 100%;
+  width: 210px;
+  gap: 2px;
 }
 
 .filter-status-group {
@@ -1309,32 +1305,51 @@ body.resizing-task-column * {
 }
 
 .filter-status-parent {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-weight: 700;
 }
 
-.filter-status-parent span {
-  width: 10px;
-  color: #8b91a0;
-  text-align: center;
+.filter-status-option {
+  min-height: 32px;
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  color: #606779;
+  cursor: pointer;
 }
 
-.filter-status-parent.contains-active:not(.active) {
+.filter-status-option:hover,
+.filter-status-option:focus-within {
+  background: #f5f3ff;
   color: #5145b8;
+}
+
+.filter-status-option input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+  accent-color: #6558d0;
+}
+
+.filter-status-option:has(input:checked),
+.filter-status-option:has(input:indeterminate) {
+  color: #5145b8;
+}
+
+.filter-all {
+  margin-bottom: 3px;
+  border-bottom: 1px solid #eceef3;
+  border-radius: 6px 6px 0 0;
 }
 
 .filter-status-children {
   display: flex;
   flex-direction: column;
-  margin-left: 12px;
-  padding-left: 9px;
+  margin-left: 15px;
+  padding-left: 8px;
   border-left: 1px solid #dedafa;
-}
-
-.filter-popover .filter-status-children button {
-  padding-left: 10px;
 }
 
 .task-row.blocked .status-label {
@@ -1365,6 +1380,41 @@ body.resizing-task-column * {
 .task-row.late .status-label i,
 .legend.late {
   background: var(--coral);
+}
+
+.task-row.completed .status-label {
+  background: #4b505a;
+  color: #fff;
+}
+
+.stat-icon.completed {
+  background: #eef0f2;
+  color: #4b505a;
+}
+
+.task-row.completed .status-dot,
+.legend.completed {
+  border-color: #4b505a;
+  background: #4b505a;
+}
+
+.task-row.completed .status-label i {
+  background: #fff;
+}
+
+.task-bar.completed,
+.task-bar.completed .progress-fill,
+.task-bar.completed .group-line,
+.task-bar.completed .group-left,
+.task-bar.completed .group-right {
+  background: #4b505a;
+}
+
+.task-row.completed .task-title-line b {
+  color: #676d77;
+  text-decoration-line: line-through;
+  text-decoration-color: #4b505a;
+  text-decoration-thickness: 1.5px;
 }
 
 .projection-summary {

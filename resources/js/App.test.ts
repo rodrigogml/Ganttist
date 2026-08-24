@@ -96,7 +96,7 @@ describe('workspace interaction', () => {
     wrapper.unmount()
   })
 
-  it('groups unlocked status filters under one selectable virtual parent', async () => {
+  it('combines status filters as checkboxes and closes the menu after an outside click', async () => {
     const fetch = vi.fn(async (url: string) => {
       if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
       if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
@@ -114,23 +114,28 @@ describe('workspace interaction', () => {
     const popover = wrapper.get('.filter-popover')
     const group = popover.get('.filter-status-group')
     const parent = group.get('.filter-status-parent')
-    const children = group.findAll('.filter-status-children button')
+    const parentInput = parent.get('input').element as HTMLInputElement
+    const children = group.findAll('.filter-status-children input')
     expect(parent.text()).toContain('Desbloqueadas')
-    expect(parent.attributes('aria-pressed')).toBe('false')
-    expect(children.map(button => button.text())).toEqual(['Abertas', 'Agendadas', 'Atrasadas'])
+    expect(parentInput.checked).toBe(true)
+    expect(children.every(input => (input.element as HTMLInputElement).checked)).toBe(true)
     expect(popover.text().indexOf('Desbloqueadas')).toBeLessThan(popover.text().indexOf('Abertas'))
     expect(popover.text().indexOf('Atrasadas')).toBeLessThan(popover.text().indexOf('Bloqueadas'))
 
-    await parent.trigger('click')
-    expect(parent.classes()).toContain('active')
-    expect(parent.attributes('aria-pressed')).toBe('true')
-    expect(wrapper.get('.commands .count').text()).toBe('1')
+    await parent.get('input').trigger('change')
+    expect(parentInput.checked).toBe(false)
+    expect(children.every(input => !(input.element as HTMLInputElement).checked)).toBe(true)
+    expect(wrapper.get('.commands .count').text()).toBe('2')
+    expect(wrapper.text()).not.toContain('Subtarefa')
 
-    await children[1].trigger('click')
-    expect(children[1].classes()).toContain('active')
-    expect(children[1].attributes('aria-pressed')).toBe('true')
-    expect(parent.classes()).toContain('contains-active')
-    expect(parent.classes()).not.toContain('active')
+    await children[1].trigger('change')
+    expect((children[1].element as HTMLInputElement).checked).toBe(true)
+    expect(parentInput.indeterminate).toBe(true)
+    expect(wrapper.get('.commands .count').text()).toBe('3')
+
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.filter-popover').exists()).toBe(false)
     wrapper.unmount()
   })
 

@@ -33,6 +33,7 @@ final class WorkspaceController extends Controller
             $snapshot = $snapshots->get($project->id);
             if ($snapshot === null) {
                 $snapshot = $gateway->projectSnapshot($tokens->accessToken($integration), $project->todoist_project_id);
+                $snapshots->put($project->id, $snapshot);
                 Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id, 'source' => 'remote']);
             } else {
                 Log::debug('workspace.todoist.snapshot_loaded', ['user_id' => $request->user()->id, 'project_id' => $project->id, 'source' => 'reconciled_cache']);
@@ -133,6 +134,12 @@ final class WorkspaceController extends Controller
             $dates = array_values(array_filter(array_merge(array_column($members, 'start'), array_column($members, 'finish'))));
             $ordered[] = ['id' => $groupId, 'title' => (string) $section['name'], 'kind' => 'section', 'level' => 0, 'parent_id' => null, 'has_children' => $members !== [], 'start' => null, 'finish' => null, 'considered_start' => $dates ? min($dates) : null, 'considered_deadline' => $dates ? max($dates) : null, 'unlock_date' => null, 'completed' => false, 'planned' => $dates !== [], 'derived' => true, 'virtual_start' => null, 'sync_status' => 'synced', 'progress' => count($members) ? (int) round(count(array_filter($members, fn (array $task): bool => $task['completed'])) / count($members) * 100) : 0, 'status' => 'opened', 'critical' => false, '_member_ids' => array_column($members, 'id')];
             $ordered = [...$ordered, ...$members];
+            unset($rootsBySection[$sectionId]);
+        }
+        foreach ($rootsBySection as $historicalRoots) {
+            foreach ($historicalRoots as $rootId) {
+                $ordered = [...$ordered, ...$mapTask($rootId, 0, null)];
+            }
         }
         foreach ($unsectionedRoots as $rootId) {
             $ordered = [...$ordered, ...$mapTask($rootId, 0, null)];

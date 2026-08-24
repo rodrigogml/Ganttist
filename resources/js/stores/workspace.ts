@@ -4,9 +4,8 @@ import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
 import type { Task, TaskStatus, Workspace } from '../types'
 
-export type WorkspaceStatusFilter = 'all' | 'unblocked' | TaskStatus
-
-const unblockedStatuses = new Set<TaskStatus>(['opened', 'scheduled', 'late'])
+export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late', 'blocked', 'completed']
+export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late']
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const workspace = ref<Workspace | null>(null)
@@ -15,14 +14,13 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const stale = ref(false)
   const error = ref('')
   const search = ref('')
-  const statusFilter = ref<WorkspaceStatusFilter>('all')
+  const statusFilters = ref<TaskStatus[]>([...workspaceTaskStatuses])
   const selected = ref<string[]>([])
   const zoom = ref<'day' | 'week' | 'month'>('week')
   const hiddenGroups = ref(new Set<string>())
   const tasks = computed(() => (workspace.value?.tasks ?? []).filter(task => {
     if (search.value && !task.title.toLocaleLowerCase('pt-BR').includes(search.value.toLocaleLowerCase('pt-BR'))) return false
-    if (task.kind === 'task' && statusFilter.value === 'unblocked' && !unblockedStatuses.has(task.status)) return false
-    if (task.kind === 'task' && statusFilter.value !== 'all' && statusFilter.value !== 'unblocked' && task.status !== statusFilter.value) return false
+    if (task.kind === 'task' && !statusFilters.value.includes(task.status)) return false
     return true
   }))
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
@@ -77,7 +75,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     hiddenGroups.value = next
     search.value = ''
-    statusFilter.value = 'all'
+    statusFilters.value = [...workspaceTaskStatuses]
+  }
+
+  function setStatusFilters(statuses: readonly TaskStatus[]): void {
+    statusFilters.value = workspaceTaskStatuses.filter(status => statuses.includes(status))
+  }
+
+  function toggleStatusFilter(status: TaskStatus): void {
+    setStatusFilters(statusFilters.value.includes(status)
+      ? statusFilters.value.filter(current => current !== status)
+      : [...statusFilters.value, status])
+  }
+
+  function toggleUnblockedStatusFilters(): void {
+    const allSelected = unblockedTaskStatuses.every(status => statusFilters.value.includes(status))
+    setStatusFilters(allSelected
+      ? statusFilters.value.filter(status => !unblockedTaskStatuses.includes(status))
+      : [...statusFilters.value, ...unblockedTaskStatuses])
   }
 
   function updateTask(task: Task): void {
@@ -85,5 +100,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     workspace.value.tasks = workspace.value.tasks.map(current => current.id === task.id ? task : current)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, statusFilter, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, updateTask }
+  return { workspace, loading, refreshing, stale, error, search, statusFilters, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, updateTask }
 })

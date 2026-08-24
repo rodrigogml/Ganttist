@@ -3,6 +3,7 @@
 namespace Tests\Unit;
 
 use App\Infrastructure\Todoist\HttpTodoistGateway;
+use Carbon\CarbonImmutable;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Http;
 use Tests\TestCase;
@@ -11,23 +12,40 @@ final class HttpTodoistGatewayTest extends TestCase
 {
     public function test_project_snapshot_uses_the_expected_todoist_endpoints(): void
     {
+        CarbonImmutable::setTestNow('2026-08-24T12:00:00Z');
         Http::fake([
-            '*/projects' => Http::response(['results' => [['id' => 'p1']]]),
+            '*/tasks/completed/by_completion_date*' => Http::response(['items' => [
+                ['id' => 'done', 'content' => 'Concluída', 'checked' => false, 'completed_at' => '2026-08-20T12:00:00Z'],
+                ['id' => 't1', 'content' => 'Versão concluída antes da reabertura', 'checked' => true, 'completed_at' => '2026-08-19T12:00:00Z'],
+            ]]),
+            '*/projects/p1' => Http::response(['id' => 'p1', 'created_at' => '2026-08-01T00:00:00Z']),
             '*/sections*' => Http::response(['results' => [['id' => 's1']]]),
-            '*/tasks*' => Http::response(['results' => [['id' => 't1']]]),
+            '*/tasks*' => Http::response(['results' => [['id' => 't1', 'content' => 'Reaberta', 'is_completed' => false]]]),
             '*/collaborators*' => Http::response(['results' => [['id' => 'u1']]]),
         ]);
 
         $snapshot = (new HttpTodoistGateway)->projectSnapshot('token', 'p1');
 
-        self::assertSame('t1', $snapshot['tasks']['results'][0]['id']);
+        self::assertSame(['done', 't1'], array_column($snapshot['tasks']['results'], 'id'));
+        self::assertTrue($snapshot['tasks']['results'][0]['is_completed']);
+        self::assertFalse($snapshot['tasks']['results'][1]['is_completed']);
+        self::assertSame('Reaberta', $snapshot['tasks']['results'][1]['content']);
         self::assertSame('u1', $snapshot['collaborators']['results'][0]['id']);
-        Http::assertSentCount(3);
+        Http::assertSent(fn (Request $request): bool => str_contains($request->url(), '/tasks/completed/by_completion_date') && ($request->data()['project_id'] ?? null) === 'p1' && isset($request->data()['since'], $request->data()['until']));
+        Http::assertSentCount(5);
+        CarbonImmutable::setTestNow();
     }
 
     public function test_project_snapshot_follows_task_cursors_without_truncating_the_project(): void
     {
+        CarbonImmutable::setTestNow('2026-08-24T12:00:00Z');
         Http::fake(function (Request $request) {
+            if (str_contains($request->url(), '/tasks/completed/by_completion_date')) {
+                return Http::response(['items' => [], 'next_cursor' => null]);
+            }
+            if (str_contains($request->url(), '/projects/p1')) {
+                return Http::response(['id' => 'p1', 'created_at' => '2026-08-01T00:00:00Z']);
+            }
             if (str_contains($request->url(), '/sections')) {
                 return Http::response(['results' => [], 'next_cursor' => null]);
             }
@@ -44,7 +62,34 @@ final class HttpTodoistGatewayTest extends TestCase
         $snapshot = (new HttpTodoistGateway)->projectSnapshot('token', 'p1');
 
         self::assertSame(['t1', 't2'], array_column($snapshot['tasks']['results'], 'id'));
-        Http::assertSentCount(4);
+        Http::assertSentCount(6);
+        CarbonImmutable::setTestNow();
+    }
+
+    public function test_project_snapshot_splits_the_complete_project_history_into_supported_windows(): void
+    {
+        CarbonImmutable::setTestNow('2026-08-24T12:00:00Z');
+        Http::fake(function (Request $request) {
+            if (str_contains($request->url(), '/projects/p1')) {
+                return Http::response(['id' => 'p1', 'created_at' => '2026-01-01T00:00:00Z']);
+            }
+            if (str_contains($request->url(), '/tasks/completed/by_completion_date')) {
+                return Http::response(['items' => []]);
+            }
+
+            return Http::response(['results' => []]);
+        });
+
+        (new HttpTodoistGateway)->projectSnapshot('token', 'p1');
+
+        $historyRequests = collect(Http::recorded())
+            ->map(fn (array $record): Request => $record[0])
+            ->filter(fn (Request $request): bool => str_contains($request->url(), '/tasks/completed/by_completion_date'))
+            ->values();
+        self::assertCount(3, $historyRequests);
+        self::assertSame('2026-01-01T00:00:00Z', $historyRequests[0]->data()['since']);
+        self::assertSame('2026-08-24T12:00:01Z', $historyRequests[2]->data()['until']);
+        CarbonImmutable::setTestNow();
     }
 
     public function test_writes_use_the_provider_contract_and_bearer_token(): void

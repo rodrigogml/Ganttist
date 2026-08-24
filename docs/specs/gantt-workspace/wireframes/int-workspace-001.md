@@ -20,16 +20,16 @@ Telefone: Barra → árvore OU timeline; painel abre em sobreposição.
 
 Filtro por estado:
 ┌─────────────────────────┐
-│ Todas                   │
-│ Desbloqueadas           │
-│   Abertas               │
-│   Agendadas             │
-│   Atrasadas             │
-│ Bloqueadas              │
-│ Concluídas              │
+│ [✓] Todas               │
+│ [−] Desbloqueadas       │
+│   [✓] Abertas           │
+│   [ ] Agendadas         │
+│   [✓] Atrasadas         │
+│ [✓] Bloqueadas          │
+│ [ ] Concluídas          │
 └─────────────────────────┘
 ```
 
 - Grupo/seção: título em linha única, sem prioridade nem descrição.
 - Folha: slot terminal fixo de 22 px antes do conteúdo; P1/P2/P3 substituem a extensão horizontal por bandeira ampliada, enquanto P4 mantém apenas a extensão. Título e descrição opcional começam no mesmo eixo em todas as folhas.
-- Filtro: “Desbloqueadas” combina abertas, agendadas e atrasadas; as três opções individuais ficam identadas e “Bloqueadas”/“Concluídas” permanecem no primeiro nível.
+- Filtro: checkboxes permitem qualquer combinação; “Desbloqueadas” combina abertas, agendadas e atrasadas e fica parcial quando somente parte delas está marcada. “Bloqueadas”/“Concluídas” permanecem no primeiro nível. Clique externo ou Escape fecha o menu sem desfazer a seleção.

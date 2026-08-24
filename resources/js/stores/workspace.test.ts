@@ -23,16 +23,16 @@ describe('workspace visibility', () => {
     }
     store.hiddenGroups = new Set(['group'])
     store.search = 'sem resultado'
-    store.statusFilter = 'completed'
+    store.setStatusFilters(['completed'])
 
     store.revealTask('task')
 
     expect(store.hiddenGroups.has('group')).toBe(false)
     expect(store.search).toBe('')
-    expect(store.statusFilter).toBe('all')
+    expect(store.statusFilters).toEqual(['opened', 'scheduled', 'late', 'blocked', 'completed'])
   })
 
-  it('filters all unlocked states as one virtual parent while preserving individual choices', () => {
+  it('combines multiple status choices and toggles the unlocked virtual parent', () => {
     const store = useWorkspaceStore()
     const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, critical: false }
     store.workspace = {
@@ -47,11 +47,15 @@ describe('workspace visibility', () => {
       dependencies: [], stats: { progress: 0, completed: 1, total: 5, critical: 0, opened: 1, blocked: 1, scheduled: 1, late: 1, without_dates: 5 },
     }
 
-    store.statusFilter = 'unblocked'
+    store.setStatusFilters([])
+    store.toggleUnblockedStatusFilters()
     expect(store.tasks.map(task => task.id)).toEqual(['opened', 'scheduled', 'late'])
 
-    store.statusFilter = 'scheduled'
-    expect(store.tasks.map(task => task.id)).toEqual(['scheduled'])
+    store.toggleStatusFilter('blocked')
+    expect(store.tasks.map(task => task.id)).toEqual(['opened', 'scheduled', 'late', 'blocked'])
+
+    store.toggleStatusFilter('opened')
+    expect(store.tasks.map(task => task.id)).toEqual(['scheduled', 'late', 'blocked'])
   })
 
   it('reconciles an already-open workspace without resetting selection or replacing it with an error', async () => {

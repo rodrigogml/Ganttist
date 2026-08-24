@@ -45,6 +45,10 @@ As colunas fixas são definidas por um catálogo frontend com ID, rótulo e larg
 
 O mapper do workspace expõe `description` nativa e mantém `priority` no valor bruto da API Todoist. A SPA converte somente para apresentação (`4→P1`, `3→P2`, `2→P3`, `1→P4`) e nunca exibe prioridade ou descrição em linhas derivadas/agrupadoras.
 
+O gateway combina `/tasks` (ativas) com `/tasks/completed/by_completion_date` (concluídas). Como o Todoist limita cada consulta histórica a três meses, a data `created_at` do projeto define o início e as janelas são consultadas em lotes paralelos, com paginação por cursor dentro de cada janela. Itens concluídos são normalizados explicitamente, deduplicados por ID e sobrescritos por uma versão ativa em caso de reabertura. Raízes ligadas a uma seção histórica indisponível são mantidas no workspace em vez de descartadas.
+
+O filtro de status usa um conjunto reativo dos cinco estados calculados, inicialmente completo. Cada checkbox altera somente sua parcela; “Desbloqueadas” opera sobre `OPENED`, `SCHEDULED` e `LATE` e expõe estado indeterminado para seleção parcial. O popover fecha por Escape ou evento externo de ponteiro, preservando as marcações já aplicadas.
+
 ## ConvenÃ§Ãµes de Borda
 
 | Camada | Case style | ValidaÃ§Ã£o | Fonte da verdade |

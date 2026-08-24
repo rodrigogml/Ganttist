@@ -118,9 +118,14 @@ final class TodoistSyncServiceTest extends TestCase
                 return Http::response(['access_token' => 'new-token', 'refresh_token' => 'new-refresh-token', 'expires_in' => 3600]);
             }
             if ($request->hasHeader('Authorization', 'Bearer new-token')) {
-                return str_contains($request->url(), '/tasks')
-                    ? Http::response(['results' => []])
-                    : Http::response([]);
+                if (str_contains($request->url(), '/tasks/completed/by_completion_date')) {
+                    return Http::response(['items' => []]);
+                }
+                if (str_contains($request->url(), '/projects/fake-project')) {
+                    return Http::response(['id' => 'fake-project', 'created_at' => now()->subMonth()->toIso8601String()]);
+                }
+
+                return str_contains($request->url(), '/tasks') ? Http::response(['results' => []]) : Http::response([]);
             }
 
             return Http::response(['error' => 'Unauthorized'], 401);
@@ -137,9 +142,9 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertSame('new-token', decrypt($integration->access_token_encrypted));
         self::assertSame('new-refresh-token', decrypt($integration->refresh_token_encrypted));
         self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
-        // The snapshot is a three-request pool (tasks, sections and collaborators),
-        // retried once after refreshing the expired access token.
-        Http::assertSentCount(7);
+        // The snapshot is a four-request pool (project metadata, tasks, sections and collaborators),
+        // retried once after refreshing the expired access token, followed by completed-task history.
+        Http::assertSentCount(10);
     }
 
     public function test_rate_limit_keeps_event_pending_and_marks_sync_as_degraded(): void

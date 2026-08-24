@@ -136,6 +136,30 @@ final class WorkspaceApiTest extends TestCase
         $this->actingAs($user)->getJson('/api/v1/workspace')->assertOk()->assertJsonPath('data.tasks.1.id', 'fake-group');
     }
 
+    public function test_workspace_keeps_completed_history_when_its_original_section_is_unavailable(): void
+    {
+        config()->set('services.todoist.demo_mode', false);
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Histórico', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, [
+            'sections' => ['results' => []],
+            'collaborators' => ['results' => []],
+            'tasks' => ['results' => [
+                ['id' => 'historical-parent', 'content' => 'Marco concluído', 'section_id' => 'archived-section', 'is_completed' => true, 'completed_at' => '2026-07-10T12:00:00Z'],
+                ['id' => 'historical-child', 'content' => 'Evidência concluída', 'section_id' => 'archived-section', 'parent_id' => 'historical-parent', 'is_completed' => true, 'completed_at' => '2026-07-09T12:00:00Z'],
+            ]],
+        ]);
+
+        $tasks = collect($this->actingAs($user)->getJson('/api/v1/workspace')->assertOk()->json('data.tasks'));
+
+        self::assertSame('completed', $tasks->firstWhere('id', 'historical-parent')['status']);
+        self::assertSame(0, $tasks->firstWhere('id', 'historical-parent')['level']);
+        self::assertSame('historical-parent', $tasks->firstWhere('id', 'historical-child')['parent_id']);
+        self::assertSame(1, $tasks->firstWhere('id', 'historical-child')['level']);
+    }
+
     public function test_schedule_apply_persists_an_idempotent_operation_without_calling_todoist(): void
     {
         config()->set('services.todoist.driver', 'fake');
