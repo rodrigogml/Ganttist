@@ -4,17 +4,20 @@ declare(strict_types=1);
 
 namespace App\Services;
 
-use App\Contracts\TodoistGateway;
+use App\Exceptions\DependencySnapshotUnavailable;
 use InvalidArgumentException;
 
 final readonly class DependencyScopeValidator
 {
-    public function __construct(private TodoistGateway $gateway, private TodoistAccessTokenService $tokens) {}
+    public function __construct(private TodoistSnapshotStore $snapshots) {}
 
     /** @param object{id: string, todoist_project_id: string} $project @param object{access_token_encrypted: string} $integration */
-    public function validate(object $project, object $integration, string $predecessorId, string $successorId): void
+    public function validate(object $project, string $predecessorId, string $successorId): string
     {
-        $snapshot = $this->gateway->projectSnapshot($this->tokens->accessToken($integration), $project->todoist_project_id);
+        $snapshot = $this->snapshots->get($project->id);
+        if ($snapshot === null) {
+            throw new DependencySnapshotUnavailable;
+        }
         $tasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
         $known = [];
         $groups = [];
@@ -40,5 +43,7 @@ final readonly class DependencyScopeValidator
         if (isset($groups[$predecessorId], $groups[$successorId])) {
             throw new InvalidArgumentException('Relações entre grupos não são permitidas.');
         }
+
+        return 'workspace_snapshot';
     }
 }

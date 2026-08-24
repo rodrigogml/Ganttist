@@ -8,10 +8,12 @@ use App\Services\AuditWriter;
 use App\Services\TodoistAccessTokenService;
 use App\Services\TodoistSnapshotStore;
 use App\Support\TodoistTask;
+use Illuminate\Http\Client\RequestException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 
 final class TaskController extends Controller
@@ -107,6 +109,58 @@ final class TaskController extends Controller
         $audit->record($request->user()->id, $project->id, 'task.updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['title' => $source['content'] ?? null, 'description' => $source['description'] ?? null, 'priority' => $source['priority'] ?? null, 'assignee_id' => $source['assignee_id'] ?? $source['responsible_uid'] ?? null, 'completed' => $source['is_completed'] ?? null], ['title' => $data['title'], 'description' => $data['description'] ?? $source['description'] ?? null, 'priority' => $data['priority'] ?? $source['priority'] ?? null, 'assignee_id' => $data['assigneeId'] ?? null, 'completed' => $data['completed'] ?? $source['is_completed'] ?? null]);
 
         return response()->json(['data' => $task]);
+    }
+
+    public function setCompletion(Request $request, string $taskId, TodoistGateway $gateway, AuditWriter $audit, TodoistSnapshotStore $snapshots): JsonResponse
+    {
+        $data = $request->validate(['completed' => ['required', 'boolean'], 'commandId' => ['required', 'string', 'max:64']]);
+        $integration = DB::table('todoist_integrations')->where('user_id', $request->user()->id)->where('status', 'active')->first();
+        abort_unless($integration?->access_token_encrypted, 409, 'Conecte sua conta Todoist primeiro.');
+        $project = DB::table('gantt_projects')->where('user_id', $request->user()->id)->where('status', 'active')->first();
+        abort_unless($project, 409, 'Selecione um projeto Todoist primeiro.');
+        $snapshot = $snapshots->get($project->id);
+        abort_unless($snapshot, 409, 'Atualize o workspace antes de alterar a conclusão da tarefa.');
+        $tasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
+        $index = collect($tasks)->search(fn (array $task): bool => (string) ($task['id'] ?? '') === $taskId);
+        abort_if($index === false, 404, 'Tarefa não pertence ao projeto selecionado.');
+        $source = $tasks[$index];
+        $completed = (bool) $data['completed'];
+        if (TodoistTask::completed($source) === $completed) {
+            return response()->json(['data' => ['task_id' => $taskId, 'completed' => $completed, 'unchanged' => true]]);
+        }
+        try {
+            $gateway->setTaskCompletion($this->tokens->accessToken($integration), $taskId, $completed);
+        } catch (RequestException $exception) {
+            $retryAfter = data_get($exception->response->json(), 'error_extra.retry_after');
+            Log::warning('task.completion.todoist_failed', [
+                'project_id' => $project->id,
+                'task_hash' => substr(hash('sha256', $taskId), 0, 12),
+                'status' => $exception->response->status(),
+                'retry_after' => is_numeric($retryAfter) ? (int) $retryAfter : null,
+                'error_tag' => data_get($exception->response->json(), 'error_tag'),
+                'error_code' => data_get($exception->response->json(), 'error_code'),
+            ]);
+
+            return response()->json(['message' => is_numeric($retryAfter)
+                ? "O Todoist pediu para tentar novamente em {$retryAfter} segundos."
+                : 'O Todoist não confirmou a alteração da tarefa. Tente novamente.'], 503);
+        }
+        $tasks[$index]['is_completed'] = $completed;
+        $tasks[$index]['checked'] = $completed;
+        if ($completed) {
+            $tasks[$index]['completed_at'] = now('UTC')->toIso8601String();
+        } else {
+            unset($tasks[$index]['completed_at']);
+        }
+        if (isset($snapshot['tasks']['results'])) {
+            $snapshot['tasks']['results'] = $tasks;
+        } else {
+            $snapshot['tasks'] = $tasks;
+        }
+        $snapshots->put($project->id, $snapshot);
+        $audit->record($request->user()->id, $project->id, 'task.completion_updated', 'user', 'todoist_task', $taskId, $data['commandId'], ['completed' => TodoistTask::completed($source)], ['completed' => $completed]);
+
+        return response()->json(['data' => ['task_id' => $taskId, 'completed' => $completed, 'unchanged' => false]]);
     }
 
     public function editorContext(Request $request, string $taskId, TodoistGateway $gateway): JsonResponse

@@ -109,6 +109,8 @@ As tarefas que possuírem filhos poderão funcionar visualmente como agrupadores
 
 As tarefas-folha representam as atividades efetivamente executáveis no gráfico.
 
+As datas de uma tarefa-pai serão sempre calculadas a partir das tarefas descendentes apenas para planejamento e desenho no Gantt. O Ganttist jamais preencherá ou atualizará automaticamente a data ou o deadline dessa tarefa no Todoist. Mediante autorização opcional do usuário, poderá somente limpar ambos os campos de tarefas que possuam filhos.
+
 O sistema deverá apresentar controles para expandir ou recolher os níveis da hierarquia.
 
 ---
@@ -4572,9 +4574,9 @@ No modo automático, o core deverá corrigir a inconsistência conforme as regra
 
 ### 19A.17 Exceção para datas de grupos
 
-Datas de tarefas-pai são derivadas pelo core.
+Datas de tarefas-pai são derivadas pelo core somente para cálculo e exibição no Gantt.
 
-Se forem alteradas diretamente no Todoist, o core deverá recalculá-las e restaurar os valores derivados corretos.
+O core nunca deverá gravar no Todoist os valores derivados. Sem autorização de limpeza, datas alteradas diretamente no Todoist permanecem intactas na origem e são ignoradas na projeção do agrupador. Com a autorização habilitada, o core deverá apenas remover a data e o deadline da tarefa-pai.
 
 ### 19A.18 Abertura de projeto
 

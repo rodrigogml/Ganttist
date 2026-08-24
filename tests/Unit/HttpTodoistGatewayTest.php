@@ -36,6 +36,20 @@ final class HttpTodoistGatewayTest extends TestCase
         CarbonImmutable::setTestNow();
     }
 
+    public function test_incremental_sync_posts_the_previous_token_and_requested_resources(): void
+    {
+        Http::fake(['*/sync' => Http::response(['sync_token' => 'next-token', 'items' => []])]);
+
+        $response = (new HttpTodoistGateway)->incrementalSync('token', 'previous-token');
+
+        self::assertSame('next-token', $response['sync_token']);
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
+            && $request->url() === 'https://api.todoist.com/api/v1/sync'
+            && $request->hasHeader('Authorization', 'Bearer token')
+            && ($request->data()['sync_token'] ?? null) === 'previous-token'
+            && ($request->data()['resource_types'] ?? null) === '["projects","items","sections","collaborators"]');
+    }
+
     public function test_project_snapshot_follows_task_cursors_without_truncating_the_project(): void
     {
         CarbonImmutable::setTestNow('2026-08-24T12:00:00Z');
@@ -94,11 +108,20 @@ final class HttpTodoistGatewayTest extends TestCase
 
     public function test_writes_use_the_provider_contract_and_bearer_token(): void
     {
-        Http::fake(['*' => Http::response(['id' => 't1'])]);
+        Http::fake(function (Request $request) {
+            if (str_ends_with($request->url(), '/sync')) {
+                $command = json_decode((string) ($request->data()['commands'] ?? '[]'), true)[0] ?? [];
+
+                return Http::response(['sync_status' => [($command['uuid'] ?? 'unknown') => 'ok']]);
+            }
+
+            return Http::response(['id' => 't1']);
+        });
 
         $gateway = new HttpTodoistGateway;
         $gateway->updateTaskDates('token', 't1', '2026-08-20', '2026-08-22');
         $gateway->updateTask('token', 't1', ['content' => 'Renomeada']);
+        $gateway->updateTask('token', 'parent', ['due_string' => 'no date', 'deadline_date' => null]);
         $gateway->setTaskCompletion('token', 't1', true);
         $gateway->createTask('token', ['content' => 'Nova', 'project_id' => 'p1']);
         $gateway->deleteTask('token', 't1');
@@ -115,7 +138,14 @@ final class HttpTodoistGatewayTest extends TestCase
                 && ($data['due_date'] ?? null) === '2026-08-20'
                 && ($data['deadline_date'] ?? null) === '2026-08-22';
         });
-        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.todoist.com/api/v1/tasks/t1/close');
+        Http::assertSent(fn (Request $request): bool => $request->method() === 'POST'
+            && $request->url() === 'https://api.todoist.com/api/v1/sync'
+            && str_contains((string) ($request->data()['commands'] ?? ''), '"type":"item_close"')
+            && str_contains((string) ($request->data()['commands'] ?? ''), '"id":"t1"'));
+        Http::assertSent(fn (Request $request): bool => $request->url() === 'https://api.todoist.com/api/v1/tasks/parent'
+            && ($request->data()['due_string'] ?? null) === 'no date'
+            && array_key_exists('deadline_date', $request->data())
+            && $request->data()['deadline_date'] === null);
         Http::assertSent(fn (Request $request): bool => $request->method() === 'POST' && $request->url() === 'https://api.todoist.com/api/v1/tasks' && ($request->data()['content'] ?? null) === 'Nova');
         Http::assertSent(fn (Request $request): bool => $request->method() === 'DELETE' && $request->url() === 'https://api.todoist.com/api/v1/tasks/t1');
         Http::assertSent(fn (Request $request): bool => $request->method() === 'GET' && str_contains($request->url(), '/comments') && ($request->data()['task_id'] ?? null) === 't1');

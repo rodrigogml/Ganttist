@@ -2,7 +2,10 @@
 
 namespace Tests\Feature;
 
+use App\Contracts\TodoistGateway;
+use App\Infrastructure\Todoist\FakeTodoistGateway;
 use App\Models\User;
+use App\Services\TodoistSnapshotStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
@@ -31,6 +34,27 @@ final class DependencyApiTest extends TestCase
         $this->actingAs($user)->postJson('/api/v1/dependencies', ['from' => 'fake-task-1', 'to' => 'outside-task', 'type' => 'FS', 'commandId' => 'outside'])
             ->assertStatus(422)
             ->assertJsonPath('message', 'As tarefas da dependência devem pertencer ao projeto Todoist selecionado.');
+    }
+
+    public function test_dependency_creation_requires_an_already_loaded_workspace_snapshot(): void
+    {
+        $user = User::factory()->create();
+        DB::table('gantt_projects')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto fake', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+
+        $this->actingAs($user)->postJson('/api/v1/dependencies', ['from' => 'fake-task-1', 'to' => 'fake-task-2', 'type' => 'FS', 'commandId' => 'missing-snapshot'])
+            ->assertStatus(409)
+            ->assertJsonPath('message', 'Atualize o workspace antes de criar uma dependência.');
+    }
+
+    public function test_dependency_creation_never_calls_the_todoist_gateway(): void
+    {
+        $user = $this->userWithActiveFakeProject();
+        $gateway = $this->createMock(TodoistGateway::class);
+        $gateway->expects(self::never())->method('projectSnapshot');
+        app()->instance(TodoistGateway::class, $gateway);
+
+        $this->actingAs($user)->postJson('/api/v1/dependencies', ['from' => 'fake-task-1', 'to' => 'fake-task-2', 'type' => 'FS', 'commandId' => 'local-only'])
+            ->assertCreated();
     }
 
     public function test_group_is_allowed_only_as_predecessor_of_a_common_task(): void
@@ -85,7 +109,9 @@ final class DependencyApiTest extends TestCase
         config()->set('services.todoist.driver', 'fake');
         $user = User::factory()->create();
         DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_user_id' => 'fake-user', 'access_token_encrypted' => encrypt('fake-token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
-        DB::table('gantt_projects')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto fake', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $projectId = (string) Str::ulid();
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto fake', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, (new FakeTodoistGateway)->projectSnapshot('fake-token', 'fake-project'));
 
         return $user;
     }

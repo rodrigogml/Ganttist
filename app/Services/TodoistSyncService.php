@@ -2,9 +2,15 @@
 
 namespace App\Services;
 
+use App\Contracts\IncrementalTodoistGateway;
 use App\Contracts\TodoistGateway;
+use App\Domain\Scheduling\Dependency;
 use App\Domain\Scheduling\GroupScheduleCalculator;
+use App\Domain\Scheduling\ProjectedTaskStatus;
+use App\Domain\Scheduling\ProjectionPolicy;
 use App\Domain\Scheduling\TaskPlan;
+use App\Domain\Scheduling\TaskProjectionCalculator;
+use App\Domain\Scheduling\TaskProjectionInput;
 use App\Support\TodoistTask;
 use DateTimeImmutable;
 use Illuminate\Http\Client\RequestException;
@@ -29,8 +35,8 @@ final class TodoistSyncService
             $integrationFailed = false;
             foreach ($projects as $project) {
                 try {
-                    $snapshot = $this->snapshotWithRetry($integration, $project->todoist_project_id);
-                    $this->synchronizeDerivedGroupDates($integration, $project, $snapshot, 'scheduler');
+                    $snapshot = $this->snapshotForProject($integration, $project);
+                    $this->synchronizeTaskAutomations($integration, $project, $snapshot, 'scheduler');
                     $this->publishSnapshotIfChanged($integration, $project, $snapshot);
                     $synced++;
                 } catch (RequestException $exception) {
@@ -53,6 +59,31 @@ final class TodoistSyncService
         return compact('synced', 'failed');
     }
 
+    /** @return array{synced: bool, failed: bool} */
+    public function syncUserProject(string $userId): array
+    {
+        $integration = DB::table('todoist_integrations')->where('user_id', $userId)->where('status', 'active')->whereNotNull('access_token_encrypted')->first();
+        $project = DB::table('gantt_projects')->where('user_id', $userId)->where('status', 'active')->first();
+        if (! $integration || ! $project) {
+            throw new \RuntimeException('Conecte o Todoist e selecione um projeto primeiro.');
+        }
+        DB::table('todoist_integrations')->where('id', $integration->id)->update(['sync_state' => 'syncing', 'last_sync_error' => null, 'updated_at' => now()]);
+        try {
+            $snapshot = $this->snapshotForProject($integration, $project);
+            $this->synchronizeTaskAutomations($integration, $project, $snapshot, 'user');
+            $this->publishSnapshotIfChanged($integration, $project, $snapshot);
+            DB::table('todoist_integrations')->where('id', $integration->id)->update(['last_synced_at' => now(), 'sync_state' => 'synced', 'last_sync_error' => null, 'updated_at' => now()]);
+
+            return ['synced' => true, 'failed' => false];
+        } catch (RequestException $exception) {
+            $this->recordIntegrationFailure($integration, $exception, 'user');
+            throw $exception;
+        } catch (\Throwable $exception) {
+            $this->markIntegrationDegraded($integration, 'remote_unavailable');
+            throw $exception;
+        }
+    }
+
     public function markEvent(array $payload, bool $onlyIfNew = false): ?string
     {
         $todoistUserId = (string) ($payload['user_id'] ?? $payload['event_data']['user_id'] ?? '');
@@ -61,6 +92,10 @@ final class TodoistSyncService
         $id = (string) Str::ulid();
         $inserted = DB::table('todoist_events')->insertOrIgnore(['id' => $id, 'external_event_id' => $externalId, 'user_id' => $userId, 'event_type' => (string) ($payload['event_name'] ?? 'unknown'), 'payload' => json_encode($payload, JSON_THROW_ON_ERROR), 'created_at' => now(), 'updated_at' => now()]);
         if ($inserted === 1) {
+            if ($userId !== null) {
+                DB::table('todoist_integrations')->where('user_id', $userId)->where('status', 'active')->update(['sync_state' => 'syncing', 'last_sync_error' => null, 'updated_at' => now()]);
+            }
+
             return $id;
         }
 
@@ -82,8 +117,8 @@ final class TodoistSyncService
         try {
             $projects = $this->projectsForEvent($integration, json_decode($event->payload, true, 512, JSON_THROW_ON_ERROR));
             foreach ($projects as $project) {
-                $snapshot = $this->snapshotWithRetry($integration, $project->todoist_project_id);
-                $this->synchronizeDerivedGroupDates($integration, $project, $snapshot, 'webhook', $event->external_event_id);
+                $snapshot = $this->snapshotForProject($integration, $project);
+                $this->synchronizeTaskAutomations($integration, $project, $snapshot, 'webhook', $event->external_event_id);
                 $this->snapshots->put($project->id, $snapshot);
                 $sourceTasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
                 $ids = array_fill_keys(array_map(fn (array $task): string => (string) $task['id'], $sourceTasks), true);
@@ -224,6 +259,85 @@ final class TodoistSyncService
         throw $last ?? new \RuntimeException('Falha de sincronização sem exceção.');
     }
 
+    /** @return array<string, mixed> */
+    private function snapshotForProject(object $integration, object $project): array
+    {
+        $snapshot = $this->snapshots->get($project->id);
+        if (! $this->gateway instanceof IncrementalTodoistGateway) {
+            return $this->snapshotWithRetry($integration, $project->todoist_project_id);
+        }
+
+        $token = is_string($integration->sync_token ?? null) && $integration->sync_token !== '' ? $integration->sync_token : '*';
+        if ($snapshot === null) {
+            $snapshot = $this->snapshotWithRetry($integration, $project->todoist_project_id);
+        }
+
+        $increment = $this->incrementWithRetry($integration, $token);
+        $nextToken = $increment['sync_token'] ?? null;
+        if (is_string($nextToken) && $nextToken !== '') {
+            DB::table('todoist_integrations')->where('id', $integration->id)->update(['sync_token' => $nextToken, 'updated_at' => now()]);
+            $integration->sync_token = $nextToken;
+        }
+
+        return $this->mergeIncrementalSnapshot($snapshot, $increment, $project->todoist_project_id);
+    }
+
+    /** @return array<string, mixed> */
+    private function incrementWithRetry(object $integration, string $syncToken): array
+    {
+        $last = null;
+        $token = $this->tokens->accessToken($integration);
+        for ($attempt = 0; $attempt < 3; $attempt++) {
+            try {
+                return $this->gateway->incrementalSync($token, $syncToken);
+            } catch (\Throwable $exception) {
+                $last = $exception;
+                if ($attempt < 2) {
+                    usleep(250000 * ($attempt + 1));
+                }
+            }
+        }
+
+        throw $last ?? new \RuntimeException('Falha de sincronização incremental sem exceção.');
+    }
+
+    /** @param array<string, mixed> $snapshot @param array<string, mixed> $increment */
+    private function mergeIncrementalSnapshot(array $snapshot, array $increment, string $projectId): array
+    {
+        $merge = static function (array $current, array $changes, string $idKey = 'id'): array {
+            $byId = [];
+            foreach ($current as $item) {
+                if (is_array($item) && isset($item[$idKey])) {
+                    $byId[(string) $item[$idKey]] = $item;
+                }
+            }
+            foreach ($changes as $item) {
+                if (! is_array($item) || ! isset($item[$idKey])) {
+                    continue;
+                }
+                $id = (string) $item[$idKey];
+                if (($item['is_deleted'] ?? false) === true) {
+                    unset($byId[$id]);
+                } else {
+                    $byId[$id] = [...($byId[$id] ?? []), ...$item];
+                }
+            }
+
+            return array_values($byId);
+        };
+
+        $currentTasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
+        $knownTaskIds = array_fill_keys(array_map(fn (array $task): string => (string) ($task['id'] ?? ''), $currentTasks), true);
+        $changes = array_values(array_filter($increment['items'] ?? [], fn (mixed $item): bool => is_array($item) && (($item['project_id'] ?? null) === $projectId || isset($knownTaskIds[(string) ($item['id'] ?? '')]))));
+        $snapshot['tasks'] = ['results' => $merge($currentTasks, $changes), 'next_cursor' => null];
+        $currentSections = $snapshot['sections']['results'] ?? $snapshot['sections'] ?? [];
+        $knownSectionIds = array_fill_keys(array_map(fn (array $section): string => (string) ($section['id'] ?? ''), $currentSections), true);
+        $sectionChanges = array_values(array_filter($increment['sections'] ?? [], fn (mixed $item): bool => is_array($item) && (($item['project_id'] ?? null) === $projectId || isset($knownSectionIds[(string) ($item['id'] ?? '')]))));
+        $snapshot['sections'] = ['results' => $merge($currentSections, $sectionChanges), 'next_cursor' => null];
+
+        return $snapshot;
+    }
+
     /** @param array<string, mixed> $snapshot */
     private function publishSnapshotIfChanged(object $integration, object $project, array $snapshot): void
     {
@@ -231,11 +345,10 @@ final class TodoistSyncService
         $fingerprint = $this->snapshotFingerprint($snapshot);
         $previous = Cache::get($cacheKey);
         Cache::put($cacheKey, $fingerprint, now()->addDays(7));
+        $this->snapshots->put($project->id, $snapshot);
         if (is_string($previous) && hash_equals($previous, $fingerprint)) {
             return;
         }
-
-        $this->snapshots->put($project->id, $snapshot);
 
         $this->audit->record($integration->user_id, $project->id, 'todoist.snapshot.reconciled', 'scheduler', 'gantt_project', $project->id, null, null, [
             'task_count' => count($snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? []),
@@ -257,35 +370,168 @@ final class TodoistSyncService
         return 'todoist:snapshot:fingerprint:'.$projectId;
     }
 
-    /** @param array<string, mixed> $snapshot */
-    private function synchronizeDerivedGroupDates(object $integration, object $project, array $snapshot, string $origin, ?string $causationId = null): void
+    public function applyProjectAutomations(string $projectId): int
     {
-        $sourceTasks = $snapshot['tasks']['results'] ?? $snapshot['tasks'] ?? [];
-        $known = array_fill_keys(array_map(fn (array $task): string => (string) ($task['id'] ?? ''), $sourceTasks), true);
+        $project = DB::table('gantt_projects')->where('id', $projectId)->where('status', 'active')->first();
+        if ($project === null) {
+            return 0;
+        }
+        $integration = DB::table('todoist_integrations')->where('user_id', $project->user_id)->where('status', 'active')->first();
+        if ($integration === null) {
+            return 0;
+        }
+        $snapshot = $this->snapshotWithRetry($integration, $project->todoist_project_id);
+        $updated = $this->synchronizeTaskAutomations($integration, $project, $snapshot, 'worker');
+        if ($updated > 0) {
+            $this->snapshots->put($project->id, $snapshot);
+        }
+
+        return $updated;
+    }
+
+    /** @param array<string, mixed> $snapshot */
+    private function synchronizeTaskAutomations(object $integration, object $project, array &$snapshot, string $origin, ?string $causationId = null): int
+    {
+        $settings = DB::table('project_settings')->where('gantt_project_id', $project->id)->first();
+        if ($settings === null) {
+            return 0;
+        }
+        $scheduleBlockedTasks = (bool) ($settings->autoScheduleBlockedTasks ?? false);
+        $clearParentTaskDates = (bool) ($settings->clearParentTaskDates ?? false);
+        if (! $scheduleBlockedTasks && ! $clearParentTaskDates) {
+            return 0;
+        }
+        if (! isset($snapshot['tasks']) || ! is_array($snapshot['tasks'])) {
+            return 0;
+        }
+        $sourceTasks = &$snapshot['tasks'];
+        $wrapped = isset($sourceTasks['results']);
+        if ($wrapped) {
+            $tasks = &$sourceTasks['results'];
+        } else {
+            $tasks = &$sourceTasks;
+        }
+        if (! is_array($tasks) || $tasks === []) {
+            return 0;
+        }
+
         $calendar = $this->calendars->forProject($project->id);
-        $plans = [];
-        foreach ($sourceTasks as $task) {
+        $timezone = 'America/Sao_Paulo';
+        $today = now($timezone)->startOfDay()->toDateTimeImmutable();
+        $known = [];
+        $children = [];
+        foreach ($tasks as $index => $task) {
+            $id = (string) ($task['id'] ?? '');
+            if ($id === '') {
+                continue;
+            }
+            $known[$id] = $index;
+            $parentId = (string) ($task['parent_id'] ?? '');
+            if ($parentId !== '') {
+                $children[$parentId] = true;
+            }
+        }
+
+        $updated = 0;
+        $token = null;
+        if ($clearParentTaskDates) {
+            foreach ($children as $parentId => $_hasChildren) {
+                $index = $known[$parentId] ?? null;
+                if ($index === null) {
+                    continue;
+                }
+                $task = &$tasks[$index];
+                $beforeStart = TodoistTask::start($task);
+                $beforeDeadline = TodoistTask::deadline($task);
+                if ($beforeStart === null && $beforeDeadline === null) {
+                    unset($task);
+
+                    continue;
+                }
+                $token ??= $this->tokens->accessToken($integration);
+                $this->gateway->updateTask($token, $parentId, ['due_string' => 'no date', 'deadline_date' => null]);
+                $task['due'] = null;
+                $task['due_date'] = null;
+                $task['deadline'] = null;
+                $task['deadline_date'] = null;
+                $this->audit->record($integration->user_id, $project->id, 'parent_task.dates.cleared', $origin, 'todoist_task', $parentId, $causationId, ['start' => $beforeStart, 'deadline' => $beforeDeadline], ['start' => null, 'deadline' => null]);
+                $updated++;
+                unset($task);
+            }
+        }
+
+        if (! $scheduleBlockedTasks) {
+            return $updated;
+        }
+        $completionOverrides = DB::table('task_metadata')->where('gantt_project_id', $project->id)->whereNotNull('completion_date_override')->pluck('completion_date_override', 'todoist_task_id')->all();
+        $completionDate = function (array $task) use ($completionOverrides, $timezone): ?DateTimeImmutable {
             $id = (string) $task['id'];
-            $startDate = TodoistTask::start($task);
-            $finishDate = TodoistTask::finish($task);
-            $start = $startDate ? new DateTimeImmutable($startDate) : null;
-            $deadline = $finishDate ? new DateTimeImmutable($finishDate) : null;
+            $value = $completionOverrides[$id] ?? TodoistTask::completionDate($task, $timezone);
+
+            return $value ? new DateTimeImmutable((string) $value) : null;
+        };
+        $dependencies = [];
+        foreach (DB::table('task_dependencies')->where('gantt_project_id', $project->id)->where('status', 'active')->get() as $row) {
+            if (isset($known[$row->predecessor_todoist_task_id], $known[$row->successor_todoist_task_id])) {
+                $dependencies[] = new Dependency($row->predecessor_todoist_task_id, $row->successor_todoist_task_id, $row->type);
+            }
+        }
+        if ($dependencies === []) {
+            return $updated;
+        }
+        $projectionInputs = function (array $groupRanges = []) use (&$tasks, $completionDate): array {
+            $inputs = [];
+            foreach ($tasks as $task) {
+                $id = (string) ($task['id'] ?? '');
+                if ($id === '') {
+                    continue;
+                }
+                $start = isset($groupRanges[$id]) ? $groupRanges[$id]->start : (($value = TodoistTask::start($task)) ? new DateTimeImmutable($value) : null);
+                $deadline = isset($groupRanges[$id]) ? $groupRanges[$id]->finish : (($value = TodoistTask::deadline($task)) ? new DateTimeImmutable($value) : null);
+                $inputs[] = new TaskProjectionInput($id, $start, $deadline, TodoistTask::completed($task), $completionDate($task));
+            }
+
+            return $inputs;
+        };
+        $calculator = new TaskProjectionCalculator($calendar, ProjectionPolicy::fromSetting($settings->projection_policy ?? null));
+        $projections = $calculator->calculate($projectionInputs(), $dependencies, $today);
+        $projectedPlans = [];
+        foreach ($tasks as $task) {
+            $id = (string) ($task['id'] ?? '');
+            if ($id === '' || ! isset($projections[$id])) {
+                continue;
+            }
+            $projection = $projections[$id];
             $parentId = isset($known[(string) ($task['parent_id'] ?? '')]) ? (string) $task['parent_id'] : null;
-            $plans[$id] = TaskPlan::fromDates($id, (string) ($task['content'] ?? $id), $start, $deadline, $calendar, TodoistTask::completed($task), null, $parentId);
+            $projectedPlans[$id] = TaskPlan::fromDates($id, (string) ($task['content'] ?? $id), $projection->consideredStart, $projection->consideredDeadline, $calendar, TodoistTask::completed($task), $projection->effectiveCompletionDate, $parentId);
         }
-        $groups = (new GroupScheduleCalculator)->calculate($plans, $calendar);
-        foreach ($groups as $groupId => $range) {
-            $source = collect($sourceTasks)->first(fn (array $task): bool => (string) $task['id'] === $groupId);
-            if ($source === null || TodoistTask::completed($source)) {
+        $groups = (new GroupScheduleCalculator)->calculate($projectedPlans, $calendar);
+        $projections = $calculator->calculate($projectionInputs($groups), $dependencies, $today);
+
+        foreach ($tasks as &$task) {
+            $id = (string) ($task['id'] ?? '');
+            $projection = $projections[$id] ?? null;
+            if ($projection === null || isset($children[$id]) || TodoistTask::completed($task) || $projection->status !== ProjectedTaskStatus::Blocked || $projection->unlockDate === null) {
                 continue;
             }
-            $start = $range->start->format('Y-m-d');
-            $finish = $range->finish->format('Y-m-d');
-            if (TodoistTask::start($source) === $start && TodoistTask::finish($source) === $finish) {
+            $targetStart = $projection->unlockDate->format('Y-m-d');
+            $beforeStart = TodoistTask::start($task);
+            $beforeDeadline = TodoistTask::deadline($task);
+            $targetDeadline = $beforeDeadline !== null && $beforeDeadline < $targetStart ? $targetStart : $beforeDeadline;
+            if ($beforeStart === $targetStart && $beforeDeadline === $targetDeadline) {
                 continue;
             }
-            $this->gateway->updateTaskDates($this->tokens->accessToken($integration), $groupId, $start, $finish);
-            $this->audit->record($integration->user_id, $project->id, 'group.dates.derived', $origin, 'todoist_task', $groupId, $causationId, null, ['start' => $start, 'finish' => $finish]);
+            $token ??= $this->tokens->accessToken($integration);
+            $this->gateway->updateTaskDates($token, $id, $targetStart, $targetDeadline);
+            $task['due'] = ['date' => $targetStart];
+            if ($targetDeadline !== null) {
+                $task['deadline_date'] = $targetDeadline;
+            }
+            $this->audit->record($integration->user_id, $project->id, 'blocked_task.start.automated', $origin, 'todoist_task', $id, $causationId, ['start' => $beforeStart, 'deadline' => $beforeDeadline], ['start' => $targetStart, 'deadline' => $targetDeadline, 'unlock_date' => $targetStart]);
+            $updated++;
         }
+        unset($task);
+
+        return $updated;
     }
 }

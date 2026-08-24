@@ -11,7 +11,7 @@ final class TodoistSnapshotStore
     /** @param array<string, mixed> $snapshot */
     public function put(string $projectId, array $snapshot): void
     {
-        Cache::put($this->key($projectId), $snapshot, now()->addSeconds(30));
+        Cache::put($this->key($projectId), $snapshot, now()->addMinutes(10));
     }
 
     /** @return array<string, mixed>|null */

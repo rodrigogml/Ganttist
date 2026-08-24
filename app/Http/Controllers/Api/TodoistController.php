@@ -6,6 +6,7 @@ use App\Contracts\TodoistGateway;
 use App\Http\Controllers\Controller;
 use App\Services\AuditWriter;
 use App\Services\TodoistAccessTokenService;
+use App\Services\TodoistSyncService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -33,6 +34,13 @@ final class TodoistController extends Controller
         $projects = $gateway->projects($token);
 
         return response()->json(['data' => $projects['results'] ?? $projects]);
+    }
+
+    public function sync(Request $request, TodoistSyncService $sync): JsonResponse
+    {
+        $sync->syncUserProject($request->user()->id);
+
+        return response()->json(['message' => 'Sincronização com o Todoist concluída.']);
     }
 
     public function selectProject(Request $request, TodoistGateway $gateway, AuditWriter $audit, TodoistAccessTokenService $tokens): JsonResponse

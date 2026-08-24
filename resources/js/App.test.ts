@@ -3,6 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createPinia } from 'pinia'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App.vue'
+import CalendarPanel from './CalendarPanel.vue'
 
 const firstWorkspace = { project: { id: 'p1', name: 'Projeto A', source: 'Todoist', sync_status: 'synced', updated_at: '2026-08-17T00:00:00Z' }, tasks: [{ id: 'section', title: 'Grupo', kind: 'section', level: 0, has_children: true, start: null, finish: null, considered_start: '2026-08-17', considered_deadline: '2026-08-18', completed: false, progress: 0, status: 'opened', critical: false }, { id: 'child', title: 'Subtarefa', kind: 'task', level: 1, parent_id: 'section', start: '2026-08-17', finish: '2026-08-17', considered_start: '2026-08-17', considered_deadline: '2026-08-17', completed: false, progress: 0, status: 'opened', critical: false, comment_count: 3 }], dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }
 const secondWorkspace = { ...firstWorkspace, project: { ...firstWorkspace.project, id: 'p2', name: 'Projeto B' }, tasks: [{ ...firstWorkspace.tasks[0], title: 'Grupo atualizado' }, firstWorkspace.tasks[1]] }
@@ -84,6 +85,16 @@ describe('workspace interaction', () => {
 
     expect(wrapper.text()).toContain('Grupo')
     expect(wrapper.text()).toContain('Subtarefa')
+    expect(wrapper.get('.settings-trigger').attributes('aria-label')).toBe('Abrir configurações do projeto')
+    expect(wrapper.find('.settings-trigger svg').exists()).toBe(true)
+    expect(wrapper.get('.settings-trigger').attributes('aria-expanded')).toBe('false')
+    await wrapper.get('.settings-trigger').trigger('click')
+    expect(wrapper.get('.settings-trigger').attributes('aria-expanded')).toBe('true')
+    wrapper.getComponent(CalendarPanel).vm.$emit('notify', { kind: 'success', message: 'Configurações de automação salvas.' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('.toast').classes()).toContain('success')
+    expect(wrapper.get('.toast').text()).toContain('Configurações de automação salvas.')
+    expect(wrapper.get('.toast').attributes('role')).toBe('status')
     await wrapper.get('.project-switcher > button').trigger('click')
     await flushPromises()
     await wrapper.get('.project-menu button').trigger('click')
@@ -93,6 +104,78 @@ describe('workspace interaction', () => {
     expect(wrapper.text()).toContain('Projeto B')
     expect(wrapper.text()).toContain('Grupo atualizado')
     expect(wrapper.exists()).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('moves focus to task search with Command or Control K', async () => {
+    const fetch = vi.fn(async (url: string) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: firstWorkspace }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    const shortcut = new KeyboardEvent('keydown', { key: 'k', metaKey: true, cancelable: true })
+    window.dispatchEvent(shortcut)
+
+    expect(shortcut.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(wrapper.get('.search input').element)
+    wrapper.unmount()
+  })
+
+  it('opens the task context menu and completes the task through Todoist', async () => {
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: firstWorkspace }) }
+      if (url === '/api/v1/tasks/child/completion' && options?.method === 'PATCH') return { ok: true, json: async () => ({ data: { task_id: 'child', completed: true } }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    wrapper.get('.task-row[data-task-id="child"]').element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 180 }))
+    await wrapper.vm.$nextTick()
+    const menu = document.querySelector<HTMLElement>('.task-context-menu')
+
+    expect(menu?.textContent).toContain('Concluir tarefa')
+    menu?.querySelector<HTMLButtonElement>('button')?.click()
+    await flushPromises()
+
+    expect(fetch).toHaveBeenCalledWith('/api/v1/tasks/child/completion', expect.objectContaining({ method: 'PATCH' }))
+    expect(JSON.parse(String(fetch.mock.calls.find(([url]) => url === '/api/v1/tasks/child/completion')?.[1]?.body))).toMatchObject({ completed: true })
+    wrapper.unmount()
+  })
+
+  it('closes the task context menu before reporting a Todoist completion error', async () => {
+    const fetch = vi.fn(async (url: string, options?: RequestInit) => {
+      if (url === '/api/v1/me') return { ok: true, json: async () => ({ user: { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' } }) }
+      if (url === '/api/v1/todoist/status') return { ok: true, json: async () => ({ connected: true, project: true, sync_state: 'synced', pending_operations: 0, conflict_operations: 0 }) }
+      if (url === '/api/v1/workspace') return { ok: true, json: async () => ({ data: firstWorkspace }) }
+      if (url === '/api/v1/tasks/child/completion' && options?.method === 'PATCH') return { ok: false, json: async () => ({ message: 'O Todoist não confirmou a alteração da tarefa. Tente novamente.' }) }
+      throw new Error(`Unexpected request ${url}`)
+    })
+    vi.stubGlobal('fetch', fetch)
+    window.fetch = fetch as unknown as typeof window.fetch
+    vi.stubGlobal('EventSource', FakeEventSource)
+
+    const wrapper = mount(App, { attachTo: document.body, global: { plugins: [createPinia()], stubs: { AccountPanel: true, CalendarPanel: true, HistoryPanel: true, TodoistSetup: true, AuthGate: true } } })
+    await flushPromises()
+    wrapper.get('.task-row[data-task-id="child"]').element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 120, clientY: 180 }))
+    await wrapper.vm.$nextTick()
+    document.querySelector<HTMLButtonElement>('.task-context-menu button')?.click()
+    await flushPromises()
+
+    expect(document.querySelector('.task-context-menu')).toBeNull()
+    expect(wrapper.get('.toast').text()).toContain('O Todoist não confirmou a alteração da tarefa.')
     wrapper.unmount()
   })
 

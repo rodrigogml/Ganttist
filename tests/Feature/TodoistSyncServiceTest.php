@@ -7,6 +7,7 @@ use App\Jobs\ProcessTodoistEvent;
 use App\Models\User;
 use App\Services\TodoistSyncService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
@@ -143,8 +144,9 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertSame('new-refresh-token', decrypt($integration->refresh_token_encrypted));
         self::assertNotNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
         // The snapshot is a four-request pool (project metadata, tasks, sections and collaborators),
-        // retried once after refreshing the expired access token, followed by completed-task history.
-        Http::assertSentCount(10);
+        // retried once after refreshing the expired access token, followed by completed-task history
+        // and the single incremental-sync request that establishes the next sync token.
+        Http::assertSentCount(11);
     }
 
     public function test_rate_limit_keeps_event_pending_and_marks_sync_as_degraded(): void
@@ -158,7 +160,7 @@ final class TodoistSyncServiceTest extends TestCase
         self::assertNull(DB::table('todoist_events')->where('id', $eventId)->value('processed_at'));
     }
 
-    public function test_sync_derives_parent_dates_from_planned_descendants_and_audits_the_write(): void
+    public function test_sync_never_writes_derived_dates_to_parent_tasks_by_default(): void
     {
         $user = User::factory()->create();
         $projectId = (string) Str::ulid();
@@ -217,11 +219,153 @@ final class TodoistSyncServiceTest extends TestCase
         app()->instance(TodoistGateway::class, $gateway);
 
         self::assertSame(['synced' => 1, 'failed' => 0], app(TodoistSyncService::class)->syncActiveProjects());
-        self::assertSame([['taskId' => 'parent', 'start' => '2026-08-17', 'deadline' => '2026-08-19']], $gateway->updates);
-        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'group.dates.derived']);
+        self::assertSame([], $gateway->updates);
+        self::assertDatabaseMissing('audit_events', ['gantt_project_id' => $projectId, 'action' => 'group.dates.derived']);
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'todoist.snapshot.reconciled', 'origin' => 'scheduler']);
         self::assertSame(['synced' => 1, 'failed' => 0], app(TodoistSyncService::class)->syncActiveProjects());
         self::assertSame(1, DB::table('audit_events')->where('gantt_project_id', $projectId)->where('action', 'todoist.snapshot.reconciled')->count());
+    }
+
+    public function test_enabled_automation_clears_dates_from_parent_tasks_without_setting_derived_values(): void
+    {
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'project-parent-clear', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('project_settings')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'clearParentTaskDates' => true, 'created_at' => now(), 'updated_at' => now()]);
+        $gateway = new class implements TodoistGateway
+        {
+            public array $dateUpdates = [];
+
+            public array $taskUpdates = [];
+
+            public function projects(string $accessToken): array
+            {
+                return [];
+            }
+
+            public function projectSnapshot(string $accessToken, string $projectId): array
+            {
+                return ['tasks' => ['results' => [
+                    ['id' => 'parent', 'content' => 'Grupo', 'is_completed' => false, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19'],
+                    ['id' => 'child', 'content' => 'Filha', 'parent_id' => 'parent', 'is_completed' => false, 'due' => ['date' => '2026-08-18'], 'deadline_date' => null],
+                ]]];
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
+            {
+                $this->dateUpdates[] = compact('taskId', 'start', 'deadline');
+
+                return [];
+            }
+
+            public function updateTask(string $accessToken, string $taskId, array $attributes): array
+            {
+                $this->taskUpdates[] = compact('taskId', 'attributes');
+
+                return [];
+            }
+
+            public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void {}
+
+            public function createTask(string $accessToken, array $attributes): array
+            {
+                return [];
+            }
+
+            public function deleteTask(string $accessToken, string $taskId): void {}
+        };
+        app()->instance(TodoistGateway::class, $gateway);
+
+        self::assertSame(1, app(TodoistSyncService::class)->applyProjectAutomations($projectId));
+        self::assertSame([], $gateway->dateUpdates);
+        self::assertSame([['taskId' => 'parent', 'attributes' => ['due_string' => 'no date', 'deadline_date' => null]]], $gateway->taskUpdates);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'subject_id' => 'parent', 'action' => 'parent_task.dates.cleared', 'origin' => 'worker']);
+    }
+
+    public function test_enabled_automation_moves_a_blocked_leaf_to_its_unlock_date(): void
+    {
+        Carbon::setTestNow('2026-08-24 12:00:00');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'project-automation', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('project_settings')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'autoScheduleBlockedTasks' => true, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('task_dependencies')->insert(['id' => (string) Str::ulid(), 'gantt_project_id' => $projectId, 'predecessor_todoist_task_id' => 'predecessor', 'successor_todoist_task_id' => 'blocked', 'type' => 'FS', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        $gateway = new class implements TodoistGateway
+        {
+            public array $updates = [];
+
+            public function projects(string $accessToken): array
+            {
+                return [];
+            }
+
+            public function projectSnapshot(string $accessToken, string $projectId): array
+            {
+                return ['tasks' => ['results' => [
+                    ['id' => 'predecessor', 'content' => 'Predecessora', 'is_completed' => false, 'due' => ['date' => '2026-08-24'], 'deadline_date' => '2026-08-25'],
+                    ['id' => 'blocked', 'content' => 'Bloqueada', 'is_completed' => false, 'due' => ['date' => '2026-08-20'], 'deadline_date' => '2026-08-22'],
+                ]]];
+            }
+
+            public function comments(string $accessToken, string $taskId): array
+            {
+                return ['results' => []];
+            }
+
+            public function createComment(string $accessToken, string $taskId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateComment(string $accessToken, string $commentId, string $content): array
+            {
+                return [];
+            }
+
+            public function updateTaskDates(string $accessToken, string $taskId, string $start, ?string $deadline): array
+            {
+                $this->updates[] = compact('taskId', 'start', 'deadline');
+
+                return [];
+            }
+
+            public function updateTask(string $accessToken, string $taskId, array $attributes): array
+            {
+                return [];
+            }
+
+            public function setTaskCompletion(string $accessToken, string $taskId, bool $completed): void {}
+
+            public function createTask(string $accessToken, array $attributes): array
+            {
+                return [];
+            }
+
+            public function deleteTask(string $accessToken, string $taskId): void {}
+        };
+        app()->instance(TodoistGateway::class, $gateway);
+
+        self::assertSame(1, app(TodoistSyncService::class)->applyProjectAutomations($projectId));
+        self::assertSame([['taskId' => 'blocked', 'start' => '2026-08-26', 'deadline' => '2026-08-26']], $gateway->updates);
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'subject_id' => 'blocked', 'action' => 'blocked_task.start.automated', 'origin' => 'worker']);
+        Carbon::setTestNow();
     }
 
     /** @return array{User, string} */

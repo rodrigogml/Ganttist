@@ -4,9 +4,10 @@ declare(strict_types=1);
 
 namespace App\Infrastructure\Todoist;
 
+use App\Contracts\IncrementalTodoistGateway;
 use App\Contracts\TodoistGateway;
 
-final class FakeTodoistGateway implements TodoistGateway
+final class FakeTodoistGateway implements IncrementalTodoistGateway, TodoistGateway
 {
     public function projects(string $accessToken): array
     {
@@ -20,6 +21,11 @@ final class FakeTodoistGateway implements TodoistGateway
             ['id' => 'fake-task-1', 'content' => 'Preparar primeira entrega', 'description' => 'Conferir o escopo acordado com o cliente.', 'parent_id' => 'fake-group', 'section_id' => 'fake-section', 'is_completed' => true, 'priority' => 2, 'due' => ['date' => '2026-08-17'], 'deadline_date' => '2026-08-19', 'note_count' => 2],
             ['id' => 'fake-task-2', 'content' => 'Validar resultado', 'description' => '', 'parent_id' => null, 'section_id' => 'fake-section', 'is_completed' => false, 'priority' => 1, 'due' => null, 'deadline_date' => null],
         ]]];
+    }
+
+    public function incrementalSync(string $accessToken, string $syncToken): array
+    {
+        return ['sync_token' => 'fake-sync-token', 'full_sync' => $syncToken === '*', 'projects' => [], 'items' => [], 'sections' => [], 'collaborators' => []];
     }
 
     public function comments(string $accessToken, string $taskId): array

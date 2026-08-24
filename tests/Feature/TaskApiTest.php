@@ -6,6 +6,7 @@ use App\Models\User;
 use App\Services\TodoistSnapshotStore;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
 use Tests\TestCase;
 
@@ -134,5 +135,40 @@ final class TaskApiTest extends TestCase
         $this->actingAs($user)->putJson('/api/v1/tasks/fake-task-1/completion-date', ['completionDate' => '2026-08-18', 'commandId' => 'completion-override'])->assertOk()->assertJsonPath('data.overridden', true);
         self::assertDatabaseHas('task_metadata', ['gantt_project_id' => $projectId, 'todoist_task_id' => 'fake-task-1', 'completion_date_override' => '2026-08-18']);
         self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.completion_date_overridden', 'causation_id' => 'completion-override']);
+    }
+
+    public function test_task_completion_is_written_to_todoist_from_the_cached_workspace(): void
+    {
+        config()->set('services.todoist.driver', 'fake');
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('fake'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'fake-project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, ['tasks' => ['results' => [['id' => 'fake-task-2', 'content' => 'Tarefa aberta', 'is_completed' => false]]]]);
+
+        $this->actingAs($user)->patchJson('/api/v1/tasks/fake-task-2/completion', ['completed' => true, 'commandId' => 'complete-from-context'])
+            ->assertOk()
+            ->assertJsonPath('data.completed', true)
+            ->assertJsonPath('data.unchanged', false);
+        self::assertTrue((bool) (app(TodoistSnapshotStore::class)->get($projectId)['tasks']['results'][0]['is_completed'] ?? false));
+        self::assertDatabaseHas('audit_events', ['gantt_project_id' => $projectId, 'action' => 'task.completion_updated', 'causation_id' => 'complete-from-context']);
+    }
+
+    public function test_task_completion_returns_a_controlled_error_when_todoist_rejects_it(): void
+    {
+        $user = User::factory()->create();
+        $projectId = (string) Str::ulid();
+        DB::table('todoist_integrations')->insert(['id' => (string) Str::ulid(), 'user_id' => $user->id, 'access_token_encrypted' => encrypt('token'), 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('gantt_projects')->insert(['id' => $projectId, 'user_id' => $user->id, 'todoist_project_id' => 'project', 'display_name' => 'Projeto', 'status' => 'active', 'created_at' => now(), 'updated_at' => now()]);
+        app(TodoistSnapshotStore::class)->put($projectId, ['tasks' => ['results' => [['id' => 'task', 'content' => 'Tarefa aberta', 'is_completed' => false]]]]);
+        Http::fake(['*/sync' => Http::response([
+            'error' => 'Bad Request',
+            'error_extra' => ['retry_after' => 7],
+        ], 400)]);
+
+        $this->actingAs($user)->patchJson('/api/v1/tasks/task/completion', ['completed' => true, 'commandId' => 'completion-rejected'])
+            ->assertStatus(503)
+            ->assertJsonPath('message', 'O Todoist pediu para tentar novamente em 7 segundos.');
+        Http::assertSentCount(1);
     }
 }

@@ -2,7 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
-import type { Task, TaskStatus, Workspace } from '../types'
+import type { Dependency, Task, TaskStatus, Workspace } from '../types'
 
 export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late', 'blocked', 'completed']
 export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late']
@@ -100,5 +100,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     workspace.value.tasks = workspace.value.tasks.map(current => current.id === task.id ? task : current)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, statusFilters, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, updateTask }
+  function addDependency(dependency: Dependency): void {
+    if (!workspace.value || workspace.value.dependencies.some(current => current.id === dependency.id)) return
+    workspace.value.dependencies = [...workspace.value.dependencies, dependency]
+  }
+
+  return { workspace, loading, refreshing, stale, error, search, statusFilters, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, updateTask, addDependency }
 })
