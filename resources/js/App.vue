@@ -567,6 +567,12 @@ const visualStart = (task: Task) => visualDates(task).start;
 const visualFinish = (task: Task) => visualDates(task).finish;
 const width = (task: Task) =>
     barWidth(visualDates(task).start, visualDates(task).finish, dayWidth.value);
+const hasTimelineMark = (task: Task) =>
+    task.kind !== "section" ||
+    Boolean(
+        civilDate(task.considered_start) &&
+            civilDate(task.considered_deadline),
+    );
 const canDragTask = (task: Task) =>
     task.kind === "task" &&
     !task.completed &&
@@ -3624,7 +3630,7 @@ function statusLabel(s: string) {
                                     :aria-label="`${gesturePreviewFor(task)?.kind === 'move' ? 'Movendo' : 'Redimensionando'} ${task.title}: ${gesturePreviewFor(task)?.previewStart} até ${gesturePreviewFor(task)?.previewFinish}`"
                                 ></div>
                                 <div
-                                    v-else
+                                    v-else-if="hasTimelineMark(task)"
                                     class="task-bar"
                                     :class="[
                                         task.kind,

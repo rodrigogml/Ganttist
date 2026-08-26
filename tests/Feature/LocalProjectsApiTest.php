@@ -92,6 +92,26 @@ final class LocalProjectsApiTest extends TestCase
             ->assertJsonPath('data.tasks.2.considered_start', '2026-09-10');
     }
 
+    public function test_workspace_derives_section_ranges_from_all_descendant_tasks_and_leaves_empty_sections_undated(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'section-ranges'])->json('data.id');
+        $parent = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Planejamento'])->json('data.id');
+        $child = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Entrega', 'parentSectionId' => $parent])->json('data.id');
+        $empty = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Vazia'])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Início', 'sectionId' => $parent, 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-08'])->assertCreated();
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Fim', 'sectionId' => $child, 'plannedStart' => '2026-09-14', 'plannedFinish' => '2026-09-16'])->assertCreated();
+
+        $tasks = $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->json('data.tasks');
+        $byId = collect($tasks)->keyBy('id');
+        $this->assertSame('2026-09-07', $byId[$parent]['considered_start']);
+        $this->assertSame('2026-09-16', $byId[$parent]['considered_deadline']);
+        $this->assertSame('2026-09-14', $byId[$child]['considered_start']);
+        $this->assertSame('2026-09-16', $byId[$child]['considered_deadline']);
+        $this->assertArrayNotHasKey('considered_start', $byId[$empty]);
+        $this->assertArrayNotHasKey('considered_deadline', $byId[$empty]);
+    }
+
     public function test_section_can_be_moved_to_root_and_workspace_keeps_groups_together(): void
     {
         $user = User::factory()->create();

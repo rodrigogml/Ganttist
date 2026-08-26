@@ -112,6 +112,32 @@ final class ProjectController
             }
         };
         $appendChildren(null);
+        $sectionParents = $sections->pluck('parent_section_id', 'id')->all();
+        foreach ($rows as &$row) {
+            if ($row['kind'] !== 'section') {
+                continue;
+            }
+            $starts = [];
+            $deadlines = [];
+            foreach ($tasks as $task) {
+                $ancestorId = $task->section_id;
+                while ($ancestorId) {
+                    if ($ancestorId === $row['id']) {
+                        $projection = $projections[$task->id];
+                        $starts[] = $projection->consideredStart->format('Y-m-d');
+                        $deadlines[] = $projection->consideredDeadline->format('Y-m-d');
+                        break;
+                    }
+                    $ancestorId = $sectionParents[$ancestorId] ?? null;
+                }
+            }
+            if ($starts !== []) {
+                $row['considered_start'] = min($starts);
+                $row['considered_deadline'] = max($deadlines);
+                $row['derived'] = true;
+            }
+        }
+        unset($row);
         $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_task_id, 'to' => $edge->successor_task_id, 'type' => $edge->type, 'critical' => false]);
         $people = DB::table('project_people')->where('project_id', $projectId)->orderBy('name')->get(['id', 'name', 'email']);
         $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
