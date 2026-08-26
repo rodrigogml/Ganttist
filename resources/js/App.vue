@@ -32,6 +32,7 @@ import {
     shiftCivilDate,
 } from "./utils/timeblock-gesture";
 import { dependencyPath } from "./utils/dependency-path";
+import { dependencyHighlight } from "./utils/dependency-highlight";
 const store = useWorkspaceStore();
 const auth = useAuthStore();
 const appearance = ref(false),
@@ -705,6 +706,12 @@ const hoveredAncestorIds = computed(
         ),
 );
 const isHoveredAncestor = (task: Task) => hoveredAncestorIds.value.has(task.id);
+const hoveredDependencyHighlight = computed(() =>
+    dependencyHighlight(
+        store.workspace?.dependencies ?? [],
+        hoveredTaskId.value,
+    ),
+);
 type TreeSegment = "up" | "right" | "down";
 const activeTreeRoute = computed(() => {
     const route = new Map<string, Map<number, Set<TreeSegment>>>(),
@@ -3149,13 +3156,38 @@ function statusLabel(s: string) {
                                     >
                                         <path d="M0 0 L6 3 L0 6Z" />
                                     </marker>
+                                    <marker
+                                        id="arrow-highlight"
+                                        markerUnits="userSpaceOnUse"
+                                        markerWidth="8"
+                                        markerHeight="8"
+                                        refX="7"
+                                        refY="4"
+                                        orient="auto"
+                                    >
+                                        <path d="M0 0 L8 4 L0 8Z" />
+                                    </marker>
                                 </defs>
                                 <path
                                     v-for="dep in store.workspace?.dependencies"
                                     :key="dep.id"
                                     :d="pathFor(dep)"
-                                    :class="{ critical: dep.critical }"
-                                    marker-end="url(#arrow)"
+                                    :class="{
+                                        critical: dep.critical,
+                                        'dependency-highlighted':
+                                            hoveredDependencyHighlight.dependencyIds.has(
+                                                dep.id,
+                                            ),
+                                    }"
+                                    :marker-end="
+                                        hoveredDependencyHighlight.dependencyIds.has(
+                                            dep.id,
+                                        )
+                                            ? 'url(#arrow-highlight)'
+                                            : dep.critical
+                                              ? 'url(#arrow-critical)'
+                                              : 'url(#arrow)'
+                                    "
                                 />
                             </svg>
                             <svg
@@ -3651,6 +3683,10 @@ function statusLabel(s: string) {
                                             'controls-visible':
                                                 cursorTaskId === task.id ||
                                                 gestureMode === 'connect',
+                                            'dependency-highlighted':
+                                                hoveredDependencyHighlight.taskIds.has(
+                                                    task.id,
+                                                ),
                                         },
                                     ]"
                                     :style="{

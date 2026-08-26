@@ -602,6 +602,24 @@ body.resizing-task-column * {
   box-shadow: none;
 }
 
+.dependencies path.dependency-highlighted {
+  stroke: #252b36;
+  stroke-width: 3;
+  marker-end: url(#arrow-highlight);
+}
+
+.dependencies path.critical.dependency-highlighted {
+  marker-end: url(#arrow-highlight);
+}
+
+#arrow-highlight path {
+  fill: #252b36;
+}
+
+.task-bar.dependency-highlighted:not(.summary) {
+  border: 3px solid #252b36;
+}
+
 .task-bar.drag-ghost {
   z-index: 8;
   cursor: grabbing;
