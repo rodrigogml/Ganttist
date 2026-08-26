@@ -2,7 +2,12 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Scheduling\Dependency;
+use App\Domain\Scheduling\TaskProjectionCalculator;
+use App\Domain\Scheduling\TaskProjectionInput;
+use App\Domain\Scheduling\WorkCalendar;
 use App\Mail\ProjectInvitation;
+use DateTimeImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -54,6 +59,23 @@ final class ProjectController
         $project = DB::table('projects')->where('id', $projectId)->firstOrFail();
         $sections = DB::table('project_sections')->where('project_id', $projectId)->orderBy('position')->get();
         $tasks = DB::table('project_tasks')->leftJoin('project_people', 'project_people.id', '=', 'project_tasks.assignee_person_id')->where('project_tasks.project_id', $projectId)->orderBy('project_tasks.position')->get(['project_tasks.*', 'project_people.name as assignee']);
+        $dependencyRows = DB::table('project_task_dependencies')->where('project_id', $projectId)->get();
+        $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
+        $projections = (new TaskProjectionCalculator(new WorkCalendar))->calculate(
+            $tasks->map(fn (object $task): TaskProjectionInput => new TaskProjectionInput(
+                $task->id,
+                $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
+                $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
+                $task->completed_at !== null,
+                $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
+            ))->all(),
+            $dependencyRows->map(fn (object $edge): Dependency => new Dependency(
+                $edge->predecessor_task_id,
+                $edge->successor_task_id,
+                $edge->type,
+            ))->all(),
+            $today,
+        );
         $rows = [];
         $sectionLevels = [];
         $levelFor = function (object $section) use (&$levelFor, &$sectionLevels, $sections): int {
@@ -67,7 +89,6 @@ final class ProjectController
 
             return $sectionLevels[$section->id] = $parent ? $levelFor($parent) + 1 : 0;
         };
-        $incompletePredecessors = DB::table('project_task_dependencies')->join('project_tasks as predecessor', 'predecessor.id', '=', 'project_task_dependencies.predecessor_task_id')->where('project_task_dependencies.project_id', $projectId)->whereNull('predecessor.completed_at')->pluck('project_task_dependencies.successor_task_id')->all();
         $childrenByParent = collect();
         foreach ($sections as $section) {
             $childrenByParent->push((object) ['kind' => 'section', 'item' => $section, 'parent_id' => $section->parent_section_id, 'position' => $section->position]);
@@ -77,7 +98,7 @@ final class ProjectController
         }
         $childrenByParent = $childrenByParent->groupBy(fn (object $child): string => $child->parent_id ?? '__root__')->map(fn ($children) => $children->sortBy('position')->values());
         $appendChildren = null;
-        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $incompletePredecessors): void {
+        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections): void {
             foreach ($childrenByParent->get($parentId ?? '__root__', collect()) as $child) {
                 if ($child->kind === 'section') {
                     $section = $child->item;
@@ -86,14 +107,29 @@ final class ProjectController
                     continue;
                 }
                 $task = $child->item;
-                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $this->status($task, $incompletePredecessors), 'critical' => false, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee];
+                $projection = $projections[$task->id];
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => false, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee];
             }
         };
         $appendChildren(null);
-        $dependencies = DB::table('project_task_dependencies')->where('project_id', $projectId)->get()->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_task_id, 'to' => $edge->successor_task_id, 'type' => $edge->type, 'critical' => false]);
+        $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_task_id, 'to' => $edge->successor_task_id, 'type' => $edge->type, 'critical' => false]);
         $people = DB::table('project_people')->where('project_id', $projectId)->orderBy('name')->get(['id', 'name', 'email']);
+        $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
+        $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['completed']));
+        $statusCount = fn (string $status): int => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === $status));
+        $stats = [
+            'progress' => $leafTasks === [] ? 0 : (int) round($completed / count($leafTasks) * 100),
+            'completed' => $completed,
+            'total' => count($leafTasks),
+            'critical' => 0,
+            'opened' => $statusCount('opened'),
+            'blocked' => $statusCount('blocked'),
+            'scheduled' => $statusCount('scheduled'),
+            'late' => $statusCount('late'),
+            'without_dates' => count(array_filter($leafTasks, fn (array $task): bool => $task['start'] === null && $task['finish'] === null)),
+        ];
 
-        return response()->json(['data' => ['project' => ['id' => $project->id, 'name' => $project->name, 'source' => 'Local', 'sync_status' => 'local', 'updated_at' => $project->updated_at, 'role' => $member->role], 'tasks' => $rows, 'people' => $people, 'dependencies' => $dependencies, 'stats' => $this->summary((object) [...(array) $project, 'role' => $member->role])]]);
+        return response()->json(['data' => ['project' => ['id' => $project->id, 'name' => $project->name, 'source' => 'Local', 'sync_status' => 'local', 'updated_at' => $project->updated_at, 'role' => $member->role], 'tasks' => $rows, 'people' => $people, 'dependencies' => $dependencies, 'stats' => $stats]]);
     }
 
     public function createSection(Request $request, string $projectId): JsonResponse

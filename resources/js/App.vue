@@ -4000,9 +4000,9 @@ function statusLabel(s: string) {
                                 todayCivil()
                             }}</b>
                         </div>
-                        <div v-if="activeTask.unlock_date">
-                            <small>DATA DE DESBLOQUEIO</small
-                            ><b>{{ activeTask.unlock_date }}</b>
+                        <div>
+                            <small>DATA DE DESBLOQUEIO CONSIDERADA</small
+                            ><b>{{ activeTask.unlock_date || "—" }}</b>
                         </div>
                         <p>
                             Status calculado a partir do planejamento, das dependências e da conclusão.

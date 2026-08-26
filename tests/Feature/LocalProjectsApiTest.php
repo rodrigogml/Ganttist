@@ -71,7 +71,25 @@ final class LocalProjectsApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.tasks.1.level', 1)
             ->assertJsonPath('data.stats.total', 2)
-            ->assertJsonPath('data.stats.late', 1);
+            ->assertJsonPath('data.tasks.3.status', 'blocked');
+    }
+
+    public function test_workspace_projects_open_fs_predecessors_into_successive_unlock_dates(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'unlock-projection'])->json('data.id');
+        $first = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Primeira', 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-08'])->json('data.id');
+        $second = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Segunda'])->json('data.id');
+        $third = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Terceira'])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $first, 'to' => $second, 'type' => 'FS'])->assertCreated();
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $second, 'to' => $third, 'type' => 'FS'])->assertCreated();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.1.unlock_date', '2026-09-09')
+            ->assertJsonPath('data.tasks.1.considered_start', '2026-09-09')
+            ->assertJsonPath('data.tasks.2.unlock_date', '2026-09-10')
+            ->assertJsonPath('data.tasks.2.considered_start', '2026-09-10');
     }
 
     public function test_section_can_be_moved_to_root_and_workspace_keeps_groups_together(): void
