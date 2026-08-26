@@ -4,6 +4,7 @@ import AuthGate from "./AuthGate.vue";
 import AccountPanel from "./AccountPanel.vue";
 import ProjectMembersPanel from "./ProjectMembersPanel.vue";
 import ProjectDashboard from "./ProjectDashboard.vue";
+import ProjectItemCreateDialog from "./ProjectItemCreateDialog.vue";
 import { useAuthStore } from "./stores/auth";
 import {
     unblockedTaskStatuses,
@@ -144,11 +145,8 @@ const drawer = ref(false),
     projectMenu = ref(false),
     projectLoading = ref(false),
     projects = ref<{ id: string; name: string }[]>([]),
-    creating = ref(false),
-    newTaskTitle = ref(""),
-    newItemKind = ref<"task" | "section">("task"),
-    newTaskSectionId = ref<string | null>(null),
-    newSectionParentId = ref<string | null>(null),
+    creationMenu = ref(false),
+    creationDialogKind = ref<"task" | "section" | null>(null),
     deleting = ref(false),
     preserveContinuity = ref(true),
     deletionPreview = ref<{
@@ -163,6 +161,8 @@ const drawer = ref(false),
     timelineViewport = ref(1000),
     viewportHeight = ref(620),
     timelineElement = ref<HTMLElement | null>(null),
+    creationMenuElement = ref<HTMLElement | null>(null),
+    creationTrigger = ref<HTMLElement | null>(null),
     ganttHeadLeft = ref<HTMLElement | null>(null),
     ganttCard = ref<HTMLElement | null>(null),
     hoveredTaskId = ref<string | null>(null),
@@ -807,6 +807,22 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         taskContextMenu.value = null;
     if (appearance.value && !appearanceWrap.value?.contains(target))
         appearance.value = false;
+    if (
+        creationMenu.value &&
+        !creationMenuElement.value?.contains(target) &&
+        !creationTrigger.value?.contains(target)
+    )
+        creationMenu.value = false;
+}
+function openCreationDialog(kind: "task" | "section") {
+    creationMenu.value = false;
+    creationDialogKind.value = kind;
+}
+async function handleProjectItemCreated(kind: "task" | "section") {
+    creationDialogKind.value = null;
+    await store.load();
+    showToast(kind === "task" ? "Tarefa criada" : "Seção criada", "success");
+    setTimeout(() => (toast.value = ""), 3500);
 }
 function focusTaskSearchFromShortcut(event: KeyboardEvent) {
     if (
@@ -1776,7 +1792,7 @@ async function commitDateGesture() {
     const projectId = store.workspace?.project.id;
     if (!task || !projectId) return finishGestureState();
     const body = {
-        plannedStart: gesture.kind === "resize" && gesture.edge === "end" ? task.start : gesture.previewStart,
+        plannedStart: gesture.kind === "resize" && gesture.edge === "finish" ? task.start : gesture.previewStart,
         plannedFinish: gesture.kind === "resize" && gesture.edge === "start" ? task.finish : gesture.previewFinish,
     };
     try {
@@ -2129,62 +2145,6 @@ async function publishCommentEdit() {
         setTimeout(() => (toast.value = ""), 4000);
     }
 }
-async function createTask() {
-    const projectId = store.workspace?.project.id;
-    if (!newTaskTitle.value.trim() || !projectId) return;
-    creating.value = true;
-    try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-                ...csrfHeaders(),
-            },
-            body: JSON.stringify({
-                title: newTaskTitle.value.trim(),
-                sectionId: newTaskSectionId.value,
-            }),
-        });
-        if (!response.ok) throw new Error("Não foi possível criar a tarefa.");
-        newTaskTitle.value = "";
-        newTaskSectionId.value = null;
-        creating.value = false;
-        await store.load();
-        showToast("Tarefa criada", "success");
-    } catch (error) {
-        creating.value = false;
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível criar a tarefa.",
-            "error",
-        );
-    }
-    setTimeout(() => (toast.value = ""), 3500);
-}
-async function createSection() {
-    const projectId = store.workspace?.project.id;
-    if (!newTaskTitle.value.trim() || !projectId) return;
-    creating.value = true;
-    try {
-        const response = await fetch(`/api/v1/projects/${projectId}/sections`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
-            body: JSON.stringify({ name: newTaskTitle.value.trim(), parentSectionId: newSectionParentId.value }),
-        });
-        if (!response.ok) throw new Error(await responseError(response, "Não foi possível criar a seção."));
-        newTaskTitle.value = "";
-        newSectionParentId.value = null;
-        await store.load();
-        showToast("Seção criada", "success");
-    } catch (error) {
-        showToast(error instanceof Error ? error.message : "Não foi possível criar a seção.", "error");
-    } finally {
-        creating.value = false;
-        setTimeout(() => (toast.value = ""), 3500);
-    }
-}
 async function previewDeletion() {
     if (!activeTask.value || activeTask.value.kind !== "task") return;
     const taskId = activeTask.value.id;
@@ -2344,7 +2304,7 @@ function statusLabel(s: string) {
                         :aria-selected="
                             project.id === store.workspace?.project.id
                         "
-                        @click="switchProject(project)"
+                        @click="() => switchProject(project)"
                     >
                         {{ project.name }}
                     </button>
@@ -2417,7 +2377,7 @@ function statusLabel(s: string) {
         </main>
         <main v-else-if="store.error" class="loading">
             <p>{{ store.error }}</p>
-            <button class="primary" @click="store.load">
+            <button class="primary" @click="() => store.load()">
                 Tentar novamente
             </button>
         </main>
@@ -2482,41 +2442,12 @@ function statusLabel(s: string) {
                             activeFilterFieldCount
                         }}</span>
                     </button>
-                    <button class="soft-btn" @click="creating = !creating">
-                        ＋ Tarefa
-                    </button>
+                    <div class="creation-control">
+                        <button ref="creationTrigger" class="primary create-item-trigger" :aria-expanded="creationMenu" aria-haspopup="menu" aria-label="Criar item" title="Criar tarefa ou seção" @click="creationMenu = !creationMenu">+</button>
+                        <div v-if="creationMenu" ref="creationMenuElement" class="creation-menu" role="menu" aria-label="Criar item"><button role="menuitem" @click="openCreationDialog('task')"><b>＋</b><span><strong>Tarefa</strong><small>Uma atividade do projeto</small></span></button><button role="menuitem" @click="openCreationDialog('section')"><b>▤</b><span><strong>Seção</strong><small>Um agrupamento hierárquico</small></span></button></div>
+                    </div>
                 </div>
             </section>
-
-            <div
-                v-if="creating"
-                class="create-task"
-                role="region"
-                aria-label="Criar tarefa"
-            >
-                <input
-                    v-model="newTaskTitle"
-                    :placeholder="newItemKind === 'task' ? 'Nome da nova tarefa' : 'Nome da nova seção'"
-                    @keyup.enter="newItemKind === 'task' ? createTask() : createSection()"
-                /><select v-model="newItemKind" aria-label="Tipo de item">
-                    <option value="task">Tarefa</option>
-                    <option value="section">Seção</option>
-                </select><select v-if="newItemKind === 'task'" v-model="newTaskSectionId" aria-label="Local da tarefa">
-                    <option :value="null">Na raiz do projeto</option>
-                    <option v-for="section in store.workspace?.tasks.filter(item => item.kind === 'section') ?? []" :key="section.id" :value="section.id">{{ '— '.repeat(section.level) }}{{ section.title }}</option>
-                </select><select v-else v-model="newSectionParentId" aria-label="Seção-pai">
-                    <option :value="null">Na raiz do projeto</option>
-                    <option v-for="section in store.workspace?.tasks.filter(item => item.kind === 'section') ?? []" :key="section.id" :value="section.id">{{ '— '.repeat(section.level) }}{{ section.title }}</option>
-                </select><button class="soft-btn" @click="creating = false">
-                    Cancelar</button
-                ><button
-                    class="primary"
-                    :disabled="creating && !newTaskTitle.trim()"
-                    @click="newItemKind === 'task' ? createTask() : createSection()"
-                >
-                    {{ newItemKind === 'task' ? 'Criar tarefa' : 'Criar seção' }}
-                </button>
-            </div>
             <div v-if="store.stale" class="workspace-state" role="status">
                 <span
                     >Exibindo o último estado conhecido; a atualização remota
@@ -2524,7 +2455,7 @@ function statusLabel(s: string) {
                 ><button
                     class="soft-btn"
                     :disabled="store.refreshing"
-                    @click="store.load"
+                    @click="() => store.load()"
                 >
                     {{ store.refreshing ? "Atualizando…" : "Tentar novamente" }}
                 </button>
@@ -4425,5 +4356,14 @@ function statusLabel(s: string) {
         @close="calendarPanel = false"
         @people-changed="store.load()"
         @deleted="calendarPanel = false; store.clearWorkspace()"
+    />
+    <ProjectItemCreateDialog
+        v-if="creationDialogKind && store.workspace"
+        :project-id="store.workspace.project.id"
+        :kind="creationDialogKind"
+        :items="store.workspace.tasks"
+        :people="store.workspace.people ?? []"
+        @close="creationDialogKind = null"
+        @created="handleProjectItemCreated"
     />
 </template>

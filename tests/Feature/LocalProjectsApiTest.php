@@ -142,4 +142,19 @@ final class LocalProjectsApiTest extends TestCase
         $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['actualCompletionDate' => '2026-08-20'])->assertOk();
         $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->assertJsonPath('data.tasks.0.effective_completion', '2026-08-20')->assertJsonPath('data.tasks.0.status', 'completed');
     }
+
+    public function test_task_creation_accepts_all_local_task_fields(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'task-fields'])->json('data.id');
+        $person = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/people", ['name' => 'Ana'])->json('data.id');
+        $section = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Planejamento'])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Entrega', 'description' => 'Detalhes', 'sectionId' => $section, 'assigneePersonId' => $person, 'plannedStart' => '2026-08-26', 'plannedFinish' => '2026-08-28', 'actualCompletionDate' => '2026-08-28'])->assertCreated();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.1.description', 'Detalhes')
+            ->assertJsonPath('data.tasks.1.assignee_id', $person)
+            ->assertJsonPath('data.tasks.1.effective_completion', '2026-08-28');
+    }
 }

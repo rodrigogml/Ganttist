@@ -96,7 +96,7 @@ final class ProjectController
     public function createTask(Request $request, string $projectId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'description' => ['nullable', 'string'], 'sectionId' => ['nullable', 'string'], 'assigneePersonId' => ['nullable', 'string'], 'plannedStart' => ['nullable', 'date'], 'plannedFinish' => ['nullable', 'date', 'after_or_equal:plannedStart']]);
+        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'description' => ['nullable', 'string'], 'sectionId' => ['nullable', 'string'], 'assigneePersonId' => ['nullable', 'string'], 'plannedStart' => ['nullable', 'date'], 'plannedFinish' => ['nullable', 'date', 'after_or_equal:plannedStart'], 'actualCompletionDate' => ['nullable', 'date']]);
         if (! empty($data['sectionId'])) {
             abort_unless(DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists(), 422, 'Seção inválida.');
         }
@@ -104,7 +104,7 @@ final class ProjectController
             abort_unless(DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->exists(), 422, 'Responsável inválido.');
         }
         $id = (string) Str::ulid();
-        DB::table('project_tasks')->insert(['id' => $id, 'project_id' => $projectId, 'section_id' => $data['sectionId'] ?? null, 'assignee_person_id' => $data['assigneePersonId'] ?? null, 'title' => trim($data['title']), 'description' => $data['description'] ?? null, 'planned_start' => $data['plannedStart'] ?? null, 'planned_finish' => $data['plannedFinish'] ?? null, 'position' => 0, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('project_tasks')->insert(['id' => $id, 'project_id' => $projectId, 'section_id' => $data['sectionId'] ?? null, 'assignee_person_id' => $data['assigneePersonId'] ?? null, 'title' => trim($data['title']), 'description' => $data['description'] ?? null, 'planned_start' => $data['plannedStart'] ?? null, 'planned_finish' => $data['plannedFinish'] ?? null, 'completed_at' => $data['actualCompletionDate'] ?? null, 'position' => 0, 'created_at' => now(), 'updated_at' => now()]);
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $id]], 201);
