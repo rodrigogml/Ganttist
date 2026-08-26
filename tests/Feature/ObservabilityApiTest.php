@@ -2,9 +2,9 @@
 
 namespace Tests\Feature;
 
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Str;
 use Tests\TestCase;
 
 final class ObservabilityApiTest extends TestCase
@@ -13,12 +13,11 @@ final class ObservabilityApiTest extends TestCase
 
     public function test_health_readiness_and_metrics_report_non_sensitive_operational_state(): void
     {
-        DB::table('sync_operations')->insert(['id' => (string) Str::ulid(), 'command_id' => 'pending-command', 'operation' => 'recalculation.apply', 'state' => 'pending', 'payload' => '{}', 'created_at' => now()->subMinutes(16), 'updated_at' => now()]);
-        DB::table('todoist_events')->insert(['id' => (string) Str::ulid(), 'external_event_id' => 'event-pending', 'event_type' => 'item:updated', 'payload' => '{}', 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('projects')->insert(['id' => (string) \Str::ulid(), 'owner_user_id' => User::factory()->create()->id, 'name' => 'Produto', 'creation_command_id' => 'metrics', 'created_at' => now(), 'updated_at' => now()]);
 
         $this->getJson('/api/v1/health')->assertOk()->assertJsonPath('status', 'ok');
         $this->getJson('/api/v1/ready')->assertOk()->assertJsonPath('status', 'ready')->assertJsonPath('checks.database', 'ok');
-        $this->get('/api/v1/metrics')->assertOk()->assertHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')->assertSee('ganttist_sync_operations_pending 1')->assertSee('ganttist_sync_operations_oldest_pending_seconds 960')->assertSee('ganttist_todoist_events_unprocessed 1');
+        $this->get('/api/v1/metrics')->assertOk()->assertHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8')->assertSee('ganttist_projects_total 1')->assertSee('ganttist_tasks_total 0')->assertSee('ganttist_invitations_pending 0');
     }
 
     public function test_every_response_carries_a_safe_request_correlation_id(): void

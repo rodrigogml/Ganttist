@@ -1,7 +1,7 @@
 ﻿# Interaction Surface Architecture
 
 **Created**: 2026-08-17
-**Last Updated**: 2026-08-17
+**Last Updated**: 2026-08-25
 **Status**: Approved
 **Sources**: briefing, constitution, specification v1.0 and feature plans.
 
@@ -9,24 +9,23 @@
 
 | Surface ID | Type | Users | Platforms and Form Factors | Product Coverage | Technology, Language and Runtime | Delivery Strategy | Design System | Module/Repository | Decision Status |
 |---|---|---|---|---|---|---|---|---|---|
-| SURF-WEB-OPERATIONS | WEB | UsuÃ¡rio autenticado | Chrome/Chromium, Safari e Firefox atuais; desktop, widescreen/4K, tablet e telefone | MVP completo, com adaptaÃ§Ã£o por viewport | Vue 3, TypeScript, navegador moderno | SPA responsiva, mesma aplicaÃ§Ã£o | Tailwind e componentes prÃ³prios | `resources/js`, `resources/css` | Approved |
-| SURF-WEB-ACCESS | WEB | Visitante e usuÃ¡rio autenticado | Navegador moderno, desktop/tablet/telefone | MVP | Vue 3, TypeScript, navegador moderno | Fluxo web responsivo | Componentes prÃ³prios compartilhados | `resources/js/AuthGate.vue`, `resources/js/TodoistSetup.vue` | Approved |
+| SURF-WEB-OPERATIONS | WEB | Proprietário, editor e leitor | Chrome/Chromium, Safari e Firefox atuais; desktop, widescreen/4K, tablet e telefone | MVP completo: lista de projetos, workspace local, estrutura, tarefas, pessoas, membros e planejamento | Vue 3, TypeScript, navegador moderno | SPA responsiva, mesma aplicação | Tailwind e componentes próprios | `resources/js`, `resources/css` | Approved |
+| SURF-WEB-ACCESS | WEB | Visitante e usuário autenticado | Navegador moderno, desktop/tablet/telefone | MVP | Vue 3, TypeScript, navegador moderno | Fluxo web responsivo | Componentes próprios compartilhados | `resources/js/AuthGate.vue` | Approved |
 | SURF-EMAIL-ACCESS | OTHER | Visitante | Cliente de e-mail capaz de abrir link web | MVP | E-mail HTML e link/cÃ³digo de uso Ãºnico | Mensagem transacional | Template de e-mail do produto | `resources/views/emails` | Approved |
-| SURF-TODOIST | OTHER | Todoist | OAuth, API e webhook HTTPS | MVP | Adapter PHP e contratos HTTP | IntegraÃ§Ã£o assÃ­ncrona/recuperÃ¡vel | N/A | `app/Infrastructure/Todoist`, `app/Contracts` | Approved |
 
 ## Cross-Surface Decisions
 
 ### Capability and Parity Policy
 
-A web operacional cobre o domÃ­nio completo do MVP. Desktop prioriza densidade e atalhos; tablet e telefone preservam as mesmas aÃ§Ãµes de negÃ³cio com controles adaptados a toque, sem paridade de layout. E-mail serve exclusivamente para acesso. Todoist nÃ£o Ã© uma interface humana do produto.
+A web operacional cobre o domínio completo do MVP. Desktop prioriza densidade e atalhos; tablet e telefone preservam as mesmas ações de negócio com controles adaptados a toque, sem paridade de layout. E-mail serve exclusivamente para acesso e aceite de convites. Integrações externas futuras não fazem parte da jornada obrigatória.
 
 ### Shared Domain and Contracts
 
-Datas de planejamento sÃ£o civis `YYYY-MM-DD`; APIs usam JSON versionado e a atualizaÃ§Ã£o servidorâ†’navegador usa eventos unidirecionais. O core Ã© a autoridade de calendÃ¡rio, precedÃªncia, grupos, criticidade e reagendamento; o Todoist Ã© a autoridade de campos nativos.
+Datas de planejamento são civis `YYYY-MM-DD`; APIs usam JSON versionado e a atualização servidor→navegador usa eventos unidirecionais. O core é a autoridade de calendário, precedência, criticidade e reagendamento; o Ganttist é a autoridade de todos os campos locais.
 
 ### Shared Code Strategy
 
-Componentes visuais e tipos compartilhados pertencem Ã  SPA. O domÃ­nio de scheduling nÃ£o Ã© compartilhado com o navegador: o cliente envia intenÃ§Ãµes validadas e recebe projeÃ§Ãµes autorizadas. O adapter Ã© a Ãºnica fronteira da integraÃ§Ã£o Todoist.
+Componentes visuais e tipos compartilhados pertencem à SPA. O domínio de scheduling não é compartilhado com o navegador: o cliente envia intenções validadas e recebe projeções autorizadas. Integrações futuras permanecem isoladas por adapters opcionais.
 
 ### Accessibility and Input Baseline
 
@@ -42,3 +41,4 @@ Idioma inicial `pt-BR`; conteÃºdo e formataÃ§Ã£o nÃ£o devem ser espalhad
 |---|---|---|---|---|
 | 2026-08-17 | SURF-WEB-OPERATIONS | Uma SPA responsiva para a operaÃ§Ã£o | O cliente aprovou uma aplicaÃ§Ã£o Ãºnica com comportamento adaptado | EspecificaÃ§Ã£o Â§33A.5 e Â§18H |
 | 2026-08-17 | SURF-TODOIST | Adapter dedicado | Protege a autoridade do domÃ­nio e centraliza falhas externas | ConstituiÃ§Ã£o I e EspecificaÃ§Ã£o Â§33A.22 |
+| 2026-08-25 | SURF-WEB-OPERATIONS | Dashboard local de projetos substitui o gate Todoist | Projetos e tarefas são locais e não dependem de conexão externa | Briefing e Constituição v2.0.0 |

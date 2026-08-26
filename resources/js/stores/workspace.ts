@@ -40,20 +40,20 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
   let activeLoad: Promise<void> | null = null
 
-  function load(): Promise<void> {
+  function load(projectId?: string): Promise<void> {
     if (activeLoad) return activeLoad
-    activeLoad = performLoad().finally(() => { activeLoad = null })
+    activeLoad = performLoad(projectId).finally(() => { activeLoad = null })
 
     return activeLoad
   }
 
-  async function performLoad(): Promise<void> {
+  async function performLoad(projectId?: string): Promise<void> {
     const initialLoad = workspace.value === null
     if (initialLoad) loading.value = true
     else refreshing.value = true
     error.value = ''
     try {
-      const response = await fetch('/api/v1/workspace')
+      const response = await fetch(`/api/v1/projects/${projectId ?? workspace.value?.project.id}/workspace`)
       if (useAuthStore().handleUnauthorized(response)) return
       if (!response.ok) throw new Error('Não foi possível carregar o projeto.')
       workspace.value = parseWorkspaceResponse(await response.json())

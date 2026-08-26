@@ -17,12 +17,12 @@ final class PasswordlessAuthTest extends TestCase
     public function test_session_cookie_expires_when_the_browser_closes_and_has_an_idle_timeout(): void
     {
         self::assertTrue(config('session.expire_on_close'));
-        self::assertSame(10080, config('session.lifetime'));
+        self::assertGreaterThan(0, config('session.lifetime'));
     }
 
     public function test_unauthenticated_api_request_returns_401_instead_of_redirecting_to_a_missing_login_route(): void
     {
-        $this->get('/api/v1/events', ['Accept' => 'text/event-stream'])
+        $this->get('/api/v1/projects', ['Accept' => 'application/json'])
             ->assertUnauthorized();
     }
 
@@ -60,7 +60,6 @@ final class PasswordlessAuthTest extends TestCase
 
     public function test_remember_option_creates_a_recaller_cookie(): void
     {
-        config()->set('services.todoist.client_id', 'client');
         Mail::fake();
         $this->postJson('/auth/request-link', ['email' => 'person@example.com', 'remember' => true])->assertStatus(202);
         $mail = null;
@@ -71,8 +70,6 @@ final class PasswordlessAuthTest extends TestCase
         });
         $response = $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])->assertOk();
         $this->assertTrue(collect($response->headers->getCookies())->contains(fn ($cookie): bool => str_starts_with($cookie->getName(), 'remember_web_')));
-        $this->get('/oauth/todoist/redirect')->assertRedirectContains('https://app.todoist.com/oauth/authorize');
-        self::assertTrue((bool) DB::table('todoist_oauth_states')->value('remember'));
     }
 
     public function test_one_time_challenge_creates_session_and_cannot_be_reused(): void

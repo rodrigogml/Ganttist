@@ -1,65 +1,61 @@
 <!--
 Sync Impact Report
-- Version: none -> 1.0.0
-- Princípios modificados: criação dos cinco princípios fundamentais de governança.
-- Seções adicionadas: Limites de Arquitetura e Dados; Qualidade, Segurança e Operação; Governance.
+- Version: 1.0.0 -> 2.0.0
+- Princípios modificados: Todoist deixa de ser a fonte de verdade; o domínio passa a gerir projetos, estrutura e tarefas locais; a integridade passa a abranger hierarquia, dependências, pessoas e permissões locais.
+- Seções adicionadas: Limites de Arquitetura e Dados locais; Acesso, Pessoas e Privacidade.
 - Seções removidas: nenhuma.
-- Artefatos que precisam atualização: AGENTS.md (ausente; nenhum impacto), docs/specs/ (ausente; aplicar a constituição nas próximas specs), docs/architecture/ (ausente; aplicar nos próximos artefatos), tasks.md (ausente; aplicar os gates nas próximas tarefas).
-- TODOs pendentes: responsáveis de decisão, prazo/equipe/orçamento, compliance e retenção, SLO/SLA/RPO/RTO e metas quantitativas de performance.
+- Artefatos que precisam atualização: README.md, docs/data-model.md, docs/discovery-briefing.md, docs/pending.md, todas as specs em docs/specs/, contratos de API, migrations, fixtures e testes. As specs access-todoist e todoist-synchronization deixam de descrever o MVP; as demais precisam substituir conceitos e campos Todoist por dados locais.
+- TODOs pendentes: fórmula de progresso; fluxo de convite, aceite e remoção de membros usuários; regras de exclusão de seções, pessoas e tarefas com dependências; compliance, retenção, SLO/SLA/RPO/RTO e metas quantitativas de desempenho.
 -->
 
 # Constituição do Ganttist
 
 ## Core Principles
 
-### I. Todoist é a fonte de verdade para campos nativos
+### I. O Ganttist é a fonte de verdade dos projetos locais
 
-O sistema DEVE ler e alterar pela API do Todoist a existência, conteúdo, projeto, seção, hierarquia, prioridade, conclusão, data e deadline das tarefas. O banco próprio DEVE persistir somente identidade, integração, configurações, dependências, calendário, operações e demais metadados exclusivos. Nenhuma mudança pode introduzir tarefas locais independentes nem uma réplica autoritativa dos campos nativos. O adapter Todoist é a única fronteira permitida para comunicação com essa API.
+O sistema DEVE persistir e administrar localmente projetos, seções, tarefas, pessoas, membros, permissões, datas, conclusão, dependências, calendário, operações e auditoria. A autenticação no Ganttist DEVE permitir acessar e criar projetos sem conexão, conta ou autorização do Todoist. Integrações externas futuras DEVEM ser opcionais, isoladas por adapter e não podem tornar a disponibilidade do produto ou a autoridade dos dados locais dependentes de um provedor externo.
 
-**Racional**: preserva a autoridade declarada do Todoist e evita divergência silenciosa de dados.
+**Racional**: o produto precisa operar como gerenciador de projetos autônomo e manter seus dados utilizáveis sem um serviço de terceiros.
 
 ### II. O core de planejamento é determinístico e independente da interface
 
-Regras de calendário, duração, precedência, grupos, estados, criticidade e reagendamento DEVEM viver em uma camada de domínio PHP desacoplada do Laravel e do renderizador. O domínio DEVE operar em datas civis `YYYY-MM-DD`, dias inteiros e calendário explícito; interface e integração apenas solicitam cálculos e apresentam/aplicam resultados. Toda alteração que alcance o Todoist DEVE respeitar o resultado do core.
+Regras de calendário, duração, precedência FS/SS/FF/SF, estados, criticidade, progresso e reagendamento DEVEM viver em uma camada de domínio PHP desacoplada de Laravel e do renderizador. O domínio DEVE operar em datas civis `YYYY-MM-DD`, dias inteiros e calendário explícito; interface e integrações apenas solicitam cálculos e apresentam ou aplicam resultados. Para o mesmo estado persistido e relógio controlado, o resultado DEVE ser idêntico.
 
-**Racional**: regras matemáticas previsíveis devem ser testáveis e produzir o mesmo resultado para o mesmo estado e relógio controlado.
+**Racional**: regras previsíveis são essenciais para o cronograma, seus indicadores e testes confiáveis.
 
-### III. Integridade vem antes de conveniência de sincronização
+### III. Estrutura, dependências e estados preservam integridade
 
-O grafo de dependências DEVE impedir autodependências, duplicatas, ciclos e relações de grupo proibidas. Operações que cruzam MySQL e Todoist DEVEM ser modeladas como operações lógicas idempotentes, rastreáveis, recuperáveis e reconciliáveis; uma transação MySQL NUNCA pode aguardar uma resposta HTTP externa. Falhas parciais, eventos duplicados ou fora de ordem e edições concorrentes DEVEM resultar em estado explícito de sincronização, não em perda ou corrupção silenciosa de dados.
+Seções DEVEM formar uma árvore acíclica de profundidade livre. Tarefas DEVEM pertencer diretamente à raiz do projeto ou a uma seção, e nunca a outra tarefa. O grafo de dependências DEVE impedir autodependências, duplicatas, referências entre projetos e ciclos. O status de uma tarefa DEVE ser calculado, sem escolha manual, com `CONCLUÍDA` acima de `ATRASADA`, `BLOQUEADA`, `AGENDADA` e `ABERTA`; ao reabrir uma tarefa, sua data de conclusão real DEVE ser removida e o status recalculado.
 
-**Racional**: o sistema integra uma fonte externa assíncrona e precisa preservar o planejamento mesmo em condições de falha.
+**Racional**: estrutura e regras explícitas evitam dados contraditórios e cronogramas incoerentes.
 
-### IV. Qualidade e segurança são gates de entrega
+### IV. Acesso explícito e pessoas separadas de contas
 
-Cada mudança de domínio DEVE ser coberta por testes determinísticos proporcionais ao risco; motor matemático e integridade do grafo exigem golden tests. Antes de merge ou deployment, CI DEVE executar lint, testes unitários, integração, verificações básicas de segurança e build; E2E e carga devem executar no pipeline apropriado. Releases são bloqueados por falhas de isolamento entre usuários, integridade do grafo, datas, sincronização sem loops, persistência, OAuth/autenticação ou risco de perda/corrupção de dados. Tokens são criptografados, sessões são server-side, endpoints aplicam validação e rate limit, e logs não expõem segredos.
+Cada projeto DEVE ter um proprietário e conceder acesso somente por papéis explícitos: proprietário, editor ou leitor. Proprietário DEVE gerir membros e poder excluir o projeto; editor DEVE criar e alterar estrutura e tarefas; leitor DEVE apenas consultar. Responsáveis DEVEM ser pessoas locais com nome obrigatório e e-mail opcional, podendo ou não ter uma conta, ser membro ou aceitar convite. Toda leitura e escrita DEVE verificar a autorização do usuário autenticado no projeto, sem expor dados de outro usuário ou projeto.
 
-**Racional**: cronogramas, credenciais e operações de cascata são dados e fluxos de alto impacto.
+**Racional**: gestores precisam delegar a pessoas que não usam o sistema, sem enfraquecer isolamento e controle de acesso.
 
-### V. A SPA Gantt é própria, responsiva e acessível
+### V. Qualidade, segurança e experiência são gates de entrega
 
-A área autenticada DEVE ser uma SPA Vue/TypeScript, com Gantt desenvolvido no projeto; bibliotecas não podem impor modelo de Gantt ou regras de negócio. A interface DEVE manter semântica de domínio consistente em desktop, tablet e celular, adaptando controles para viewport e toque, e DEVE cumprir os requisitos de acessibilidade especificados. O spike do Gantt DEVE validar árvore, virtualização, relações, drag, resize, zoom, grupos, ghosts, filtros e responsividade com 2.000 tarefas, além de observar degradação em 5.000, antes da consolidação visual.
+Mudanças de domínio DEVEM ter testes determinísticos proporcionais ao risco; cálculos de calendário, status, dependências, permissões e integridade exigem testes de unidade e integração. Antes de entrega, CI DEVE executar lint, testes, verificações básicas de segurança e build. A SPA Gantt DEVE ser própria, responsiva e acessível, mantendo semântica de domínio consistente em desktop, tablet e celular. Sessões DEVEM permanecer server-side; endpoints DEVEM validar entrada, aplicar autorização e rate limit; logs e métricas não podem expor dados pessoais desnecessários ou segredos.
 
-**Racional**: o Gantt é o principal diferencial e precisa permanecer utilizável em dispositivos e volumes reais.
+**Racional**: projetos, pessoas e permissões são dados sensíveis, e o Gantt precisa ser confiável em qualquer dispositivo suportado.
 
-## Limites de Arquitetura e Dados
+## Limites de Arquitetura e Dados locais
 
-O produto é um monólito modular em PHP 8.4+ e Laravel, com Vue 3, TypeScript, store reativa centralizada, MySQL 9.7 `utf8mb4`, API JSON versionada e SSE para servidor→navegador. PHP-FPM + Apache ou equivalente deve suportar HTTPS, OAuth, webhooks e SSE. Filas persistentes inicialmente usam MySQL e o scheduler executa tarefas periódicas.
+O produto é um monólito modular em PHP 8.4+ e Laravel, com Vue 3, TypeScript, store reativa centralizada, MySQL `utf8mb4`, API JSON versionada e SSE. PHP-FPM + Apache ou equivalente deve suportar HTTPS e SSE. O Gantt é associado a um projeto local; dependências são intraprojeto. Persistência local é a autoridade de todos os campos do MVP. A integração Todoist, se introduzida, exige especificação, contrato, adapter, estratégia de sincronização, resolução explícita de conflitos e não pode reduzir as funcionalidades locais.
 
-O Gantt é associado a um único projeto Todoist por usuário. Dependências são intraprojeto; grupos podem ser predecessores, nunca sucessores no MVP. Campos e dados derivados seguem a autoridade definida na especificação: Todoist para campos nativos, banco próprio para metadados e core para regras calculadas. Exceções a esses limites exigem ADR e alteração explícita da especificação quando alterarem comportamento, contratos, segurança, persistência, matemática, UX ou autoridade dos dados.
+## Acesso, Pessoas e Privacidade
 
-## Qualidade, Segurança e Operação
-
-Ambientes de desenvolvimento, staging e produção DEVEM ser separados, com credenciais e callbacks próprios. Deploys, migrações, workers e scheduler devem ser reproduzíveis e documentados. A aplicação DEVE oferecer logs estruturados, métricas, liveness/readiness e visibilidade de filas e integrações; a infraestrutura é responsável por backups, restauração, certificados, alertas e segredos de produção.
-
-O idioma inicial é `pt-BR`, e a arquitetura deve permitir internacionalização. A aplicação não é offline-first: indisponibilidade do Todoist pode permitir consulta do último estado conhecido, sinalizando degradação, mas escritas devem preservar consistência. Privacidade operacional requer minimização de dados em logs e métricas; a definição formal de compliance e de retenção permanece pendente.
+Dados de pessoas sem conta DEVEM ser minimizados ao nome obrigatório e e-mail opcional. Um responsável sem acesso ao projeto não ganha permissão implícita por receber atribuição. Convites, aceite, remoção de membros e notificações a contas existentes devem ser especificados antes de implementação. A definição formal de compliance, retenção, exclusão de conta e backups permanece pendente e não autoriza persistir dados além do necessário para a funcionalidade aprovada.
 
 ## Governance
 
-Esta constituição prevalece sobre convenções implícitas de implementação e é subordinada à especificação do cliente v1.0 para requisitos funcionais aprovados. Toda spec, plano, interface, tarefa e PR DEVE declarar ou demonstrar conformidade com os princípios aplicáveis. Conflitos, exceções e decisões locais que não alterem esses princípios devem ser registrados em ADR quando seu impacto for arquitetural ou duradouro.
+Esta constituição prevalece sobre convenções implícitas e é subordinada a requisitos funcionais aprovados mais recentes. Toda spec, plano, interface, tarefa e PR DEVE demonstrar conformidade com os princípios aplicáveis. Conflitos, exceções e decisões duradouras que alterem comportamento, contratos, segurança, persistência, matemática, UX ou autoridade de dados DEVEM ser registrados em ADR e, quando contrariarem estes princípios, exigem emenda explícita.
 
-Emendas exigem justificativa, análise de impacto nos artefatos afetados e atualização deste documento. Use versionamento semântico: MAJOR para remover/redefinir princípio de modo incompatível; MINOR para adicionar princípio ou expandir uma seção material; PATCH para clarificação sem mudança semântica. Não é permitido contornar um princípio com TODO implícito, feature flag ou decisão de implementação.
+Emendas exigem justificativa, análise de impacto nos artefatos afetados e atualização deste documento. Use versionamento semântico: MAJOR para remover ou redefinir princípio de modo incompatível; MINOR para adicionar princípio ou expandir materialmente uma seção; PATCH para clarificação sem mudança semântica. Não é permitido contornar um princípio com TODO implícito, feature flag ou decisão de implementação.
 
-As pendências de decisão — responsáveis, prazo/equipe/orçamento, compliance/retenção, SLO/SLA/RPO/RTO e metas quantitativas de desempenho — devem permanecer explícitas nos artefatos seguintes até decisão autorizada. Elas não autorizam inventar requisitos de produto.
+As pendências sobre progresso, colaboração, exclusões, compliance/retenção, SLO/SLA/RPO/RTO, responsáveis operacionais e metas quantitativas de desempenho DEVEM permanecer explícitas nos artefatos seguintes até decisão autorizada. Elas não autorizam inventar requisitos de produto.
 
-**Version**: 1.0.0 | **Ratified**: 2026-08-17 | **Last Amended**: 2026-08-17
+**Version**: 2.0.0 | **Ratified**: 2026-08-17 | **Last Amended**: 2026-08-25

@@ -1,0 +1,145 @@
+<?php
+
+namespace Tests\Feature;
+
+use App\Mail\ProjectInvitation;
+use App\Models\User;
+use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Mail;
+use Tests\TestCase;
+
+final class LocalProjectsApiTest extends TestCase
+{
+    use RefreshDatabase;
+
+    public function test_user_creates_and_lists_a_local_project(): void
+    {
+        $user = User::factory()->create();
+        $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'create-product'])->assertCreated()->assertJsonPath('data.name', 'Produto')->assertJsonPath('data.role', 'owner');
+        $this->actingAs($user)->getJson('/api/v1/projects')->assertOk()->assertJsonCount(1, 'data');
+    }
+
+    public function test_reader_cannot_create_project_structure(): void
+    {
+        $owner = User::factory()->create();
+        $reader = User::factory()->create();
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'create-product'])->json('data.id');
+        \DB::table('project_members')->insert(['id' => (string) \Str::ulid(), 'project_id' => $project, 'user_id' => $reader->id, 'role' => 'reader', 'created_at' => now(), 'updated_at' => now()]);
+        $this->actingAs($reader)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Planejamento'])->assertForbidden();
+    }
+
+    public function test_invited_user_only_gains_access_after_accepting(): void
+    {
+        Mail::fake();
+        $owner = User::factory()->create(['email' => 'owner@example.com']);
+        $guest = User::factory()->create(['email' => 'guest@example.com']);
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'create-product'])->json('data.id');
+        $invitation = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/invitations", ['email' => $guest->email, 'role' => 'reader'])->assertCreated()->json('data.id');
+        Mail::assertSent(ProjectInvitation::class, fn (ProjectInvitation $mail): bool => $mail->hasTo($guest->email) && $mail->projectName === 'Produto' && $mail->role === 'reader');
+        $this->actingAs($guest)->getJson("/api/v1/projects/{$project}/workspace")->assertNotFound();
+        $this->actingAs($guest)->postJson("/api/v1/invitations/{$invitation}/accept")->assertOk();
+        $this->actingAs($guest)->getJson("/api/v1/projects/{$project}/workspace")->assertOk();
+    }
+
+    public function test_workspace_preserves_section_hierarchy_and_calculates_task_statuses(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'workspace'])->json('data.id');
+        $parent = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Planejamento'])->assertCreated()->json('data.id');
+        $child = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Pesquisa', 'parentSectionId' => $parent])->assertCreated()->json('data.id');
+        $predecessor = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Preparar', 'sectionId' => $child])->assertCreated()->json('data.id');
+        $successor = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Executar', 'plannedFinish' => now()->subDay()->toDateString()])->assertCreated()->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $predecessor, 'to' => $successor, 'type' => 'FS'])->assertCreated();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.1.level', 1)
+            ->assertJsonPath('data.stats.total', 2)
+            ->assertJsonPath('data.stats.late', 1);
+    }
+
+    public function test_removing_a_person_unassigns_their_tasks(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'people'])->json('data.id');
+        $person = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/people", ['name' => 'Ana'])->assertCreated()->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Delegada', 'assigneePersonId' => $person])->assertCreated()->json('data.id');
+        $this->actingAs($user)->deleteJson("/api/v1/projects/{$project}/people/{$person}")->assertNoContent();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.0.id', $task)
+            ->assertJsonPath('data.tasks.0.assignee_id', null);
+    }
+
+    public function test_editor_can_manage_project_people_without_gaining_member_access(): void
+    {
+        $owner = User::factory()->create();
+        $editor = User::factory()->create();
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'person-management'])->json('data.id');
+        \DB::table('project_members')->insert(['id' => (string) \Str::ulid(), 'project_id' => $project, 'user_id' => $editor->id, 'role' => 'editor', 'created_at' => now(), 'updated_at' => now()]);
+        $person = $this->actingAs($editor)->postJson("/api/v1/projects/{$project}/people", ['name' => 'Ana', 'email' => 'ana@example.com'])->assertCreated()->json('data.id');
+        $this->actingAs($editor)->putJson("/api/v1/projects/{$project}/people/{$person}", ['name' => 'Ana Silva', 'email' => null])->assertOk()->assertJsonPath('data.name', 'Ana Silva');
+        $this->actingAs($editor)->getJson("/api/v1/projects/{$project}/members")->assertOk()->assertJsonPath('data.people.0.name', 'Ana Silva');
+        $this->assertDatabaseMissing('project_members', ['project_id' => $project, 'user_id' => $editor->id, 'role' => 'owner']);
+    }
+
+    public function test_editor_can_create_and_edit_a_local_comment(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'comments'])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Tarefa'])->json('data.id');
+        $comment = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$task}/comments", ['content' => 'Primeira nota'])->assertCreated()->json('data.id');
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$task}/comments/{$comment}", ['content' => 'Nota revisada'])->assertOk();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/tasks/{$task}/context")
+            ->assertOk()
+            ->assertJsonPath('data.comments.0.content', 'Nota revisada')
+            ->assertJsonPath('data.comments.0.editable', true);
+    }
+
+    public function test_only_owner_can_manage_members_or_delete_project(): void
+    {
+        $owner = User::factory()->create();
+        $editor = User::factory()->create();
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'roles'])->json('data.id');
+        $memberId = (string) \Str::ulid();
+        \DB::table('project_members')->insert(['id' => $memberId, 'project_id' => $project, 'user_id' => $editor->id, 'role' => 'editor', 'created_at' => now(), 'updated_at' => now()]);
+        $this->actingAs($editor)->getJson("/api/v1/projects/{$project}/members")->assertOk()->assertJsonCount(2, 'data.members');
+        $this->actingAs($editor)->deleteJson("/api/v1/projects/{$project}")->assertForbidden();
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/members/{$memberId}", ['role' => 'reader'])->assertOk();
+        $this->actingAs($owner)->deleteJson("/api/v1/projects/{$project}")->assertNoContent();
+    }
+
+    public function test_user_sees_only_their_pending_invitations(): void
+    {
+        $owner = User::factory()->create();
+        $guest = User::factory()->create(['email' => 'guest@example.com']);
+        $other = User::factory()->create(['email' => 'other@example.com']);
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'inbox'])->json('data.id');
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/invitations", ['email' => $guest->email, 'role' => 'reader'])->assertCreated();
+        $this->actingAs($guest)->getJson('/api/v1/invitations')->assertOk()->assertJsonCount(1, 'data')->assertJsonPath('data.0.project_name', 'Produto');
+        $this->actingAs($other)->getJson('/api/v1/invitations')->assertOk()->assertJsonCount(0, 'data');
+    }
+
+    public function test_deleting_a_section_cascades_to_child_sections_and_tasks(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'section-delete'])->json('data.id');
+        $parent = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Pai'])->json('data.id');
+        $child = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Filha', 'parentSectionId' => $parent])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Filha', 'sectionId' => $child])->assertCreated();
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Raiz'])->assertCreated();
+        $this->actingAs($user)->deleteJson("/api/v1/projects/{$project}/sections/{$parent}")->assertNoContent();
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->assertJsonCount(1, 'data.tasks')->assertJsonPath('data.tasks.0.title', 'Raiz');
+    }
+
+    public function test_actual_completion_date_is_saved_and_drives_completed_status(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'actual-completion'])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Entrega'])->json('data.id');
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['actualCompletionDate' => '2026-08-20'])->assertOk();
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->assertJsonPath('data.tasks.0.effective_completion', '2026-08-20')->assertJsonPath('data.tasks.0.status', 'completed');
+    }
+}

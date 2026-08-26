@@ -1,6 +1,5 @@
 <?php
 
-use App\Exceptions\TodoistReauthorizationRequired;
 use App\Http\Middleware\ApiRequestTiming;
 use App\Http\Middleware\RequestCorrelation;
 use App\Http\Middleware\SecurityHeaders;
@@ -24,17 +23,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->append(ApiRequestTiming::class);
         $middleware->append(SecurityHeaders::class);
     })
-    ->withSchedule(function (Schedule $schedule): void {
-        $schedule->command('todoist:sync')->hourly()->withoutOverlapping();
-        $schedule->command('audit:prune')->daily()->withoutOverlapping();
-    })
+    ->withSchedule(function (Schedule $schedule): void {})
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(fn (Request $request, Throwable $exception): bool => $request->is('api/*') || $request->expectsJson());
-        $exceptions->render(function (TodoistReauthorizationRequired $exception, Request $request) {
-            if ($request->is('api/*') || $request->expectsJson()) {
-                return response()->json(['message' => $exception->getMessage()], 409);
-            }
-
-            return redirect('/?todoist=reauthorization_required');
-        });
     })->create();

@@ -1,6 +1,5 @@
 <?php
 
-use App\Services\TodoistSyncService;
 use Illuminate\Foundation\Inspiring;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
@@ -8,11 +7,6 @@ use Illuminate\Support\Facades\DB;
 Artisan::command('inspire', function () {
     $this->comment(Inspiring::quote());
 })->purpose('Display an inspiring quote');
-
-Artisan::command('todoist:sync', function (TodoistSyncService $sync): void {
-    $result = $sync->syncActiveProjects();
-    $this->info("Projetos sincronizados: {$result['synced']}; falhas: {$result['failed']}.");
-})->purpose('Reconcilia projetos ativos com o Todoist');
 
 Artisan::command('audit:prune', function (): void {
     $days = max(1, (int) config('ganttist.audit_retention_days', 365));
@@ -30,9 +24,6 @@ Artisan::command('app:production-readiness', function (): int {
         'O banco padrão deve ser MySQL.' => config('database.default') === 'mysql',
         'A fila não pode usar o driver sync.' => config('queue.default') !== 'sync',
         'O mailer não pode usar log ou array.' => ! in_array(config('mail.default'), ['log', 'array'], true),
-        'TODOIST_CLIENT_ID deve estar configurado.' => filled(config('services.todoist.client_id')),
-        'TODOIST_CLIENT_SECRET deve estar configurado.' => filled(config('services.todoist.client_secret')),
-        'TODOIST_WEBHOOK_SECRET deve estar configurado.' => filled(config('services.todoist.webhook_secret')),
     ];
     $failed = array_keys(array_filter($checks, fn (bool $passed): bool => ! $passed));
     if ($failed === []) {
