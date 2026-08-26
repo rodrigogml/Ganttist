@@ -267,6 +267,36 @@ final class ProjectController
         return response()->json([], 204);
     }
 
+    public function duplicateTask(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        abort_unless($task, 404, 'Tarefa não encontrada.');
+
+        $copyId = DB::transaction(function () use ($task, $projectId): string {
+            $copyId = (string) Str::ulid();
+            DB::table('project_tasks')->insert([
+                'id' => $copyId, 'project_id' => $projectId, 'section_id' => $task->section_id,
+                'assignee_person_id' => $task->assignee_person_id, 'title' => $task->title.' - Copia',
+                'description' => rtrim((string) $task->description)."\nTarefa duplicada de {$task->title}",
+                'priority' => $task->priority, 'planned_start' => $task->planned_start,
+                'planned_finish' => $task->planned_finish, 'completed_at' => $task->completed_at,
+                'position' => $this->nextSiblingPosition($projectId, $task->section_id),
+                'created_at' => now(), 'updated_at' => now(),
+            ]);
+            foreach (DB::table('project_task_comments')->where('task_id', $task->id)->get() as $comment) {
+                DB::table('project_task_comments')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'task_id' => $copyId, 'author_user_id' => $comment->author_user_id, 'content' => $comment->content, 'created_at' => now(), 'updated_at' => now()]);
+            }
+            foreach (DB::table('project_task_dependencies')->where('project_id', $projectId)->where(function ($query) use ($task): void { $query->where('predecessor_task_id', $task->id)->orWhere('successor_task_id', $task->id); })->get() as $dependency) {
+                DB::table('project_task_dependencies')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'predecessor_task_id' => $dependency->predecessor_task_id === $task->id ? $copyId : $dependency->predecessor_task_id, 'successor_task_id' => $dependency->successor_task_id === $task->id ? $copyId : $dependency->successor_task_id, 'type' => $dependency->type, 'created_at' => now(), 'updated_at' => now()]);
+            }
+            DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+            return $copyId;
+        });
+
+        return response()->json(['data' => ['id' => $copyId]], 201);
+    }
+
     public function taskContext(Request $request, string $projectId, string $taskId): JsonResponse
     {
         $this->member($request, $projectId);
@@ -302,7 +332,19 @@ final class ProjectController
         $this->editable($request, $projectId);
         $section = DB::table('project_sections')->where('id', $sectionId)->where('project_id', $projectId)->first();
         abort_unless($section, 404, 'Seção não encontrada.');
-        DB::table('project_sections')->where('id', $sectionId)->delete();
+        $data = $request->validate(['action' => ['sometimes', 'in:delete,move'], 'destinationSectionId' => ['nullable', 'string']]);
+        if (($data['action'] ?? 'delete') === 'move') {
+            $destination = $data['destinationSectionId'] ?? null;
+            abort_if($destination === $sectionId || ($destination && $this->sectionIsDescendantOf($projectId, $destination, $sectionId)), 422, 'O destino não pode estar dentro da seção removida.');
+            if ($destination) abort_unless(DB::table('project_sections')->where('id', $destination)->where('project_id', $projectId)->exists(), 422, 'Seção de destino inválida.');
+            DB::transaction(function () use ($projectId, $sectionId, $destination): void {
+                DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionId)->update(['parent_section_id' => $destination, 'updated_at' => now()]);
+                DB::table('project_tasks')->where('project_id', $projectId)->where('section_id', $sectionId)->update(['section_id' => $destination, 'updated_at' => now()]);
+                DB::table('project_sections')->where('id', $sectionId)->delete();
+            });
+        } else {
+            DB::table('project_sections')->where('id', $sectionId)->delete();
+        }
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json([], 204);

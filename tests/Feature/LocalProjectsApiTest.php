@@ -112,6 +112,36 @@ final class LocalProjectsApiTest extends TestCase
             ->assertJsonPath('data.tasks.3.id', $second);
     }
 
+    public function test_task_duplication_copies_details_comments_and_dependencies(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'duplicate-task'])->json('data.id');
+        $original = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Original', 'description' => 'Detalhes', 'priority' => 3, 'actualCompletionDate' => '2026-08-26'])->json('data.id');
+        $other = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Outra'])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$original}/comments", ['content' => 'Comentário'])->assertCreated();
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $original, 'to' => $other, 'type' => 'FS'])->assertCreated();
+
+        $copy = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$original}/duplicate")->assertCreated()->json('data.id');
+
+        $this->assertDatabaseHas('project_tasks', ['id' => $copy, 'title' => 'Original - Copia', 'priority' => 3, 'completed_at' => '2026-08-26']);
+        $this->assertDatabaseHas('project_task_comments', ['task_id' => $copy, 'content' => 'Comentário']);
+        $this->assertDatabaseHas('project_task_dependencies', ['predecessor_task_id' => $copy, 'successor_task_id' => $other, 'type' => 'FS']);
+    }
+
+    public function test_section_deletion_can_move_direct_children_to_root(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'move-section-children'])->json('data.id');
+        $section = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Remover'])->json('data.id');
+        $child = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Filha', 'parentSectionId' => $section])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Direta', 'sectionId' => $section])->json('data.id');
+
+        $this->actingAs($user)->deleteJson("/api/v1/projects/{$project}/sections/{$section}", ['action' => 'move', 'destinationSectionId' => null])->assertNoContent();
+
+        $this->assertDatabaseHas('project_sections', ['id' => $child, 'parent_section_id' => null]);
+        $this->assertDatabaseHas('project_tasks', ['id' => $task, 'section_id' => null]);
+    }
+
     public function test_removing_a_person_unassigns_their_tasks(): void
     {
         $user = User::factory()->create();

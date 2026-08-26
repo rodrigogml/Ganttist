@@ -21,6 +21,7 @@ Route::prefix('v1')->group(function () {
             Route::put('/projects/{projectId}/sections/{sectionId}', [ProjectController::class, 'updateSection']);
             Route::post('/projects/{projectId}/structure/move', [ProjectController::class, 'moveStructureItem']);
             Route::post('/projects/{projectId}/tasks', [ProjectController::class, 'createTask']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/duplicate', [ProjectController::class, 'duplicateTask']);
             Route::put('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'updateTask']);
             Route::patch('/projects/{projectId}/tasks/{taskId}/completion', [ProjectController::class, 'setTaskCompletion']);
             Route::delete('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'deleteTask']);

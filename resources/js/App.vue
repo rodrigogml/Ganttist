@@ -272,6 +272,7 @@ const structureMoveBusy = ref(false);
 const canMoveStructure = computed(
     () => store.workspace?.project.role !== "reader" && !structureMoveBusy.value,
 );
+const sectionDeleteDialog = ref<{ task: Task; action: "delete" | "move"; destinationId: string | null } | null>(null);
 const taskPriorityOptions: ReadonlyArray<{
     priority: 1 | 2 | 3 | 4;
     label: string;
@@ -938,14 +939,17 @@ function startStructureDrag(task: Task, event: PointerEvent) {
     document.addEventListener("pointerup", finishStructureDrag, { once: true });
     document.addEventListener("pointercancel", stopStructureDrag, { once: true });
 }
-function openCreationDialog(kind: "task" | "section") {
+function openCreationDialog(kind: "task" | "section", parentId: string | null = null) {
     creationMenu.value = false;
     if (kind === "task") {
-        taskDraft.value = { id: "__new-task__", title: "", description: "", kind: "task", level: 0, parent_id: null, section_id: null, priority: 1, start: null, finish: null, completed: false, progress: 0, status: "opened", critical: false };
+        collaborators.value = store.workspace?.people ?? [];
+        taskComments.value = [];
+        editorContextLoading.value = false;
+        taskDraft.value = { id: "__new-task__", title: "", description: "", kind: "task", level: 0, parent_id: parentId, section_id: parentId, priority: 1, start: null, finish: null, completed: false, progress: 0, status: "opened", critical: false };
         taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
         sectionDraft.value = null;
     } else {
-        sectionDraft.value = { id: "__new-section__", title: "", kind: "section", level: 0, parent_id: null, start: null, finish: null, progress: 0, status: "opened", critical: false };
+        sectionDraft.value = { id: "__new-section__", title: "", kind: "section", level: 0, parent_id: parentId, start: null, finish: null, progress: 0, status: "opened", critical: false };
         taskDraft.value = null;
     }
     drawer.value = true;
@@ -1087,20 +1091,60 @@ function editSectionFromContext() {
     drawer.value = true;
 }
 async function deleteSectionFromContext() {
-    const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
-    if (!menu || menu.task.kind !== "section" || !projectId) return;
-    if (!confirm(`Excluir a seção “${menu.task.title}” e todo o seu conteúdo?`)) return;
+    const menu = taskContextMenu.value;
+    if (!menu || menu.task.kind !== "section") return;
     taskContextMenu.value = null;
+    sectionDeleteDialog.value = { task: menu.task, action: "delete", destinationId: null };
+}
+async function confirmSectionDeletion() {
+    const dialog = sectionDeleteDialog.value, projectId = store.workspace?.project.id;
+    if (!dialog || !projectId) return;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/sections/${menu.task.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
+        const response = await fetch(`/api/v1/projects/${projectId}/sections/${dialog.task.id}`, { method: "DELETE", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ action: dialog.action, destinationSectionId: dialog.destinationId }) });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível excluir a seção."));
         await store.load();
-        showToast("Seção e conteúdo excluídos", "success");
+        sectionDeleteDialog.value = null;
+        showToast(dialog.action === "move" ? "Seção excluída e subitens movidos" : "Seção e conteúdo excluídos", "success");
     } catch (error) {
         showToast(error instanceof Error ? error.message : "Não foi possível excluir a seção.", "error");
     } finally {
         setTimeout(() => (toast.value = ""), 4000);
     }
+}
+function createBelowSection(kind: "task" | "section") {
+    const section = taskContextMenu.value?.task;
+    if (!section || section.kind !== "section") return;
+    openCreationDialog(kind, section.id);
+}
+function setBranchExpanded(section: Task, expanded: boolean) {
+    const next = new Set(store.hiddenGroups);
+    for (const item of hierarchyTasks.value) {
+        if (item.id === section.id || ancestorsFor(item).includes(section.id)) {
+            if (expanded) next.delete(item.id);
+            else if (isExpandable(item)) next.add(item.id);
+        }
+    }
+    store.hiddenGroups = next;
+    taskContextMenu.value = null;
+}
+async function duplicateTaskFromContext() {
+    const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
+    if (!menu || menu.task.kind !== "task" || !projectId) return;
+    taskContextMenu.value = null;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}/duplicate`, { method: "POST", headers: { Accept: "application/json", ...csrfHeaders() } });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível duplicar a tarefa."));
+        await store.load();
+        showToast("Tarefa duplicada", "success");
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível duplicar a tarefa.", "error"); }
+}
+async function deleteTaskFromContext() {
+    const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
+    if (!menu || menu.task.kind !== "task" || !projectId || !confirm(`Excluir a tarefa “${menu.task.title}”?`)) return;
+    taskContextMenu.value = null;
+    const response = await fetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
+    if (!response.ok) { showToast(await responseError(response, "Não foi possível excluir a tarefa."), "error"); return; }
+    await store.load(); showToast("Tarefa excluída", "success");
 }
 function startTaskColumnResize(event: PointerEvent) {
     event.preventDefault();
@@ -2877,6 +2921,7 @@ function statusLabel(s: string) {
                     @contextmenu.prevent
                 >
                     <button
+                        v-if="taskContextMenu.task.kind === 'task'"
                         type="button"
                         role="menuitem"
                         :disabled="taskContextBusy"
@@ -2904,21 +2949,24 @@ function statusLabel(s: string) {
                         }}</span>
                     </button>
                     <div v-if="taskContextMenu.task.kind === 'task'" class="task-context-priorities" role="group" aria-label="Definir prioridade"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" class="task-context-priority" :class="[option.flag, { active: (taskContextMenu.task.priority ?? 1) === option.priority }]" :disabled="taskContextBusy" :aria-label="option.label" :title="option.label" @click="setTaskPriorityFromContext(option.priority)"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div>
+                    <template v-if="taskContextMenu.task.kind === 'task'"><button type="button" role="menuitem" @click="duplicateTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5"></rect><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"></path></svg>Duplicar tarefa</button><button type="button" role="menuitem" class="context-danger" @click="deleteTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir tarefa</button></template>
+                    <template v-else><div class="task-context-section-create"><button type="button" role="menuitem" @click="createBelowSection('task')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Tarefa</button><button type="button" role="menuitem" @click="createBelowSection('section')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v10H4zM12 13v4M10 15h4"></path></svg>Seção</button></div><div class="task-context-section-create"><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, false)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4 4 4-4M5 5h14M5 19h14"></path></svg>Collapse all</button><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 15 4-4 4 4M5 5h14M5 19h14"></path></svg>Expand all</button></div></template>
                     <button
                         v-if="taskContextMenu.task.kind === 'section'"
                         type="button"
                         role="menuitem"
                         @click="editSectionFromContext"
-                    >Editar seção</button>
+                    ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5"></path></svg>Editar seção</button>
                     <button
                         v-if="taskContextMenu.task.kind === 'section'"
                         type="button"
                         role="menuitem"
-                        class="danger-btn"
+                        class="context-danger"
                         @click="deleteSectionFromContext"
-                    >Excluir seção e conteúdo</button>
+                    ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir seção</button>
                     </section
             ></Teleport>
+            <div v-if="sectionDeleteDialog" class="relation-modal-scrim" @click.self="sectionDeleteDialog = null"><section class="relation-modal section-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="section-delete-title"><header><div><b id="section-delete-title">Excluir seção</b><small>Escolha como tratar os subitens de “{{ sectionDeleteDialog.task.title }}”.</small></div></header><div class="relation-modal-body"><label><input v-model="sectionDeleteDialog.action" value="delete" type="radio" /> Excluir esta seção e todos os subitens</label><label><input v-model="sectionDeleteDialog.action" value="move" type="radio" /> Mover os subitens antes de excluir</label><label v-if="sectionDeleteDialog.action === 'move'">Destino<HierarchyCombobox v-model="sectionDeleteDialog.destinationId" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDeleteDialog.task.id" /></label></div><footer><button class="soft-btn" @click="sectionDeleteDialog = null">Cancelar</button><button class="danger-btn" @click="confirmSectionDeletion">Excluir seção</button></footer></section></div>
 
             <section
                 ref="ganttCard"
