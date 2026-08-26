@@ -65,6 +65,19 @@ watch(
         else initializedUserId = null;
     },
 );
+watch(
+    () => store.workspace?.project.id,
+    async (projectId) => {
+        if (!projectId) return;
+        await nextTick();
+        measureGantt();
+        const timeline = timelineElement.value;
+        if (!timeline) return;
+        const todayOffset = px(todayCivil());
+        timeline.scrollLeft = Math.max(0, todayOffset - timelineViewport.value / 2);
+        scrollLeft.value = timeline.scrollLeft;
+    },
+);
 onMounted(async () => {
     loadColumnPreferences();
     document.addEventListener("pointerdown", closeFloatingMenusOnOutside);
@@ -2407,18 +2420,6 @@ function statusLabel(s: string) {
             <button class="primary" @click="store.load">
                 Tentar novamente
             </button>
-        </main>
-        <main v-else-if="store.empty" class="loading">
-            <div>
-                <p>Este projeto ainda não possui tarefas.</p>
-                <button
-                    class="primary"
-                    :disabled="store.refreshing"
-                    @click="store.load"
-                >
-                    Atualizar projeto
-                </button>
-            </div>
         </main>
         <main v-else class="main">
             <section class="commandbar">
