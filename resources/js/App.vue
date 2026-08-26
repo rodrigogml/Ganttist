@@ -31,6 +31,7 @@ import {
     resizePreview,
     shiftCivilDate,
 } from "./utils/timeblock-gesture";
+import { dependencyPath } from "./utils/dependency-path";
 const store = useWorkspaceStore();
 const auth = useAuthStore();
 const appearance = ref(false),
@@ -1250,12 +1251,13 @@ const pathFor = (dependency: Dependency) => {
             ? "finish"
             : "start",
         source = endpointPoint(from, sourceEndpoint),
-        target = endpointPoint(to, targetEndpoint),
-        direction = target.x >= source.x ? 1 : -1,
-        x1 = source.x + direction * 6,
-        x2 = target.x - direction * 5,
-        mid = x1 + direction * Math.max(18, Math.abs(x2 - x1) / 2);
-    return `M${x1},${source.y} H${mid} V${target.y} H${x2}`;
+        target = endpointPoint(to, targetEndpoint);
+    return dependencyPath(source, target, {
+        sourcePort: sourceEndpoint,
+        targetPort: targetEndpoint,
+        clearance: Math.max(6, Math.min(12, dayWidth.value * 0.2)),
+        rowHeight: rowHeight.value,
+    });
 };
 function moveCursorTo(task: Task) {
     cursorTaskId.value = task.id;
