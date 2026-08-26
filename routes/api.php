@@ -18,6 +18,8 @@ Route::prefix('v1')->group(function () {
             Route::post('/projects', [ProjectController::class, 'store']);
             Route::get('/projects/{projectId}/workspace', [ProjectController::class, 'workspace']);
             Route::post('/projects/{projectId}/sections', [ProjectController::class, 'createSection']);
+            Route::put('/projects/{projectId}/sections/{sectionId}', [ProjectController::class, 'updateSection']);
+            Route::post('/projects/{projectId}/structure/move', [ProjectController::class, 'moveStructureItem']);
             Route::post('/projects/{projectId}/tasks', [ProjectController::class, 'createTask']);
             Route::put('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'updateTask']);
             Route::patch('/projects/{projectId}/tasks/{taskId}/completion', [ProjectController::class, 'setTaskCompletion']);

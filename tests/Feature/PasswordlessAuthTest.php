@@ -30,7 +30,7 @@ final class PasswordlessAuthTest extends TestCase
     {
         Mail::fake();
 
-        $this->postJson('/auth/request-link', ['email' => 'Person@Example.com'])
+        $this->postJson('/auth/request-link', ['email' => 'Person@Example.com', 'name' => 'Pessoa Exemplo'])
             ->assertStatus(202)
             ->assertJsonPath('message', 'Se o e-mail puder ser utilizado, enviaremos um link de acesso.');
 
@@ -47,7 +47,7 @@ final class PasswordlessAuthTest extends TestCase
     public function test_pin_can_create_session(): void
     {
         Mail::fake();
-        $this->postJson('/auth/request-link', ['email' => 'person@example.com'])->assertStatus(202);
+        $this->postJson('/auth/request-link', ['email' => 'person@example.com', 'name' => 'Pessoa Exemplo'])->assertStatus(202);
         $mail = null;
         Mail::assertSent(MagicLoginLink::class, function (MagicLoginLink $sent) use (&$mail): bool {
             $mail = $sent;
@@ -61,7 +61,7 @@ final class PasswordlessAuthTest extends TestCase
     public function test_remember_option_creates_a_recaller_cookie(): void
     {
         Mail::fake();
-        $this->postJson('/auth/request-link', ['email' => 'person@example.com', 'remember' => true])->assertStatus(202);
+        $this->postJson('/auth/request-link', ['email' => 'person@example.com', 'name' => 'Pessoa Exemplo', 'remember' => true])->assertStatus(202);
         $mail = null;
         Mail::assertSent(MagicLoginLink::class, function (MagicLoginLink $sent) use (&$mail): bool {
             $mail = $sent;
@@ -75,7 +75,7 @@ final class PasswordlessAuthTest extends TestCase
     public function test_one_time_challenge_creates_session_and_cannot_be_reused(): void
     {
         $token = str_repeat('a', 64);
-        DB::table('login_challenges')->insert(['id' => (string) Str::ulid(), 'email' => 'person@example.com', 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addMinutes(5), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('login_challenges')->insert(['id' => (string) Str::ulid(), 'email' => 'person@example.com', 'registration_name' => 'Pessoa Exemplo', 'token_hash' => hash('sha256', $token), 'expires_at' => now()->addMinutes(5), 'created_at' => now(), 'updated_at' => now()]);
         $this->postJson('/auth/verify', ['token' => $token])->assertOk()->assertJsonPath('user.email', 'person@example.com');
         $this->assertAuthenticated();
         $this->postJson('/auth/verify', ['token' => $token])->assertStatus(422);
@@ -90,10 +90,23 @@ final class PasswordlessAuthTest extends TestCase
         Mail::fake();
         User::factory()->create(['email' => 'existing@example.com']);
         $existing = $this->postJson('/auth/request-link', ['email' => 'existing@example.com']);
-        $unknown = $this->postJson('/auth/request-link', ['email' => 'unknown@example.com']);
+        $unknown = $this->postJson('/auth/request-link', ['email' => 'unknown@example.com', 'name' => 'Usuário Novo']);
         $existing->assertStatus(202);
         $unknown->assertStatus(202);
         self::assertSame($existing->json('message'), $unknown->json('message'));
+    }
+
+    public function test_unknown_email_requires_a_name_before_the_account_is_created(): void
+    {
+        Mail::fake();
+
+        $this->postJson('/auth/request-link', ['email' => 'new@example.com'])
+            ->assertUnprocessable()
+            ->assertJsonPath('registrationRequired', true);
+        $this->assertDatabaseMissing('users', ['email' => 'new@example.com']);
+
+        $this->postJson('/auth/request-link', ['email' => 'new@example.com', 'name' => 'Novo Usuário'])
+            ->assertStatus(202);
     }
 
     public function test_session_listing_and_revocation_are_isolated_to_the_authenticated_user(): void

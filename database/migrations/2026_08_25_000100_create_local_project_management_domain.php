@@ -51,6 +51,7 @@ return new class extends Migration
             $table->foreignUlid('assignee_person_id')->nullable()->constrained('project_people')->nullOnDelete();
             $table->string('title');
             $table->text('description')->nullable();
+            $table->unsignedTinyInteger('priority')->default(1);
             $table->date('planned_start')->nullable();
             $table->date('planned_finish')->nullable();
             $table->date('completed_at')->nullable();

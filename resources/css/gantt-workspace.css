@@ -367,6 +367,71 @@ body.resizing-task-column * {
   place-items: center;
 }
 
+.structure-drag-handle {
+  width: 18px;
+  height: 24px;
+  flex: 0 0 18px;
+  margin-right: 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #9aa2b2;
+  font-size: 17px;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+
+.structure-drag-handle:hover,
+.structure-drag-handle:focus-visible {
+  background: #ece9ff;
+  color: #5548c8;
+  outline: 0;
+}
+
+.structure-drag-source { opacity: .38; }
+.task-row.structure-drop-before,
+.task-row.structure-drop-after,
+.task-row.structure-drop-invalid { position: relative; }
+.task-row.structure-drop-before::before,
+.task-row.structure-drop-after::after {
+  content: '';
+  position: absolute;
+  z-index: 12;
+  right: 7px;
+  left: 54px;
+  height: 3px;
+  border-radius: 3px;
+  background: #6558d0;
+  box-shadow: 0 0 0 3px #6558d022;
+}
+.task-row.structure-drop-before::before { top: -2px; }
+.task-row.structure-drop-after::after { bottom: -2px; }
+.task-row.structure-drop-inside { background: #f2f0ff; box-shadow: inset 0 0 0 2px #9a90e9; }
+.task-row.structure-drop-invalid { background: #fff3f2; box-shadow: inset 0 0 0 2px #e38a85; }
+
+.structure-drag-overlay {
+  position: fixed;
+  z-index: 200;
+  width: min(320px, calc(100vw - 32px));
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 2px 8px;
+  padding: 10px 12px;
+  border: 1px solid #b8b0ec;
+  border-radius: 9px;
+  background: #fff;
+  box-shadow: 0 15px 35px #17203a2b;
+  color: #34394a;
+  pointer-events: none;
+}
+.structure-drag-overlay b { color: #5a4ec0; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; }
+.structure-drag-overlay span { overflow: hidden; font-weight: 750; text-overflow: ellipsis; white-space: nowrap; }
+.structure-drag-overlay small { grid-column: 1 / -1; color: #697286; font-size: 10px; }
+.structure-drag-overlay.invalid { border-color: #e38a85; background: #fff8f7; }
+.structure-drag-overlay.invalid b, .structure-drag-overlay.invalid small { color: #b74d48; }
+
 .gantt-row .task-check {
   position: relative;
   z-index: 1;
@@ -1589,6 +1654,105 @@ body.resizing-task-column * {
   width: 16px;
   height: 16px;
   margin: 0;
+}
+
+.priority-flag-icon.p4,
+.task-context-priority.p4,
+.editor-priority-button.p4,
+.editor-priority-menu .p4 {
+  color: #fff;
+}
+
+.priority-flag-icon.p4 {
+  filter: drop-shadow(0 0 1px #697386) drop-shadow(0 0 1px #697386);
+}
+
+.priority-flag-icon {
+  display: block;
+  width: 20px;
+  height: 27px;
+  overflow: visible;
+}
+
+.priority-flag-icon .flag-pole {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.priority-flag-icon .flag-cloth { fill: currentColor; }
+
+.priority-flag-icon.p1 { color: #dc4e4b; }
+.priority-flag-icon.p2 { color: #d3a326; }
+.priority-flag-icon.p3 { color: #4f7fcf; }
+
+.task-title-field {
+  display: flex;
+  align-items: end;
+  gap: 8px;
+}
+
+.task-title-field > label {
+  flex: 1;
+}
+
+.editor-priority-wrap {
+  position: relative;
+  flex: none;
+}
+
+.editor-priority-button {
+  width: 39px;
+  height: 39px;
+  display: grid;
+  place-items: center;
+  padding: 4px;
+  border: 1px solid #dfe2e9;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.editor-priority-button .priority-flag-icon {
+  width: 20px;
+  height: 27px;
+}
+
+.editor-priority-menu {
+  position: absolute;
+  z-index: 90;
+  top: calc(100% + 5px);
+  left: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 35px);
+  gap: 3px;
+  padding: 4px;
+  border: 1px solid #dfe2e9;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 10px 25px #10152622;
+}
+
+.editor-priority-menu button {
+  display: grid;
+  width: 35px;
+  height: 35px;
+  place-items: center;
+  padding: 3px;
+  border: 0;
+  border-radius: 6px;
+  background: #fff;
+}
+
+.editor-priority-menu button:hover,
+.editor-priority-menu button.active {
+  background: #f0f2f6;
+  box-shadow: inset 0 0 0 1px #b9b2ec;
+}
+
+.editor-priority-menu .priority-flag-icon {
+  width: 19px;
+  height: 25px;
 }
 
 @media (max-width: 720px) {

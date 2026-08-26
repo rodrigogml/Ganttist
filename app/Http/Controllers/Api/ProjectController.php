@@ -40,6 +40,7 @@ final class ProjectController
             $id = (string) Str::ulid();
             DB::table('projects')->insert(['id' => $id, 'owner_user_id' => $request->user()->id, 'name' => trim($data['name']), 'creation_command_id' => $data['commandId'], 'created_at' => now(), 'updated_at' => now()]);
             DB::table('project_members')->insert(['id' => (string) Str::ulid(), 'project_id' => $id, 'user_id' => $request->user()->id, 'role' => 'owner', 'created_at' => now(), 'updated_at' => now()]);
+            $this->ensureProjectMemberPerson($id, $request->user());
 
             return DB::table('projects')->where('id', $id)->first();
         });
@@ -66,13 +67,29 @@ final class ProjectController
 
             return $sectionLevels[$section->id] = $parent ? $levelFor($parent) + 1 : 0;
         };
-        foreach ($sections as $section) {
-            $rows[] = ['id' => $section->id, 'title' => $section->name, 'kind' => 'section', 'parent_id' => $section->parent_section_id, 'level' => $levelFor($section), 'has_children' => $sections->contains('parent_section_id', $section->id) || $tasks->contains('section_id', $section->id), 'start' => null, 'finish' => null, 'progress' => 0, 'status' => 'opened', 'critical' => false];
-        }
         $incompletePredecessors = DB::table('project_task_dependencies')->join('project_tasks as predecessor', 'predecessor.id', '=', 'project_task_dependencies.predecessor_task_id')->where('project_task_dependencies.project_id', $projectId)->whereNull('predecessor.completed_at')->pluck('project_task_dependencies.successor_task_id')->all();
-        foreach ($tasks as $task) {
-            $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $this->status($task, $incompletePredecessors), 'critical' => false, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee];
+        $childrenByParent = collect();
+        foreach ($sections as $section) {
+            $childrenByParent->push((object) ['kind' => 'section', 'item' => $section, 'parent_id' => $section->parent_section_id, 'position' => $section->position]);
         }
+        foreach ($tasks as $task) {
+            $childrenByParent->push((object) ['kind' => 'task', 'item' => $task, 'parent_id' => $task->section_id, 'position' => $task->position]);
+        }
+        $childrenByParent = $childrenByParent->groupBy(fn (object $child): string => $child->parent_id ?? '__root__')->map(fn ($children) => $children->sortBy('position')->values());
+        $appendChildren = null;
+        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $incompletePredecessors): void {
+            foreach ($childrenByParent->get($parentId ?? '__root__', collect()) as $child) {
+                if ($child->kind === 'section') {
+                    $section = $child->item;
+                    $rows[] = ['id' => $section->id, 'title' => $section->name, 'kind' => 'section', 'parent_id' => $section->parent_section_id, 'level' => $levelFor($section), 'has_children' => $sections->contains('parent_section_id', $section->id) || $tasks->contains('section_id', $section->id), 'start' => null, 'finish' => null, 'progress' => 0, 'status' => 'opened', 'critical' => false];
+                    $appendChildren($section->id);
+                    continue;
+                }
+                $task = $child->item;
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $this->status($task, $incompletePredecessors), 'critical' => false, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee];
+            }
+        };
+        $appendChildren(null);
         $dependencies = DB::table('project_task_dependencies')->where('project_id', $projectId)->get()->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_task_id, 'to' => $edge->successor_task_id, 'type' => $edge->type, 'critical' => false]);
         $people = DB::table('project_people')->where('project_id', $projectId)->orderBy('name')->get(['id', 'name', 'email']);
 
@@ -87,7 +104,8 @@ final class ProjectController
         if (! empty($data['parentSectionId'])) {
             abort_unless(DB::table('project_sections')->where('id', $data['parentSectionId'])->where('project_id', $projectId)->exists(), 422, 'Seção-pai inválida.');
         }
-        DB::table('project_sections')->insert(['id' => $id, 'project_id' => $projectId, 'parent_section_id' => $data['parentSectionId'] ?? null, 'name' => trim($data['name']), 'position' => 0, 'created_at' => now(), 'updated_at' => now()]);
+        $position = $this->nextSiblingPosition($projectId, $data['parentSectionId'] ?? null);
+        DB::table('project_sections')->insert(['id' => $id, 'project_id' => $projectId, 'parent_section_id' => $data['parentSectionId'] ?? null, 'name' => trim($data['name']), 'position' => $position, 'created_at' => now(), 'updated_at' => now()]);
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $id]], 201);
@@ -96,7 +114,7 @@ final class ProjectController
     public function createTask(Request $request, string $projectId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'description' => ['nullable', 'string'], 'sectionId' => ['nullable', 'string'], 'assigneePersonId' => ['nullable', 'string'], 'plannedStart' => ['nullable', 'date'], 'plannedFinish' => ['nullable', 'date', 'after_or_equal:plannedStart'], 'actualCompletionDate' => ['nullable', 'date']]);
+        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'description' => ['nullable', 'string'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'sectionId' => ['nullable', 'string'], 'assigneePersonId' => ['nullable', 'string'], 'plannedStart' => ['nullable', 'date'], 'plannedFinish' => ['nullable', 'date', 'after_or_equal:plannedStart'], 'actualCompletionDate' => ['nullable', 'date']]);
         if (! empty($data['sectionId'])) {
             abort_unless(DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists(), 422, 'Seção inválida.');
         }
@@ -104,17 +122,89 @@ final class ProjectController
             abort_unless(DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->exists(), 422, 'Responsável inválido.');
         }
         $id = (string) Str::ulid();
-        DB::table('project_tasks')->insert(['id' => $id, 'project_id' => $projectId, 'section_id' => $data['sectionId'] ?? null, 'assignee_person_id' => $data['assigneePersonId'] ?? null, 'title' => trim($data['title']), 'description' => $data['description'] ?? null, 'planned_start' => $data['plannedStart'] ?? null, 'planned_finish' => $data['plannedFinish'] ?? null, 'completed_at' => $data['actualCompletionDate'] ?? null, 'position' => 0, 'created_at' => now(), 'updated_at' => now()]);
+        $position = $this->nextSiblingPosition($projectId, $data['sectionId'] ?? null);
+        DB::table('project_tasks')->insert(['id' => $id, 'project_id' => $projectId, 'section_id' => $data['sectionId'] ?? null, 'assignee_person_id' => $data['assigneePersonId'] ?? null, 'title' => trim($data['title']), 'description' => $data['description'] ?? null, 'priority' => $data['priority'] ?? 1, 'planned_start' => $data['plannedStart'] ?? null, 'planned_finish' => $data['plannedFinish'] ?? null, 'completed_at' => $data['actualCompletionDate'] ?? null, 'position' => $position, 'created_at' => now(), 'updated_at' => now()]);
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $id]], 201);
     }
 
+    public function updateSection(Request $request, string $projectId, string $sectionId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'parentSectionId' => ['nullable', 'string']]);
+        $section = DB::table('project_sections')->where('id', $sectionId)->where('project_id', $projectId)->first();
+        abort_unless($section, 404, 'Seção não encontrada.');
+        abort_if(($data['parentSectionId'] ?? null) === $sectionId, 422, 'Uma seção não pode ser pai de si mesma.');
+        if (! empty($data['parentSectionId'])) {
+            $parent = DB::table('project_sections')->where('id', $data['parentSectionId'])->where('project_id', $projectId)->first();
+            abort_unless($parent, 422, 'Seção-pai inválida.');
+            $ancestor = $parent;
+            while ($ancestor->parent_section_id) {
+                abort_if($ancestor->parent_section_id === $sectionId, 422, 'A seção-pai criaria um ciclo.');
+                $ancestor = DB::table('project_sections')->where('id', $ancestor->parent_section_id)->first();
+                if (! $ancestor) {
+                    break;
+                }
+            }
+        }
+        DB::table('project_sections')->where('id', $sectionId)->update(['name' => trim($data['name']), 'parent_section_id' => $data['parentSectionId'] ?? null, 'updated_at' => now()]);
+        DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+
+        return response()->json(['data' => ['id' => $sectionId]]);
+    }
+
+    public function moveStructureItem(Request $request, string $projectId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate([
+            'itemId' => ['required', 'string'],
+            'itemKind' => ['required', 'in:task,section'],
+            'parentSectionId' => ['nullable', 'string'],
+            'beforeItemId' => ['nullable', 'string'],
+        ]);
+
+        DB::transaction(function () use ($data, $projectId): void {
+            $table = $data['itemKind'] === 'section' ? 'project_sections' : 'project_tasks';
+            $item = DB::table($table)->where('id', $data['itemId'])->where('project_id', $projectId)->first();
+            abort_unless($item, 404, 'Item não encontrado.');
+            $parentId = $data['parentSectionId'] ?? null;
+            if ($parentId) {
+                $parent = DB::table('project_sections')->where('id', $parentId)->where('project_id', $projectId)->first();
+                abort_unless($parent, 422, 'Seção de destino inválida.');
+                abort_if($data['itemKind'] === 'section' && $this->sectionIsDescendantOf($projectId, $parentId, $data['itemId']), 422, 'Uma seção não pode ser movida para dentro de si mesma ou de uma descendente.');
+            }
+
+            $siblings = $this->siblings($projectId, $parentId)
+                ->reject(fn (array $sibling): bool => $sibling['id'] === $data['itemId'])
+                ->values();
+            $beforeId = $data['beforeItemId'] ?? null;
+            if ($beforeId) {
+                abort_if(! $siblings->contains('id', $beforeId), 422, 'A posição de destino não pertence à seção informada.');
+            }
+            $moving = ['id' => $data['itemId'], 'kind' => $data['itemKind']];
+            $insertAt = $beforeId ? $siblings->search(fn (array $sibling): bool => $sibling['id'] === $beforeId) : $siblings->count();
+            $ordered = $siblings->all();
+            array_splice($ordered, $insertAt, 0, [$moving]);
+            foreach ($ordered as $index => $sibling) {
+                $siblingTable = $sibling['kind'] === 'section' ? 'project_sections' : 'project_tasks';
+                $changes = ['position' => $index + 1, 'updated_at' => now()];
+                if ($sibling['id'] === $data['itemId']) {
+                    $changes[$data['itemKind'] === 'section' ? 'parent_section_id' : 'section_id'] = $parentId;
+                }
+                DB::table($siblingTable)->where('id', $sibling['id'])->where('project_id', $projectId)->update($changes);
+            }
+            DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+        });
+
+        return response()->json(['data' => ['id' => $data['itemId']]]);
+    }
+
     public function setTaskCompletion(Request $request, string $projectId, string $taskId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['completed' => ['required', 'boolean']]);
-        $updated = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->update(['completed_at' => $data['completed'] ? now()->toDateString() : null, 'updated_at' => now()]);
+        $data = $request->validate(['completed' => ['required', 'boolean'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
+        $updated = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->update(['completed_at' => $data['completed'] ? ($data['actualCompletionDate'] ?? now()->toDateString()) : null, 'updated_at' => now()]);
         abort_unless($updated, 404, 'Tarefa não encontrada.');
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
@@ -124,7 +214,7 @@ final class ProjectController
     public function updateTask(Request $request, string $projectId, string $taskId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['title' => ['sometimes', 'required', 'string', 'max:255'], 'description' => ['sometimes', 'nullable', 'string'], 'sectionId' => ['sometimes', 'nullable', 'string'], 'assigneePersonId' => ['sometimes', 'nullable', 'string'], 'plannedStart' => ['sometimes', 'nullable', 'date'], 'plannedFinish' => ['sometimes', 'nullable', 'date'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
+        $data = $request->validate(['title' => ['sometimes', 'required', 'string', 'max:255'], 'description' => ['sometimes', 'nullable', 'string'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'sectionId' => ['sometimes', 'nullable', 'string'], 'assigneePersonId' => ['sometimes', 'nullable', 'string'], 'plannedStart' => ['sometimes', 'nullable', 'date'], 'plannedFinish' => ['sometimes', 'nullable', 'date'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
         if (array_key_exists('sectionId', $data) && $data['sectionId'] && ! DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists()) {
             abort(422, 'Seção inválida.');
         }
@@ -142,6 +232,9 @@ final class ProjectController
         }
         if (array_key_exists('description', $data)) {
             $changes['description'] = $data['description'];
+        }
+        if (array_key_exists('priority', $data)) {
+            $changes['priority'] = $data['priority'];
         }
         if (array_key_exists('sectionId', $data)) {
             $changes['section_id'] = $data['sectionId'];
@@ -334,6 +427,16 @@ final class ProjectController
             } else {
                 DB::table('project_members')->insert(['id' => (string) Str::ulid(), 'project_id' => $invitation->project_id, 'user_id' => $request->user()->id, 'role' => $invitation->role, 'created_at' => now(), 'updated_at' => now()]);
             }
+            $person = DB::table('project_people')
+                ->where('project_id', $invitation->project_id)
+                ->whereNull('linked_user_id')
+                ->where('email', $request->user()->email)
+                ->first();
+            if ($person) {
+                DB::table('project_people')->where('id', $person->id)->update(['linked_user_id' => $request->user()->id, 'updated_at' => now()]);
+            } else {
+                $this->ensureProjectMemberPerson($invitation->project_id, $request->user());
+            }
             DB::table('project_invitations')->where('id', $invitation->id)->update(['status' => 'accepted', 'accepted_at' => now(), 'updated_at' => now()]);
         });
 
@@ -358,6 +461,26 @@ final class ProjectController
         abort_unless(in_array($member->role, ['owner', 'editor'], true), 403);
 
         return $member;
+    }
+
+    private function ensureProjectMemberPerson(string $projectId, object $user): void
+    {
+        $exists = DB::table('project_people')
+            ->where('project_id', $projectId)
+            ->where('linked_user_id', $user->id)
+            ->exists();
+
+        if (! $exists) {
+            DB::table('project_people')->insert([
+                'id' => (string) Str::ulid(),
+                'project_id' => $projectId,
+                'linked_user_id' => $user->id,
+                'name' => $user->name,
+                'email' => $user->email,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        }
     }
 
     private function status(object $task, array $incompletePredecessors): string
@@ -394,6 +517,42 @@ final class ProjectController
             foreach ($graph[$node] ?? [] as $next) {
                 $stack[] = $next;
             }
+        }
+
+        return false;
+    }
+
+    private function nextSiblingPosition(string $projectId, ?string $parentSectionId): int
+    {
+        return $this->siblings($projectId, $parentSectionId)->count() + 1;
+    }
+
+    private function siblings(string $projectId, ?string $parentSectionId): \Illuminate\Support\Collection
+    {
+        $sections = DB::table('project_sections')->where('project_id', $projectId);
+        $tasks = DB::table('project_tasks')->where('project_id', $projectId);
+        if ($parentSectionId) {
+            $sections->where('parent_section_id', $parentSectionId);
+            $tasks->where('section_id', $parentSectionId);
+        } else {
+            $sections->whereNull('parent_section_id');
+            $tasks->whereNull('section_id');
+        }
+
+        return $sections->get(['id', 'position'])->map(fn (object $item): array => ['id' => $item->id, 'kind' => 'section', 'position' => $item->position])
+            ->concat($tasks->get(['id', 'position'])->map(fn (object $item): array => ['id' => $item->id, 'kind' => 'task', 'position' => $item->position]))
+            ->sortBy('position')
+            ->values();
+    }
+
+    private function sectionIsDescendantOf(string $projectId, string $sectionId, string $ancestorId): bool
+    {
+        $currentId = $sectionId;
+        while ($currentId) {
+            if ($currentId === $ancestorId) {
+                return true;
+            }
+            $currentId = DB::table('project_sections')->where('id', $currentId)->where('project_id', $projectId)->value('parent_section_id');
         }
 
         return false;

@@ -70,13 +70,21 @@ export const useAuthStore = defineStore('auth', () => {
     } catch { error.value = 'Não foi possível verificar sua sessão.' } finally { loading.value = false }
   }
 
-  async function requestLink(email: string) {
+  async function requestLink(email: string, name = '') {
     sending.value = true; error.value = ''
     try {
-      const response = await fetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email, remember: remember.value }) })
-      if (!response.ok) throw new Error('Não foi possível enviar o link. Tente novamente.')
+      const response = await fetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email, name, remember: remember.value }) })
+      if (!response.ok) {
+        const body = await response.json().catch(() => null)
+        const error = new Error(typeof body?.message === 'string' ? body.message : 'Não foi possível enviar o link. Tente novamente.')
+        Object.assign(error, { registrationRequired: Boolean(body?.registrationRequired) })
+        throw error
+      }
       loginEmail.value = email.trim().toLowerCase(); sent.value = true
-    } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível enviar o link.' } finally { sending.value = false }
+    } catch (exception) {
+      error.value = exception instanceof Error ? exception.message : 'Não foi possível enviar o link.'
+      if ((exception as Error & { registrationRequired?: boolean }).registrationRequired) throw exception
+    } finally { sending.value = false }
   }
 
   async function verifyPin(pin: string) {

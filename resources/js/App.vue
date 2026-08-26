@@ -4,7 +4,8 @@ import AuthGate from "./AuthGate.vue";
 import AccountPanel from "./AccountPanel.vue";
 import ProjectMembersPanel from "./ProjectMembersPanel.vue";
 import ProjectDashboard from "./ProjectDashboard.vue";
-import ProjectItemCreateDialog from "./ProjectItemCreateDialog.vue";
+import HierarchyCombobox from "./HierarchyCombobox.vue";
+import PersonCombobox from "./PersonCombobox.vue";
 import { useAuthStore } from "./stores/auth";
 import {
     unblockedTaskStatuses,
@@ -127,6 +128,7 @@ onUnmounted(() => {
     cancelTimeblockGesture();
     stopEditorResize();
     stopTaskColumnResize();
+    stopStructureDrag();
     if (globalThis.fetch === sessionGuardedFetch)
         globalThis.fetch = fetchWithSessionGuard;
 });
@@ -146,7 +148,6 @@ const drawer = ref(false),
     projectLoading = ref(false),
     projects = ref<{ id: string; name: string }[]>([]),
     creationMenu = ref(false),
-    creationDialogKind = ref<"task" | "section" | null>(null),
     deleting = ref(false),
     preserveContinuity = ref(true),
     deletionPreview = ref<{
@@ -212,6 +213,7 @@ const {
 const timelinePlane = ref<HTMLElement | null>(null),
     undoDependencyId = ref<string | null>(null);
 const taskDraft = ref<Task | null>(null);
+const sectionDraft = ref<Task | null>(null);
 const taskDraftBaseline = ref(""),
     closeConfirmation = ref(false),
     pendingTaskToOpen = ref<Task | null>(null),
@@ -254,16 +256,31 @@ const filterButton = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
     appearanceWrap = ref<HTMLElement | null>(null);
 const taskContextMenu = ref<{ task: Task; x: number; y: number } | null>(null),
-    taskContextBusy = ref(false);
+    taskContextBusy = ref(false),
+    editorPriorityMenu = ref(false);
+type StructureDrop = {
+    targetId: string;
+    parentId: string | null;
+    beforeId: string | null;
+    zone: "before" | "inside" | "after";
+    valid: boolean;
+    message: string;
+};
+type StructureDrag = { task: Task; x: number; y: number; drop: StructureDrop | null };
+const structureDrag = ref<StructureDrag | null>(null);
+const structureMoveBusy = ref(false);
+const canMoveStructure = computed(
+    () => store.workspace?.project.role !== "reader" && !structureMoveBusy.value,
+);
 const taskPriorityOptions: ReadonlyArray<{
     priority: 1 | 2 | 3 | 4;
     label: string;
-    flag: "p1" | "p2" | "p3" | null;
+    flag: "p1" | "p2" | "p3" | "p4";
 }> = [
     { priority: 4, label: "Prioridade 1", flag: "p1" },
     { priority: 3, label: "Prioridade 2", flag: "p2" },
     { priority: 2, label: "Prioridade 3", flag: "p3" },
-    { priority: 1, label: "Sem prioridade", flag: null },
+    { priority: 1, label: "Prioridade 4", flag: "p4" },
 ];
 let taskContextLongPress: {
     task: Task;
@@ -350,6 +367,7 @@ const editableTaskSnapshot = (task: Task) =>
         effective_completion: task.effective_completion ?? null,
         priority: task.priority ?? 1,
         assignee_id: task.assignee_id ?? null,
+        section_id: task.section_id ?? task.parent_id ?? null,
     });
 const taskDraftDirty = computed(
     () =>
@@ -364,7 +382,9 @@ const taskDraftDirty = computed(
             commentEditDraft.value !== commentEditBaseline.value,
         ),
 );
+const isCreatingTask = computed(() => taskDraft.value?.id === "__new-task__");
 const activeTask = computed(() => {
+    if (sectionDraft.value) return null;
     if (taskDraft.value) return taskDraft.value;
     const id =
         store.selected.length === 1 ? store.selected[0] : cursorTaskId.value;
@@ -462,6 +482,10 @@ function todayCivil() {
     const value = (type: Intl.DateTimeFormatPartTypes) =>
         parts.find((part) => part.type === type)?.value ?? "";
     return `${value("year")}-${value("month")}-${value("day")}`;
+}
+function ensureCompletionDate() {
+    if (activeTask.value?.completed && !activeTask.value.effective_completion)
+        activeTask.value.effective_completion = todayCivil();
 }
 const gestureDates = computed(() =>
     timeGesture.value && timeGesture.value.kind !== "connect"
@@ -622,10 +646,10 @@ function taskPriorityLevel(task: Task): 1 | 2 | 3 | null {
     return task.priority === 4
         ? 1
         : task.priority === 3
-          ? 2
-          : task.priority === 2
-            ? 3
-            : null;
+            ? 2
+            : task.priority === 2
+              ? 3
+              : null;
 }
 const taskAncestors = computed(() => {
     const byId = new Map(hierarchyTasks.value.map((task) => [task.id, task]));
@@ -814,15 +838,118 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
     )
         creationMenu.value = false;
 }
+function structureDescendsFrom(task: Task, ancestorId: string) {
+    return task.id === ancestorId || ancestorsFor(task).includes(ancestorId);
+}
+function nextSiblingAfter(task: Task): string | null {
+    const items = hierarchyTasks.value;
+    let index = items.findIndex((item) => item.id === task.id);
+    while (++index < items.length) {
+        const candidate = items[index];
+        if (candidate.level <= task.level) {
+            return candidate.parent_id === task.parent_id ? candidate.id : null;
+        }
+    }
+    return null;
+}
+function rootAncestor(task: Task): Task {
+    const rootId = ancestorsFor(task)[0];
+    return hierarchyTasks.value.find((item) => item.id === rootId) ?? task;
+}
+function structureDropClass(task: Task) {
+    const drop = structureDrag.value?.drop;
+    if (!drop || drop.targetId !== task.id) return "";
+    return drop.valid ? `structure-drop-${drop.zone}` : "structure-drop-invalid";
+}
+function describeStructureDestination(parentId: string | null, beforeId: string | null, zone: StructureDrop["zone"]) {
+    const parent = parentId ? hierarchyTasks.value.find((item) => item.id === parentId) : null;
+    const before = beforeId ? hierarchyTasks.value.find((item) => item.id === beforeId) : null;
+    if (zone === "inside" && parent) return `Dentro de “${parent.title}”`;
+    if (before) return `Antes de “${before.title}”`;
+    return parent ? `No fim de “${parent.title}”` : "No fim da raiz";
+}
+function projectStructureDrop(event: PointerEvent): StructureDrop | null {
+    const source = structureDrag.value?.task;
+    const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(".task-row[data-task-id]");
+    const targetId = row?.dataset.taskId;
+    const target = hierarchyTasks.value.find((item) => item.id === targetId);
+    if (!source || !row || !target) return null;
+    const rect = row.getBoundingClientRect();
+    const ratio = (event.clientY - rect.top) / rect.height;
+    const zone: StructureDrop["zone"] = ratio < .25 ? "before" : ratio > .75 ? "after" : "inside";
+    if (structureDescendsFrom(target, source.id)) {
+        return { targetId: target.id, parentId: null, beforeId: null, zone, valid: false, message: "Não é permitido mover um item para dentro dele mesmo ou de sua descendência." };
+    }
+    if (zone === "inside") {
+        if (target.kind !== "section") {
+            return { targetId: target.id, parentId: null, beforeId: null, zone, valid: false, message: "Tarefas não podem conter itens." };
+        }
+        return { targetId: target.id, parentId: target.id, beforeId: null, zone, valid: true, message: describeStructureDestination(target.id, null, zone) };
+    }
+    const projectedDepth = Math.max(0, Math.min(target.level, Math.round((event.clientX - rect.left - 76) / 22)));
+    const siblingTarget = projectedDepth === target.level
+        ? target
+        : hierarchyTasks.value.find((item) => item.id === ancestorsFor(target)[projectedDepth]) ?? rootAncestor(target);
+    const parentId = projectedDepth === 0 ? null : ancestorsFor(target)[projectedDepth - 1] ?? null;
+    const beforeId = zone === "before" ? siblingTarget.id : nextSiblingAfter(siblingTarget);
+    return { targetId: target.id, parentId, beforeId, zone, valid: true, message: describeStructureDestination(parentId, beforeId, zone) };
+}
+function moveStructureDrag(event: PointerEvent) {
+    if (!structureDrag.value) return;
+    structureDrag.value = { ...structureDrag.value, x: event.clientX, y: event.clientY, drop: projectStructureDrop(event) };
+}
+async function finishStructureDrag(event: PointerEvent) {
+    const drag = structureDrag.value;
+    const drop = drag?.drop;
+    stopStructureDrag();
+    if (!drag || !drop?.valid || structureMoveBusy.value) return;
+    const projectId = store.workspace?.project.id;
+    if (!projectId) return;
+    structureMoveBusy.value = true;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/structure/move`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({ itemId: drag.task.id, itemKind: drag.task.kind, parentSectionId: drop.parentId, beforeItemId: drop.beforeId }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível reorganizar o item."));
+        await store.load();
+        showToast("Estrutura reorganizada", "success");
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível reorganizar o item.", "error");
+    } finally {
+        structureMoveBusy.value = false;
+        setTimeout(() => (toast.value = ""), 3500);
+    }
+}
+function stopStructureDrag() {
+    document.removeEventListener("pointermove", moveStructureDrag);
+    document.removeEventListener("pointerup", finishStructureDrag);
+    document.removeEventListener("pointercancel", stopStructureDrag);
+    structureDrag.value = null;
+}
+function startStructureDrag(task: Task, event: PointerEvent) {
+    if (!canMoveStructure.value || event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelTaskContextLongPress();
+    structureDrag.value = { task, x: event.clientX, y: event.clientY, drop: null };
+    document.addEventListener("pointermove", moveStructureDrag);
+    document.addEventListener("pointerup", finishStructureDrag, { once: true });
+    document.addEventListener("pointercancel", stopStructureDrag, { once: true });
+}
 function openCreationDialog(kind: "task" | "section") {
     creationMenu.value = false;
-    creationDialogKind.value = kind;
-}
-async function handleProjectItemCreated(kind: "task" | "section") {
-    creationDialogKind.value = null;
-    await store.load();
-    showToast(kind === "task" ? "Tarefa criada" : "Seção criada", "success");
-    setTimeout(() => (toast.value = ""), 3500);
+    if (kind === "task") {
+        taskDraft.value = { id: "__new-task__", title: "", description: "", kind: "task", level: 0, parent_id: null, section_id: null, priority: 1, start: null, finish: null, completed: false, progress: 0, status: "opened", critical: false };
+        taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
+        sectionDraft.value = null;
+    } else {
+        sectionDraft.value = { id: "__new-section__", title: "", kind: "section", level: 0, parent_id: null, start: null, finish: null, progress: 0, status: "opened", critical: false };
+        taskDraft.value = null;
+    }
+    drawer.value = true;
+    focusTaskTitle();
 }
 function focusTaskSearchFromShortcut(event: KeyboardEvent) {
     if (
@@ -934,6 +1061,30 @@ async function toggleTaskCompletionFromContext() {
         taskContextBusy.value = false;
         setTimeout(() => (toast.value = ""), 4000);
     }
+}
+async function setTaskPriorityFromContext(priority: 1 | 2 | 3 | 4) {
+    const menu = taskContextMenu.value;
+    if (!menu || menu.task.kind !== "task" || taskContextBusy.value) return;
+    taskContextMenu.value = null;
+    taskContextBusy.value = true;
+    try {
+        await persistTask({ ...menu.task, priority });
+        await store.load();
+        showToast("Prioridade atualizada", "success");
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível atualizar a prioridade.", "error");
+    } finally {
+        taskContextBusy.value = false;
+        setTimeout(() => (toast.value = ""), 3500);
+    }
+}
+function editSectionFromContext() {
+    const menu = taskContextMenu.value;
+    if (!menu || menu.task.kind !== "section") return;
+    taskContextMenu.value = null;
+    sectionDraft.value = { ...menu.task };
+    taskDraft.value = null;
+    drawer.value = true;
 }
 async function deleteSectionFromContext() {
     const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
@@ -1167,6 +1318,7 @@ async function createPerson() {
 function openTaskImmediately(task: Task) {
     const draft = { ...task };
     taskDraft.value = draft;
+    sectionDraft.value = null;
     taskDraftBaseline.value = editableTaskSnapshot(draft);
     editorReturnTaskId.value = task.id;
     pendingTaskToOpen.value = null;
@@ -1204,6 +1356,7 @@ function finishTaskEditorClose(returnFocus = true) {
     const returnId = editorReturnTaskId.value;
     drawer.value = false;
     taskDraft.value = null;
+    sectionDraft.value = null;
     taskDraftBaseline.value = "";
     closeConfirmation.value = false;
     pendingTaskToOpen.value = null;
@@ -2035,6 +2188,8 @@ async function persistTask(task: Task) {
                 title: task.title,
                 description: task.description ?? "",
                 assigneePersonId: task.assignee_id ?? null,
+                sectionId: task.section_id ?? task.parent_id ?? null,
+                priority: task.priority ?? 1,
                 plannedStart: task.start,
                 plannedFinish: task.finish,
                 actualCompletionDate: task.effective_completion ?? null,
@@ -2189,11 +2344,30 @@ async function saveTask() {
         source = store.workspace?.tasks.find((item) => item.id === task.id),
         pending = pendingTaskToOpen.value;
     try {
+        if (isCreatingTask.value) {
+            const projectId = store.workspace?.project.id;
+            if (!projectId) throw new Error("Projeto não carregado.");
+            const response = await fetch(`/api/v1/projects/${projectId}/tasks`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+                body: JSON.stringify({ title: task.title, description: task.description || null, priority: task.priority ?? 1, sectionId: task.section_id ?? null, assigneePersonId: task.assignee_id ?? null, plannedStart: task.start, plannedFinish: task.finish, actualCompletionDate: task.completed ? task.effective_completion ?? todayCivil() : null }),
+            });
+            if (!response.ok) throw new Error(await responseError(response, "Não foi possível criar a tarefa."));
+            await store.load();
+            showToast("Tarefa criada", "success");
+            finishTaskEditorClose();
+            return;
+        }
         const changed =
             !source ||
             task.title !== source.title ||
             (task.description ?? "") !== (source.description ?? "") ||
             (task.assignee_id ?? null) !== (source.assignee_id ?? null) ||
+            (task.section_id ?? task.parent_id ?? null) !==
+                (source.section_id ?? source.parent_id ?? null) ||
+            (task.effective_completion ?? null) !==
+                (source.effective_completion ?? null) ||
+            (task.priority ?? 1) !== (source.priority ?? 1) ||
             task.start !== source.start ||
             task.finish !== source.finish;
         if (changed) await persistTask(task);
@@ -2214,6 +2388,9 @@ async function saveTask() {
                         },
                         body: JSON.stringify({
                             completed: task.completed ?? false,
+                            actualCompletionDate: task.completed
+                                ? task.effective_completion ?? todayCivil()
+                                : null,
                         }),
                     },
                 );
@@ -2239,6 +2416,24 @@ async function saveTask() {
             "error",
         );
         setTimeout(() => (toast.value = ""), 4500);
+    }
+}
+async function saveSection() {
+    const section = sectionDraft.value, projectId = store.workspace?.project.id;
+    if (!section || !projectId || !section.title.trim()) return;
+    try {
+        const creating = section.id === "__new-section__";
+        const response = await fetch(`/api/v1/projects/${projectId}/sections${creating ? "" : `/${section.id}`}`, {
+            method: creating ? "POST" : "PUT",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify(creating ? { name: section.title.trim(), parentSectionId: section.parent_id ?? null } : { name: section.title.trim(), parentSectionId: section.parent_id ?? null }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível salvar a seção."));
+        await store.load();
+        showToast(creating ? "Seção criada" : "Seção atualizada", "success");
+        finishTaskEditorClose();
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível salvar a seção.", "error");
     }
 }
 function statusLabel(s: string) {
@@ -2313,7 +2508,6 @@ function statusLabel(s: string) {
             <div class="top-actions">
                 <div ref="appearanceWrap" class="appearance-wrap">
                     <button
-                    v-if="taskContextMenu?.task.kind === 'task'"
                         class="icon-btn appearance-btn"
                         aria-label="Aparência"
                         title="Aparência"
@@ -2709,6 +2903,13 @@ function statusLabel(s: string) {
                                 : "Concluir tarefa"
                         }}</span>
                     </button>
+                    <div v-if="taskContextMenu.task.kind === 'task'" class="task-context-priorities" role="group" aria-label="Definir prioridade"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" class="task-context-priority" :class="[option.flag, { active: (taskContextMenu.task.priority ?? 1) === option.priority }]" :disabled="taskContextBusy" :aria-label="option.label" :title="option.label" @click="setTaskPriorityFromContext(option.priority)"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div>
+                    <button
+                        v-if="taskContextMenu.task.kind === 'section'"
+                        type="button"
+                        role="menuitem"
+                        @click="editSectionFromContext"
+                    >Editar seção</button>
                     <button
                         v-if="taskContextMenu.task.kind === 'section'"
                         type="button"
@@ -2975,6 +3176,11 @@ function statusLabel(s: string) {
                                             !isExpandable(task),
                                     },
                                     task.status,
+                                    structureDropClass(task),
+                                    {
+                                        'structure-drag-source':
+                                            structureDrag?.task.id === task.id,
+                                    },
                                 ]"
                                 :style="{
                                     height: rowHeight + 'px',
@@ -3013,7 +3219,14 @@ function statusLabel(s: string) {
                                                 selectFromCheckbox(task, $event)
                                             "
                                     /></span>
-                                    <div
+                                    <button
+                                        v-if="canMoveStructure"
+                                        type="button"
+                                        class="structure-drag-handle"
+                                        :aria-label="`Reorganizar ${task.title}`"
+                                        :title="`Reorganizar ${task.title}`"
+                                        @pointerdown.stop="startStructureDrag(task, $event)"
+                                    >⠿</button><div
                                         class="task-tree-content"
                                         :class="{
                                             'has-expanded-children':
@@ -3635,7 +3848,7 @@ function statusLabel(s: string) {
         </section>
         <aside
             class="drawer"
-            :class="{ open: drawer && activeTask, pinned: editorPinned }"
+            :class="{ open: drawer && (activeTask || sectionDraft), pinned: editorPinned }"
             role="dialog"
             aria-modal="false"
             aria-labelledby="task-editor-title"
@@ -3656,8 +3869,8 @@ function statusLabel(s: string) {
             <template v-if="activeTask">
                 <header>
                     <div>
-                        <span class="eyebrow">DETALHES DA TAREFA</span>
-                        <h2 id="task-editor-title">{{ activeTask.title }}</h2>
+                        <span class="eyebrow">{{ isCreatingTask ? 'NOVA TAREFA' : 'DETALHES DA TAREFA' }}</span>
+                        <h2 id="task-editor-title">{{ isCreatingTask ? 'Adicionar tarefa' : activeTask.title }}</h2>
                     </div>
                     <div class="drawer-header-actions">
                         <button
@@ -3691,52 +3904,18 @@ function statusLabel(s: string) {
                     </div>
                 </header>
                 <div class="drawer-body">
-                    <div class="source-line">
-                        <span class="todoist-mark">✓</span>
-                        <div>
-                            <b>Projeto local</b
-                            ><small>Todos os dados deste projeto são gerenciados no Ganttist.</small>
-                        </div>
-                    </div>
-                    <label>Título<input v-model="activeTask.title" /></label
-                    ><label
+                    <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
+                    <label
                         >Descrição<textarea
                             v-model="activeTask.description"
                             rows="4"
                             placeholder="Descrição da tarefa"
                         ></textarea>
                     </label>
-                    <div class="form-grid">
+                    <label>Posição na hierarquia<HierarchyCombobox v-model="activeTask.section_id" :items="store.workspace?.tasks ?? []" /></label>
+                    <div class="form-grid" style="grid-template-columns: 1fr">
                         <label
-                            >Responsável<select
-                                v-model="activeTask.assignee_id"
-                                :disabled="editorContextLoading"
-                            >
-                                <option :value="null">Sem responsável</option>
-                                <option
-                                    v-if="
-                                        activeTask.assignee_id &&
-                                        !collaborators.some(
-                                            (collaborator) =>
-                                                collaborator.id ===
-                                                activeTask?.assignee_id,
-                                        )
-                                    "
-                                    :value="activeTask.assignee_id"
-                                >
-                                    {{
-                                        activeTask.assignee ||
-                                        "Responsável atual"
-                                    }}
-                                </option>
-                                <option
-                                    v-for="collaborator in collaborators"
-                                    :key="collaborator.id"
-                                    :value="collaborator.id"
-                                >
-                                    {{ collaborator.name }}
-                                </option>
-                            </select></label
+                            >Responsável<PersonCombobox v-model="activeTask.assignee_id" :people="collaborators" /></label
                         >
                     </div>
                     <div class="form-grid">
@@ -3750,13 +3929,7 @@ function statusLabel(s: string) {
                                 type="date"
                         /></label>
                     </div>
-                    <label class="completion-toggle"
-                        ><input
-                            v-model="activeTask.completed"
-                            type="checkbox"
-                        />
-                        Concluída</label
-                    >
+                    <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<input v-model="activeTask.effective_completion" type="date" required /></label></div>
                     <section
                         class="projection-summary"
                         aria-label="Projeção calculada"
@@ -3787,15 +3960,8 @@ function statusLabel(s: string) {
                             Status calculado a partir do planejamento, das dependências e da conclusão.
                         </p>
                     </section>
-                    <label v-if="activeTask.completed"
-                        >Data efetiva de conclusão
-                        <small
-                            >Registrada localmente ao concluir a tarefa.</small
-                        ><input
-                            v-model="activeTask.effective_completion"
-                            type="date"
-                    /></label>
                     <section
+                        v-if="!isCreatingTask"
                         class="comments-box"
                         aria-labelledby="comments-title"
                     >
@@ -3877,6 +4043,7 @@ function statusLabel(s: string) {
                         </button>
                     </section>
                     <section
+                        v-if="!isCreatingTask"
                         class="dependency-box"
                         aria-labelledby="task-relations-title"
                     >
@@ -4134,7 +4301,7 @@ function statusLabel(s: string) {
                 </form>
                 <footer>
                     <button
-                        v-if="activeTask.kind === 'task' && !deletionPreview"
+                        v-if="!isCreatingTask && activeTask.kind === 'task' && !deletionPreview"
                         class="danger-btn"
                         @click="previewDeletion"
                     >
@@ -4149,9 +4316,14 @@ function statusLabel(s: string) {
                         :disabled="deleting"
                         @click="saveTask"
                     >
-                        Salvar alterações
+                        {{ isCreatingTask ? 'Criar tarefa' : 'Salvar alterações' }}
                     </button>
                 </footer>
+            </template>
+            <template v-else-if="sectionDraft">
+                <header><div><span class="eyebrow">{{ sectionDraft.id === '__new-section__' ? 'NOVA SEÇÃO' : 'EDITAR SEÇÃO' }}</span><h2 id="task-editor-title">{{ sectionDraft.id === '__new-section__' ? 'Adicionar seção' : sectionDraft.title }}</h2></div><div class="drawer-header-actions"><button class="drawer-close" aria-label="Fechar editor" @click="finishTaskEditorClose">×</button></div></header>
+                <div class="drawer-body"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></div>
+                <footer><button class="soft-btn drawer-cancel" @click="finishTaskEditorClose">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
             </template>
         </aside>
         <div
@@ -4341,6 +4513,19 @@ function statusLabel(s: string) {
             </button>
         </div>
     </div>
+    <Teleport to="body">
+        <div
+            v-if="structureDrag"
+            class="structure-drag-overlay"
+            :class="{ invalid: structureDrag.drop && !structureDrag.drop.valid }"
+            :style="{ left: structureDrag.x + 14 + 'px', top: structureDrag.y + 14 + 'px' }"
+            aria-hidden="true"
+        >
+            <b>{{ structureDrag.task.kind === 'section' ? 'Seção' : 'Tarefa' }}</b>
+            <span>{{ structureDrag.task.title }}</span>
+            <small>{{ structureDrag.drop?.message ?? 'Escolha uma posição na estrutura' }}</small>
+        </div>
+    </Teleport>
     <AccountPanel
         :open="account"
         @close="account = false"
@@ -4356,14 +4541,5 @@ function statusLabel(s: string) {
         @close="calendarPanel = false"
         @people-changed="store.load()"
         @deleted="calendarPanel = false; store.clearWorkspace()"
-    />
-    <ProjectItemCreateDialog
-        v-if="creationDialogKind && store.workspace"
-        :project-id="store.workspace.project.id"
-        :kind="creationDialogKind"
-        :items="store.workspace.tasks"
-        :people="store.workspace.people ?? []"
-        @close="creationDialogKind = null"
-        @created="handleProjectItemCreated"
     />
 </template>

@@ -1,10 +1,16 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 
-const props = defineProps<{ auth: { sending: boolean; sent: boolean; error: string; remember: boolean; requestLink: (email: string) => Promise<void>; verifyPin: (pin: string) => Promise<void>; resetSent: () => void } }>()
+const props = defineProps<{ auth: { sending: boolean; sent: boolean; error: string; remember: boolean; requestLink: (email: string, name?: string) => Promise<void>; verifyPin: (pin: string) => Promise<void>; resetSent: () => void } }>()
 const email = ref('')
+const name = ref('')
+const registrationRequired = ref(false)
 const pin = ref('')
-function submit() { if (email.value) props.auth.requestLink(email.value) }
+async function submit() {
+  if (!email.value) return
+  try { await props.auth.requestLink(email.value, name.value) }
+  catch (error) { registrationRequired.value = Boolean((error as Error & { registrationRequired?: boolean }).registrationRequired) }
+}
 </script>
 
 <template>
@@ -24,6 +30,8 @@ function submit() { if (email.value) props.auth.requestLink(email.value) }
       </template>
       <form v-else @submit.prevent="submit">
         <label class="auth-label">E-mail<input v-model="email" type="email" autocomplete="email" placeholder="voce@exemplo.com" required></label>
+        <label v-if="registrationRequired" class="auth-label">Seu nome<input v-model="name" autocomplete="name" placeholder="Como você quer aparecer no Ganttist" required autofocus></label>
+        <p v-if="registrationRequired" class="auth-copy">Este e-mail ainda não possui conta. Informe seu nome e confirme o código enviado para concluir o cadastro.</p>
         <label class="auth-check"><input v-model="auth.remember" type="checkbox"> Lembrar meu login neste computador</label>
         <button class="auth-submit" :disabled="auth.sending">{{ auth.sending ? 'Enviando…' : 'Enviar link de acesso' }}</button>
       </form>

@@ -18,13 +18,17 @@ final class AuthController extends Controller
 {
     public function requestLink(Request $request): JsonResponse
     {
-        $data = $request->validate(['email' => ['required', 'email:rfc', 'max:254'], 'remember' => ['sometimes', 'boolean']]);
+        $data = $request->validate(['email' => ['required', 'email:rfc', 'max:254'], 'name' => ['nullable', 'string', 'max:255'], 'remember' => ['sometimes', 'boolean']]);
         $email = Str::lower($data['email']);
+        $isNewAccount = ! User::where('email', $email)->exists();
+        if ($isNewAccount && blank($data['name'] ?? null)) {
+            return response()->json(['message' => 'Informe seu nome para criar sua conta.', 'registrationRequired' => true], 422);
+        }
         $request->session()->put('login_remember', (bool) ($data['remember'] ?? false));
         $token = Str::random(64);
         $pin = (string) random_int(100000, 999999);
         $challengeId = (string) Str::ulid();
-        DB::table('login_challenges')->insert(['id' => $challengeId, 'email' => $email, 'token_hash' => hash('sha256', $token), 'pin_hash' => Hash::make($pin), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('login_challenges')->insert(['id' => $challengeId, 'email' => $email, 'registration_name' => $isNewAccount ? trim($data['name']) : null, 'token_hash' => hash('sha256', $token), 'pin_hash' => Hash::make($pin), 'expires_at' => now()->addMinutes(15), 'created_at' => now(), 'updated_at' => now()]);
 
         $url = rtrim((string) config('app.url'), '/').'/?token='.urlencode($token);
 
@@ -70,7 +74,7 @@ final class AuthController extends Controller
             }
             DB::table('login_challenges')->where('id', $challenge->id)->update(['consumed_at' => now(), 'updated_at' => now()]);
 
-            return User::firstOrCreate(['email' => $availableChallenge->email], ['timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
+            return User::firstOrCreate(['email' => $availableChallenge->email], ['name' => $availableChallenge->registration_name, 'timezone' => 'America/Sao_Paulo', 'status' => 'active', 'email_verified_at' => now()]);
         });
         if (! $user) {
             return response()->json(['message' => 'Link inválido ou expirado.'], 422);

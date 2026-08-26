@@ -19,6 +19,22 @@ final class LocalProjectsApiTest extends TestCase
         $this->actingAs($user)->getJson('/api/v1/projects')->assertOk()->assertJsonCount(1, 'data');
     }
 
+    public function test_workspace_lists_members_as_assignable_people(): void
+    {
+        $owner = User::factory()->create(['name' => 'Pessoa Proprietária']);
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'owner-assignee'])->json('data.id');
+
+        $workspace = $this->actingAs($owner)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.people.0.name', 'Pessoa Proprietária');
+        $personId = $workspace->json('data.people.0.id');
+
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Tarefa atribuída à proprietária',
+            'assigneePersonId' => $personId,
+        ])->assertCreated();
+    }
+
     public function test_reader_cannot_create_project_structure(): void
     {
         $owner = User::factory()->create();
@@ -56,6 +72,44 @@ final class LocalProjectsApiTest extends TestCase
             ->assertJsonPath('data.tasks.1.level', 1)
             ->assertJsonPath('data.stats.total', 2)
             ->assertJsonPath('data.stats.late', 1);
+    }
+
+    public function test_section_can_be_moved_to_root_and_workspace_keeps_groups_together(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'section-root'])->json('data.id');
+        $parent = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Pai'])->json('data.id');
+        $child = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Filha', 'parentSectionId' => $parent])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Tarefa da filha', 'sectionId' => $child])->assertCreated();
+
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/sections/{$child}", ['name' => 'Filha', 'parentSectionId' => null])->assertOk();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.0.id', $parent)
+            ->assertJsonPath('data.tasks.1.id', $child)
+            ->assertJsonPath('data.tasks.2.title', 'Tarefa da filha')
+            ->assertJsonPath('data.tasks.2.level', 1);
+    }
+
+    public function test_structure_move_reorders_tasks_and_rejects_section_cycles(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'structure-move'])->json('data.id');
+        $first = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Primeira'])->json('data.id');
+        $second = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Segunda'])->json('data.id');
+        $child = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Filha', 'parentSectionId' => $first])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Reorganizar', 'sectionId' => $first])->json('data.id');
+
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/structure/move", ['itemId' => $task, 'itemKind' => 'task', 'parentSectionId' => null, 'beforeItemId' => $second])->assertOk();
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/structure/move", ['itemId' => $first, 'itemKind' => 'section', 'parentSectionId' => $child])->assertUnprocessable();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.0.id', $first)
+            ->assertJsonPath('data.tasks.1.id', $child)
+            ->assertJsonPath('data.tasks.2.id', $task)
+            ->assertJsonPath('data.tasks.3.id', $second);
     }
 
     public function test_removing_a_person_unassigns_their_tasks(): void
