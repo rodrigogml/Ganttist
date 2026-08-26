@@ -6,6 +6,8 @@ import type { Dependency, Task, TaskStatus, Workspace } from '../types'
 
 export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late', 'blocked', 'completed']
 export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late']
+const activeProjectStorageKey = 'ganttist.active-project-id'
+const activeProjectStorage = () => typeof localStorage === 'undefined' ? null : localStorage
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const workspace = ref<Workspace | null>(null)
@@ -55,8 +57,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     try {
       const response = await fetch(`/api/v1/projects/${projectId ?? workspace.value?.project.id}/workspace`)
       if (useAuthStore().handleUnauthorized(response)) return
-      if (!response.ok) throw new Error('Não foi possível carregar o projeto.')
+      if (!response.ok) {
+        if ([403, 404].includes(response.status)) activeProjectStorage()?.removeItem(activeProjectStorageKey)
+        throw new Error('Não foi possível carregar o projeto.')
+      }
       workspace.value = parseWorkspaceResponse(await response.json())
+      activeProjectStorage()?.setItem(activeProjectStorageKey, workspace.value.project.id)
       stale.value = false
     } catch (exception) {
       const message = exception instanceof Error ? exception.message : 'Erro inesperado'
@@ -128,5 +134,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     workspace.value.dependencies = [...workspace.value.dependencies, dependency]
   }
 
-  return { workspace, loading, refreshing, stale, error, search, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, tasks, empty, load, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
+  function clearWorkspace(): void {
+    workspace.value = null
+    error.value = ''
+    stale.value = false
+    activeProjectStorage()?.removeItem(activeProjectStorageKey)
+  }
+
+  return { workspace, loading, refreshing, stale, error, search, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, tasks, empty, load, clearWorkspace, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
 })

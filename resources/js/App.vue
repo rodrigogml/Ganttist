@@ -55,6 +55,8 @@ let initializedUserId: string | null = null;
 async function initializeWorkspace() {
     if (!auth.user || initializedUserId === auth.user.id) return;
     initializedUserId = auth.user.id;
+    const activeProjectId = localStorage.getItem("ganttist.active-project-id");
+    if (activeProjectId) await store.load(activeProjectId);
 }
 watch(
     () => auth.user?.id,
@@ -2338,7 +2340,7 @@ function statusLabel(s: string) {
             <div class="top-actions">
                 <div ref="appearanceWrap" class="appearance-wrap">
                     <button
-                        v-if="taskContextMenu.task.kind === 'task'"
+                    v-if="taskContextMenu?.task.kind === 'task'"
                         class="icon-btn appearance-btn"
                         aria-label="Aparência"
                         title="Aparência"
@@ -4421,6 +4423,6 @@ function statusLabel(s: string) {
         :role="store.workspace.project.role ?? 'reader'"
         @close="calendarPanel = false"
         @people-changed="store.load()"
-        @deleted="calendarPanel = false; store.workspace = null"
+        @deleted="calendarPanel = false; store.clearWorkspace()"
     />
 </template>

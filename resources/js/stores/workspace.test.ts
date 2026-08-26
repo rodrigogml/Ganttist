@@ -115,4 +115,17 @@ describe('workspace visibility', () => {
     expect(auth.error).toContain('sessão expirou')
     expect(store.stale).toBe(false)
   })
+
+  it('persists the successfully loaded project for restoration after refresh', async () => {
+    const store = useWorkspaceStore()
+    const project = { id: 'persisted-project', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-26T00:00:00Z' }
+    const workspace = { project, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0 } }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => workspaceResponse(workspace) }))
+    const storage = new Map<string, string>()
+    vi.stubGlobal('localStorage', { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) })
+
+    await store.load(project.id)
+
+    expect(storage.get('ganttist.active-project-id')).toBe(project.id)
+  })
 })
