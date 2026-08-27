@@ -1100,9 +1100,7 @@ function editSectionFromContext() {
     const menu = taskContextMenu.value;
     if (!menu || menu.task.kind !== "section") return;
     taskContextMenu.value = null;
-    sectionDraft.value = { ...menu.task };
-    taskDraft.value = null;
-    drawer.value = true;
+    openSection(menu.task);
 }
 async function deleteSectionFromContext() {
     const menu = taskContextMenu.value;
@@ -1268,7 +1266,7 @@ const pathFor = (dependency: Dependency) => {
     return dependencyPath(source, target, {
         sourcePort: sourceEndpoint,
         targetPort: targetEndpoint,
-        clearance: Math.max(6, Math.min(12, dayWidth.value * 0.2)),
+        clearance: Math.max(6, Math.min(12, dayWidth.value * 0.2)) + 4,
         rowHeight: rowHeight.value,
     });
 };
@@ -1402,7 +1400,23 @@ function openTask(task: Task) {
 }
 function openTaskFromDoubleClick(task: Task, event: MouseEvent) {
     if ((event.target as HTMLElement).closest("button,input,select,a")) return;
+    if (task.kind === "section") {
+        openSection(task);
+        return;
+    }
     openTask(task);
+}
+function openSection(section: Task) {
+    if (section.kind !== "section") return;
+    if (drawer.value && sectionDraft.value?.id === section.id) return;
+    sectionDraft.value = { ...section };
+    taskDraft.value = null;
+    editorReturnTaskId.value = section.id;
+    closeConfirmation.value = false;
+    deletionPreview.value = null;
+    dependencyConfirmation.value = null;
+    drawer.value = true;
+    focusTaskTitle();
 }
 function openSelectedTask() {
     if (store.selected.length !== 1) return;
@@ -2524,7 +2538,7 @@ function statusLabel(s: string) {
         :class="[
             `text-${textScale}`,
             `space-${spacing}`,
-            { 'editor-pinned': drawer && activeTask && editorPinned },
+            { 'editor-pinned': drawer && (activeTask || sectionDraft) && editorPinned },
         ]"
         :style="{ '--task-editor-width': editorWidth + 'px' }"
     >
@@ -3138,23 +3152,25 @@ function statusLabel(s: string) {
                                 <defs>
                                     <marker
                                         id="arrow"
-                                        markerWidth="6"
-                                        markerHeight="6"
-                                        refX="5"
-                                        refY="3"
+                                        markerUnits="userSpaceOnUse"
+                                        markerWidth="8"
+                                        markerHeight="8"
+                                        refX="7"
+                                        refY="4"
                                         orient="auto"
                                     >
-                                        <path d="M0 0 L6 3 L0 6Z" />
+                                        <path d="M0 0 L8 4 L0 8Z" />
                                     </marker>
                                     <marker
                                         id="arrow-critical"
-                                        markerWidth="6"
-                                        markerHeight="6"
-                                        refX="5"
-                                        refY="3"
+                                        markerUnits="userSpaceOnUse"
+                                        markerWidth="8"
+                                        markerHeight="8"
+                                        refX="7"
+                                        refY="4"
                                         orient="auto"
                                     >
-                                        <path d="M0 0 L6 3 L0 6Z" />
+                                        <path d="M0 0 L8 4 L0 8Z" />
                                     </marker>
                                     <marker
                                         id="arrow-highlight"
@@ -3669,8 +3685,7 @@ function statusLabel(s: string) {
                                         task.status,
                                         {
                                             critical:
-                                                task.critical &&
-                                                !isExpandable(task),
+                                                task.critical,
                                             summary: isExpandable(task),
                                             parent: task.has_children,
                                             provisional:
@@ -4413,8 +4428,8 @@ function statusLabel(s: string) {
                 </footer>
             </template>
             <template v-else-if="sectionDraft">
-                <header><div><span class="eyebrow">{{ sectionDraft.id === '__new-section__' ? 'NOVA SEÇÃO' : 'EDITAR SEÇÃO' }}</span><h2 id="task-editor-title">{{ sectionDraft.id === '__new-section__' ? 'Adicionar seção' : sectionDraft.title }}</h2></div><div class="drawer-header-actions"><button class="drawer-close" aria-label="Fechar editor" @click="finishTaskEditorClose">×</button></div></header>
-                <div class="drawer-body"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></div>
+                <header><div><span class="eyebrow">{{ sectionDraft.id === '__new-section__' ? 'NOVA SEÇÃO' : 'EDITAR SEÇÃO' }}</span><h2 id="task-editor-title">{{ sectionDraft.id === '__new-section__' ? 'Adicionar seção' : sectionDraft.title }}</h2></div><div class="drawer-header-actions"><button class="drawer-pin" :class="{ active: editorPinned }" :aria-pressed="editorPinned" :aria-label="editorPinned ? 'Soltar editor do layout' : 'Fixar editor no layout'" :title="editorPinned ? 'Soltar editor' : 'Fixar editor'" @click="toggleEditorPinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3-1-6Z"></path></svg></button><button class="drawer-close" aria-label="Fechar editor" title="Fechar" @click="requestTaskEditorClose">×</button></div></header>
+                <div class="drawer-body section-editor-body"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></div>
                 <footer><button class="soft-btn drawer-cancel" @click="finishTaskEditorClose">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
             </template>
         </aside>

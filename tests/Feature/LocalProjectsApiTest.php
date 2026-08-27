@@ -92,6 +92,31 @@ final class LocalProjectsApiTest extends TestCase
             ->assertJsonPath('data.tasks.2.considered_start', '2026-09-10');
     }
 
+    public function test_workspace_exposes_the_local_critical_path_for_tasks_sections_and_dependencies(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'critical-path'])->json('data.id');
+        $section = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Entrega'])->json('data.id');
+        $first = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Primeira', 'sectionId' => $section, 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-08'])->json('data.id');
+        $second = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Segunda', 'sectionId' => $section, 'plannedStart' => '2026-09-09', 'plannedFinish' => '2026-09-10'])->json('data.id');
+        $parallel = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Paralela', 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-07'])->json('data.id');
+        $dependency = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $first, 'to' => $second, 'type' => 'FS'])->assertCreated()->json('data.id');
+
+        $workspace = $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.stats.critical', 2)
+            ->json('data');
+        $tasks = collect($workspace['tasks'])->keyBy('id');
+        $dependencies = collect($workspace['dependencies'])->keyBy('id');
+
+        $this->assertTrue($tasks[$section]['critical']);
+        $this->assertTrue($tasks[$first]['critical']);
+        $this->assertTrue($tasks[$second]['critical']);
+        $this->assertFalse($tasks[$parallel]['critical']);
+        $this->assertSame(0, $tasks[$first]['total_float']);
+        $this->assertTrue($dependencies[$dependency]['critical']);
+    }
+
     public function test_workspace_derives_section_ranges_from_all_descendant_tasks_and_leaves_empty_sections_undated(): void
     {
         $user = User::factory()->create();

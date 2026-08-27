@@ -608,16 +608,49 @@ body.resizing-task-column * {
   marker-end: url(#arrow-highlight);
 }
 
+.dependencies path.critical {
+  stroke: #e46b68;
+  stroke-width: 2.8;
+}
+
 .dependencies path.critical.dependency-highlighted {
-  marker-end: url(#arrow-highlight);
+  stroke: #e46b68;
+  stroke-width: 2.8;
+  marker-end: url(#arrow-critical);
 }
 
 #arrow-highlight path {
   fill: #252b36;
 }
 
+/* O marcador também é um path dentro do SVG de dependências: ele não herda o traço da aresta. */
+.dependencies marker path {
+  stroke: none;
+  stroke-width: 0;
+  marker-end: none;
+}
+
+#arrow-critical path {
+  fill: #e46b68;
+}
+
 .task-bar.dependency-highlighted:not(.summary) {
   border: 3px solid #252b36;
+}
+
+.task-bar.critical:not(.summary) {
+  outline: 0;
+}
+
+.task-bar.critical:not(.summary)::after {
+  position: absolute;
+  z-index: 3;
+  inset: -1px;
+  box-sizing: border-box;
+  border: 2px solid #f2817d;
+  border-radius: 7px;
+  content: "";
+  pointer-events: none;
 }
 
 .task-bar.drag-ghost {
@@ -877,6 +910,12 @@ body.resizing-task-column * {
 .drawer-body {
   gap: var(--editor-body-gap);
   padding: var(--editor-body-padding);
+}
+
+.drawer-body.section-editor-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: visible;
 }
 
 .drawer label {
