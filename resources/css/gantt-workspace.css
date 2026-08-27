@@ -1209,7 +1209,12 @@ body.resizing-task-column * {
 .task-comment header { padding: 0; border: 0; align-items: baseline; }
 .task-comment time { margin-left: auto; color: #9298a6; font-size: var(--editor-caption-font-size); }
 .task-comment p { margin: 7px 0 0; color: #545c6d; line-height: 1.5; white-space: pre-wrap; }
-.comment-edit { margin-top: 7px; border: 0; background: none; color: #6155c8; font-weight: 700; cursor: pointer; }
+.comment-tools { display: flex; justify-content: flex-end; gap: 4px; margin-top: 7px; }
+.comment-icon-action { display: inline-grid; width: 28px; height: 28px; place-items: center; border: 1px solid transparent; border-radius: 6px; background: transparent; color: #6155c8; cursor: pointer; }
+.comment-icon-action:hover { border-color: #ddd8fb; background: #f2f0ff; }
+.comment-icon-action.danger { color: #bd4b5c; }
+.comment-icon-action.danger:hover { border-color: #f1ccd2; background: #fff0f2; }
+.comment-icon-action svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .comment-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 7px; }
 .comment-actions button, .comment-submit { min-height: 32px; }
 .comment-submit { align-self: flex-end; }

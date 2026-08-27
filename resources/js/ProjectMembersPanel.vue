@@ -1,156 +1,56 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 
-const props = defineProps<{ projectId: string; role: string }>()
-const emit = defineEmits<{ close: []; deleted: []; peopleChanged: [] }>()
-type Member = { id: string; user_id: string; name: string; email: string; role: 'owner' | 'editor' | 'reader' }
-type Invitation = { id: string; email: string; role: 'editor' | 'reader'; status: string; expires_at: string | null }
-type Person = { id: string; name: string; email: string | null }
-
-const members = ref<Member[]>([])
-const invitations = ref<Invitation[]>([])
-const people = ref<Person[]>([])
-const loading = ref(true)
-const error = ref('')
-const email = ref('')
-const invitationRole = ref<'editor' | 'reader'>('editor')
-const personName = ref('')
-const personEmail = ref('')
-const editingPersonId = ref<string | null>(null)
-const sending = ref(false)
-const savingPerson = ref(false)
-const deleting = ref(false)
-
-const canEditPeople = () => ['owner', 'editor'].includes(props.role)
-const csrfHeaders = (): Record<string, string> => {
-  const token = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content
-  return token ? { 'X-CSRF-TOKEN': token } : {}
-}
-
-async function load() {
-  loading.value = true
-  error.value = ''
-  try {
-    const response = await fetch(`/api/v1/projects/${props.projectId}/members`, { headers: { Accept: 'application/json' } })
-    if (!response.ok) throw new Error('Não foi possível carregar a equipe.')
-    const data = (await response.json()).data
-    members.value = data.members
-    invitations.value = data.invitations
-    people.value = data.people
-  } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : 'Erro inesperado'
-  } finally {
-    loading.value = false
-  }
-}
-
-async function invite() {
-  if (!email.value.trim() || sending.value || props.role !== 'owner') return
-  sending.value = true
-  error.value = ''
-  try {
-    const response = await fetch(`/api/v1/projects/${props.projectId}/invitations`, { method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...csrfHeaders() }, body: JSON.stringify({ email: email.value.trim(), role: invitationRole.value }) })
-    if (!response.ok) throw new Error('Não foi possível enviar o convite.')
-    email.value = ''
-    await load()
-  } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : 'Erro inesperado'
-  } finally {
-    sending.value = false
-  }
-}
-
-async function savePerson() {
-  if (!personName.value.trim() || savingPerson.value || !canEditPeople()) return
-  savingPerson.value = true
-  error.value = ''
-  try {
-    const method = editingPersonId.value ? 'PUT' : 'POST'
-    const suffix = editingPersonId.value ? `/${editingPersonId.value}` : ''
-    const response = await fetch(`/api/v1/projects/${props.projectId}/people${suffix}`, { method, headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...csrfHeaders() }, body: JSON.stringify({ name: personName.value.trim(), email: personEmail.value.trim() || null }) })
-    if (!response.ok) throw new Error('Não foi possível salvar a pessoa.')
-    personName.value = ''
-    personEmail.value = ''
-    editingPersonId.value = null
-    await load()
-    emit('peopleChanged')
-  } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : 'Erro inesperado'
-  } finally {
-    savingPerson.value = false
-  }
-}
-
-function editPerson(person: Person) {
-  editingPersonId.value = person.id
-  personName.value = person.name
-  personEmail.value = person.email ?? ''
-}
-
-function cancelPersonEdit() {
-  editingPersonId.value = null
-  personName.value = ''
-  personEmail.value = ''
-}
-
-async function removePerson(person: Person) {
-  if (!confirm(`Excluir ${person.name}? As tarefas dela ficarão sem responsável.`)) return
-  const response = await fetch(`/api/v1/projects/${props.projectId}/people/${person.id}`, { method: 'DELETE', headers: { Accept: 'application/json', ...csrfHeaders() } })
-  if (!response.ok) { error.value = 'Não foi possível excluir a pessoa.'; return }
-  await load()
-  emit('peopleChanged')
-}
-
-async function changeRole(member: Member) {
-  if (member.role === 'owner') return
-  const response = await fetch(`/api/v1/projects/${props.projectId}/members/${member.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...csrfHeaders() }, body: JSON.stringify({ role: member.role }) })
-  if (!response.ok) error.value = 'Não foi possível atualizar o acesso.'
-}
-
-async function removeMember(member: Member) {
-  if (!confirm(`Remover ${member.name} do projeto?`)) return
-  const response = await fetch(`/api/v1/projects/${props.projectId}/members/${member.id}`, { method: 'DELETE', headers: { Accept: 'application/json', ...csrfHeaders() } })
-  if (!response.ok) { error.value = 'Não foi possível remover o membro.'; return }
-  await load()
-}
-
-async function deleteProject() {
-  if (!confirm('Excluir este projeto e todo o seu conteúdo? Esta ação não pode ser desfeita.')) return
-  deleting.value = true
-  try {
-    const response = await fetch(`/api/v1/projects/${props.projectId}`, { method: 'DELETE', headers: { Accept: 'application/json', ...csrfHeaders() } })
-    if (!response.ok) throw new Error('Não foi possível excluir o projeto.')
-    emit('deleted')
-  } catch (exception) {
-    error.value = exception instanceof Error ? exception.message : 'Erro inesperado'
-  } finally {
-    deleting.value = false
-  }
-}
-
-onMounted(load)
+const props = defineProps<{ projectId: string; role: 'owner' | 'editor' | 'reader' }>()
+const emit = defineEmits<{ close: []; peopleChanged: [] }>()
+type AccessRole = 'editor' | 'reader'
+type Member = { id: string; name: string; email: string; role: 'owner' | AccessRole }
+type Invitation = { id: string; email: string; role: AccessRole; last_sent_at: string | null }
+type Person = { id: string; name: string; email: string | null; blocked_at: string | null; task_count: number }
+const members = ref<Member[]>([]), invitations = ref<Invitation[]>([]), people = ref<Person[]>([])
+const loading = ref(true), error = ref(''), query = ref(''), formOpen = ref(false), saving = ref(false), busyId = ref<string | null>(null)
+const personName = ref(''), personEmail = ref(''), accessRole = ref<AccessRole>('editor'), editingPersonId = ref<string | null>(null), clock = ref(Date.now())
+let clockTimer: ReturnType<typeof setInterval> | null = null
+const isOwner = computed(() => props.role === 'owner')
+const canEditPeople = computed(() => ['owner', 'editor'].includes(props.role))
+const visiblePeople = computed(() => { const term = query.value.trim().toLocaleLowerCase('pt-BR'); return term ? people.value.filter(person => `${person.name} ${person.email ?? ''}`.toLocaleLowerCase('pt-BR').includes(term)) : people.value })
+const csrfHeaders = () => { const token = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content; return token ? { 'X-CSRF-TOKEN': token } : {} }
+const memberFor = (person: Person) => person.email ? members.value.find(member => member.email.toLocaleLowerCase() === person.email!.toLocaleLowerCase()) : undefined
+const invitationFor = (person: Person) => person.email ? invitations.value.find(invitation => invitation.email.toLocaleLowerCase() === person.email!.toLocaleLowerCase()) : undefined
+const editingPerson = computed(() => people.value.find(person => person.id === editingPersonId.value))
+const requiresInvitation = computed(() => {
+  if (!isOwner.value || !personEmail.value.trim()) return false
+  const person = editingPerson.value
+  return !person || person.email?.toLocaleLowerCase() !== personEmail.value.trim().toLocaleLowerCase() || (!memberFor(person) && !invitationFor(person))
+})
+const roleLabel = (role: AccessRole | 'owner') => role === 'owner' ? 'Proprietário' : role === 'editor' ? 'Editor' : 'Leitor'
+const cooldown = (invitation: Invitation) => invitation.last_sent_at ? Math.max(0, new Date(invitation.last_sent_at).getTime() + 600_000 - clock.value) : 0
+function resendLabel(invitation: Invitation) { const ms = cooldown(invitation); if (!ms) return 'Reenviar convite'; return `Reenviar em ${String(Math.floor(ms / 60_000)).padStart(2, '0')}:${String(Math.ceil(ms % 60_000 / 1_000)).padStart(2, '0')}` }
+async function responseMessage(response: Response, fallback: string) { try { return (await response.json()).message ?? fallback } catch { return fallback } }
+async function load() { loading.value = true; error.value = ''; try { const response = await fetch(`/api/v1/projects/${props.projectId}/members`, { headers: { Accept: 'application/json' } }); if (!response.ok) throw new Error(await responseMessage(response, 'Não foi possível carregar os responsáveis.')); const data = (await response.json()).data; members.value = data.members; invitations.value = data.invitations; people.value = data.people } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Erro inesperado.' } finally { loading.value = false } }
+function resetForm() { formOpen.value = false; editingPersonId.value = null; personName.value = ''; personEmail.value = ''; accessRole.value = 'editor' }
+function editPerson(person: Person) { editingPersonId.value = person.id; personName.value = person.name; personEmail.value = person.email ?? ''; formOpen.value = true }
+async function savePerson() { if (!personName.value.trim() || saving.value || !canEditPeople.value) return; saving.value = true; error.value = ''; try { const editing = Boolean(editingPersonId.value); const response = await fetch(`/api/v1/projects/${props.projectId}/people${editing ? `/${editingPersonId.value}` : ''}`, { method: editing ? 'PUT' : 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...csrfHeaders() }, body: JSON.stringify({ name: personName.value.trim(), email: personEmail.value.trim() || null, ...(requiresInvitation.value ? { accessRole: accessRole.value } : {}) }) }); if (!response.ok) throw new Error(await responseMessage(response, 'Não foi possível salvar o responsável.')); resetForm(); await load(); emit('peopleChanged') } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Erro inesperado.' } finally { saving.value = false } }
+async function action(path: string, method: string, id: string, fallback: string) { busyId.value = id; error.value = ''; try { const response = await fetch(`/api/v1/projects/${props.projectId}${path}`, { method, headers: { Accept: 'application/json', ...csrfHeaders() } }); if (!response.ok) throw new Error(await responseMessage(response, fallback)); await load(); emit('peopleChanged') } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Erro inesperado.' } finally { busyId.value = null } }
+function removePerson(person: Person) { if (confirm(`Excluir ${person.name}? ${person.task_count ? `${person.task_count} tarefa(s) ficarão sem responsável.` : 'Esta ação não pode ser desfeita.'}`)) void action(`/people/${person.id}`, 'DELETE', person.id, 'Não foi possível excluir o responsável.') }
+function blockPerson(person: Person) { if (confirm(`Bloquear ${person.name}? Ela não poderá receber novas tarefas e qualquer acesso pendente ou ativo será revogado.`)) void action(`/people/${person.id}/block`, 'POST', person.id, 'Não foi possível bloquear o responsável.') }
+function revoke(invitation: Invitation) { if (confirm(`Revogar o convite enviado para ${invitation.email}?`)) void action(`/invitations/${invitation.id}`, 'DELETE', invitation.id, 'Não foi possível revogar o convite.') }
+function resend(invitation: Invitation) { if (!cooldown(invitation) && !busyId.value) void action(`/invitations/${invitation.id}/resend`, 'POST', invitation.id, 'Não foi possível reenviar o convite.') }
+async function changeRole(member: Member) { if (member.role === 'owner') return; busyId.value = member.id; try { const response = await fetch(`/api/v1/projects/${props.projectId}/members/${member.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...csrfHeaders() }, body: JSON.stringify({ role: member.role }) }); if (!response.ok) throw new Error(await responseMessage(response, 'Não foi possível atualizar o acesso.')); await load() } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Erro inesperado.' } finally { busyId.value = null } }
+onMounted(() => { void load(); clockTimer = setInterval(() => clock.value = Date.now(), 1000) })
+onBeforeUnmount(() => { if (clockTimer) clearInterval(clockTimer) })
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="panel-backdrop" @click.self="emit('close')">
-      <section class="calendar-panel" role="dialog" aria-modal="true" aria-label="Pessoas e acesso do projeto">
-        <header><div><p class="eyebrow">PESSOAS E ACESSO</p><h2>Equipe do projeto</h2></div><button class="drawer-close" aria-label="Fechar" @click="emit('close')">×</button></header>
-        <p v-if="error" class="workspace-state">{{ error }}</p>
-        <p v-if="loading" class="loading">Carregando equipe…</p>
-        <template v-else>
-          <section class="calendar-section">
-            <h3>Responsáveis</h3>
-            <form v-if="canEditPeople()" class="create-task" @submit.prevent="savePerson"><input v-model="personName" placeholder="Nome" aria-label="Nome da pessoa"><input v-model="personEmail" type="email" placeholder="E-mail (opcional)" aria-label="E-mail da pessoa"><button class="primary" :disabled="savingPerson || !personName.trim()">{{ savingPerson ? 'Salvando…' : editingPersonId ? 'Salvar pessoa' : 'Adicionar pessoa' }}</button><button v-if="editingPersonId" class="soft-btn" type="button" @click="cancelPersonEdit">Cancelar</button></form>
-            <p v-if="!people.length" class="dependency-empty">Cadastre responsáveis mesmo que não usem o Ganttist.</p>
-            <div v-for="person in people" :key="person.id" class="task-comment"><b>{{ person.name }}</b><small>{{ person.email || 'Sem e-mail' }}</small><button v-if="canEditPeople()" class="soft-btn" @click="editPerson(person)">Editar</button><button v-if="canEditPeople()" class="danger-btn" @click="removePerson(person)">Excluir</button></div>
-          </section>
-          <section v-if="role === 'owner'" class="calendar-section"><h3>Convidar para acesso</h3><form class="create-task" @submit.prevent="invite"><input v-model="email" type="email" placeholder="E-mail para convite" aria-label="E-mail para convite"><select v-model="invitationRole" aria-label="Acesso"><option value="editor">Pode alterar</option><option value="reader">Somente leitura</option></select><button class="primary" :disabled="sending || !email.trim()">{{ sending ? 'Enviando…' : 'Convidar' }}</button></form></section>
-          <section class="calendar-section"><h3>Membros</h3><p v-if="!members.length" class="dependency-empty">Nenhum membro.</p><div v-for="member in members" :key="member.id" class="task-comment"><b>{{ member.name }}</b><small>{{ member.email }}</small><select v-if="role === 'owner' && member.role !== 'owner'" v-model="member.role" @change="changeRole(member)"><option value="editor">Pode alterar</option><option value="reader">Somente leitura</option></select><small v-else>{{ member.role === 'owner' ? 'Proprietário' : member.role === 'editor' ? 'Pode alterar' : 'Somente leitura' }}</small><button v-if="role === 'owner' && member.role !== 'owner'" class="danger-btn" @click="removeMember(member)">Remover</button></div></section>
-          <section class="calendar-section"><h3>Convites pendentes</h3><p v-if="!invitations.length" class="dependency-empty">Nenhum convite pendente.</p><div v-for="invitation in invitations" :key="invitation.id" class="task-comment"><b>{{ invitation.email }}</b><small>{{ invitation.role === 'editor' ? 'Pode alterar' : 'Somente leitura' }} · aguardando aceite</small></div></section>
-          <footer v-if="role === 'owner'"><button class="danger-btn" :disabled="deleting" @click="deleteProject">{{ deleting ? 'Excluindo…' : 'Excluir projeto' }}</button></footer>
-        </template>
-      </section>
-    </div>
-  </Teleport>
+  <Teleport to="body"><div class="responsible-scrim" @click.self="emit('close')"><section class="responsible-modal" role="dialog" aria-modal="true" aria-labelledby="responsible-title" @keydown.esc="emit('close')">
+    <header><div><span class="eyebrow">EQUIPE DO PROJETO</span><h2 id="responsible-title">Responsáveis</h2><p>Cadastre pessoas, atribua tarefas e controle o acesso ao projeto.</p></div><button class="drawer-close" aria-label="Fechar" @click="emit('close')">×</button></header>
+    <div class="toolbar"><label><span>⌕</span><input v-model="query" placeholder="Buscar por nome ou e-mail" aria-label="Buscar responsável"></label><button v-if="canEditPeople" class="primary" @click="formOpen = !formOpen; if (!formOpen) resetForm()">{{ formOpen ? 'Fechar formulário' : '+ Novo responsável' }}</button></div>
+    <form v-if="formOpen && canEditPeople" class="person-form" @submit.prevent="savePerson"><label>Nome<input v-model="personName" required maxlength="255"></label><label>E-mail <small>opcional</small><input v-model="personEmail" type="email" maxlength="255"></label><label v-if="requiresInvitation">Nível de acesso<select v-model="accessRole"><option value="editor">Editor · pode alterar</option><option value="reader">Leitor · somente consulta</option></select></label><p v-if="requiresInvitation">Um convite será enviado; o acesso só é liberado após o aceite.</p><div><button type="button" class="soft-btn" @click="resetForm">Cancelar</button><button class="primary" :disabled="saving || !personName.trim()">{{ saving ? 'Salvando…' : requiresInvitation ? 'Salvar e enviar convite' : editingPersonId ? 'Salvar responsável' : 'Cadastrar responsável' }}</button></div></form>
+    <p v-if="error" class="responsible-error" role="alert">{{ error }}</p><main v-if="loading" class="empty">Carregando responsáveis…</main><main v-else class="person-list"><p v-if="!visiblePeople.length" class="empty">Nenhum responsável encontrado.</p><article v-for="person in visiblePeople" :key="person.id" class="person-row" :class="{ blocked: person.blocked_at }"><span class="avatar">{{ person.name.slice(0, 2).toUpperCase() }}</span><div class="identity"><b>{{ person.name }}</b><small>{{ person.email || 'Sem e-mail' }} · {{ person.task_count }} tarefa(s)</small></div><div class="status"><span v-if="person.blocked_at" class="badge blocked">Bloqueado</span><template v-else-if="memberFor(person)"><span class="badge active">{{ roleLabel(memberFor(person)!.role) }}</span><small>Acesso ativo</small></template><template v-else-if="invitationFor(person)"><span class="badge pending">Convite pendente</span><small>{{ roleLabel(invitationFor(person)!.role) }}</small></template><span v-else class="badge neutral">Sem acesso</span></div><div class="actions"><button v-if="canEditPeople && !person.blocked_at" class="soft-btn" :disabled="busyId === person.id" @click="editPerson(person)">Editar</button><button v-if="isOwner && invitationFor(person)" class="soft-btn" :disabled="Boolean(cooldown(invitationFor(person)!)) || busyId === invitationFor(person)!.id" @click="resend(invitationFor(person)!)">{{ resendLabel(invitationFor(person)!) }}</button><button v-if="isOwner && invitationFor(person)" class="soft-btn" :disabled="busyId === invitationFor(person)!.id" @click="revoke(invitationFor(person)!)">Revogar</button><select v-if="isOwner && memberFor(person) && memberFor(person)!.role !== 'owner'" v-model="memberFor(person)!.role" @change="changeRole(memberFor(person)!)"><option value="editor">Editor</option><option value="reader">Leitor</option></select><button v-if="isOwner && !person.blocked_at && memberFor(person)?.role !== 'owner'" class="soft-btn block" :disabled="busyId === person.id" @click="blockPerson(person)">Bloquear</button><button v-if="canEditPeople && memberFor(person)?.role !== 'owner'" class="danger-btn" :disabled="busyId === person.id" @click="removePerson(person)">Excluir</button></div></article></main>
+    <footer><small>Responsáveis sem e-mail continuam disponíveis para atribuição, sem acesso ao projeto.</small><button class="soft-btn" @click="emit('close')">Concluir</button></footer>
+  </section></div></Teleport>
 </template>
+
+<style scoped>
+.responsible-scrim{position:fixed;z-index:120;inset:0;display:grid;place-items:center;padding:24px;background:#12182a66;backdrop-filter:blur(3px)}.responsible-modal{width:min(980px,calc(100vw - 48px));max-height:min(760px,calc(100vh - 48px));display:flex;flex-direction:column;overflow:hidden;border:1px solid #e2e5ed;border-radius:16px;background:#fff;box-shadow:0 28px 80px #11182740;color:#182034}.responsible-modal>header{display:flex;align-items:flex-start;justify-content:space-between;padding:24px 26px 17px;border-bottom:1px solid #e9ebf2}.responsible-modal h2{margin:0;font-size:22px}.responsible-modal header p{margin:5px 0 0;color:#747c8d;font-size:12px}.toolbar{display:flex;gap:10px;align-items:center;padding:16px 26px;border-bottom:1px solid #f0f1f4}.toolbar label{height:38px;flex:1;display:flex;align-items:center;gap:8px;border:1px solid #dfe2ea;border-radius:9px;padding:0 11px;color:#8890a0}.toolbar input{min-width:0;flex:1;border:0;outline:0;font:inherit}.person-form{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;padding:16px 26px;background:#f9f8ff;border-bottom:1px solid #e8e5fb}.person-form label{display:grid;gap:5px;color:#626a7c;font-size:11px;font-weight:700}.person-form input,.person-form select,.actions select{height:36px;border:1px solid #dfe2ea;border-radius:8px;padding:0 10px;background:#fff;color:#182034;font:inherit}.person-form p,.person-form>div{grid-column:1/-1;margin:0}.person-form p{color:#6f679e;font-size:11px}.person-form>div{display:flex;justify-content:flex-end;gap:8px}.responsible-error{margin:12px 26px;padding:9px 11px;border-radius:8px;background:#fff1f0;color:#b64e49;font-size:12px}.person-list{min-height:180px;overflow:auto;padding:8px 26px}.person-row{display:grid;grid-template-columns:40px minmax(180px,1fr) 150px auto;align-items:center;gap:12px;padding:12px 0;border-bottom:1px solid #edf0f4}.person-row.blocked{opacity:.65}.avatar{width:36px;height:36px;display:grid;place-items:center;border-radius:50%;background:#eeeafd;color:#5d51c8;font-size:10px;font-weight:800}.identity b,.identity small,.status small{display:block}.identity b{font-size:13px}.identity small,.status small{margin-top:3px;color:#7d8596;font-size:11px}.badge{display:inline-block;border-radius:999px;padding:3px 7px;font-size:10px;font-weight:800}.active{background:#e7f7f0;color:#248260}.pending{background:#fff5df;color:#9a6c16}.neutral{background:#f0f1f5;color:#777e8e}.blocked{background:#fff0ef;color:#ba514c}.actions{display:flex;align-items:center;justify-content:flex-end;gap:6px;flex-wrap:wrap}.actions .soft-btn,.actions .danger-btn{padding:7px 9px;font-size:10px}.block{color:#9b6820}.empty{padding:28px 0;color:#7d8596;text-align:center}.responsible-modal footer{display:flex;align-items:center;justify-content:space-between;gap:15px;padding:14px 26px;border-top:1px solid #e9ebf2;color:#747c8d;font-size:11px}@media(max-width:720px){.responsible-scrim{padding:0;place-items:end center}.responsible-modal{width:100%;max-height:92vh;border-radius:16px 16px 0 0}.toolbar{align-items:stretch;flex-direction:column}.person-form{grid-template-columns:1fr}.person-row{grid-template-columns:40px 1fr}.status{grid-column:2}.actions{grid-column:1/-1;justify-content:flex-start}}
+</style>

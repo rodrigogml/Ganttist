@@ -28,13 +28,17 @@ Route::prefix('v1')->group(function () {
             Route::get('/projects/{projectId}/tasks/{taskId}/context', [ProjectController::class, 'taskContext']);
             Route::post('/projects/{projectId}/tasks/{taskId}/comments', [ProjectController::class, 'createComment']);
             Route::put('/projects/{projectId}/tasks/{taskId}/comments/{commentId}', [ProjectController::class, 'updateComment']);
+            Route::delete('/projects/{projectId}/tasks/{taskId}/comments/{commentId}', [ProjectController::class, 'deleteComment']);
             Route::delete('/projects/{projectId}/sections/{sectionId}', [ProjectController::class, 'deleteSection']);
             Route::post('/projects/{projectId}/dependencies', [ProjectController::class, 'createDependency']);
             Route::delete('/projects/{projectId}/dependencies/{dependencyId}', [ProjectController::class, 'deleteDependency']);
             Route::post('/projects/{projectId}/people', [ProjectController::class, 'createPerson']);
             Route::put('/projects/{projectId}/people/{personId}', [ProjectController::class, 'updatePerson']);
+            Route::post('/projects/{projectId}/people/{personId}/block', [ProjectController::class, 'blockPerson']);
             Route::delete('/projects/{projectId}/people/{personId}', [ProjectController::class, 'deletePerson']);
             Route::post('/projects/{projectId}/invitations', [ProjectController::class, 'inviteMember']);
+            Route::post('/projects/{projectId}/invitations/{invitationId}/resend', [ProjectController::class, 'resendInvitation']);
+            Route::delete('/projects/{projectId}/invitations/{invitationId}', [ProjectController::class, 'revokeInvitation']);
             Route::get('/projects/{projectId}/members', [ProjectController::class, 'members']);
             Route::put('/projects/{projectId}/members/{memberId}', [ProjectController::class, 'updateMember']);
             Route::delete('/projects/{projectId}/members/{memberId}', [ProjectController::class, 'removeMember']);

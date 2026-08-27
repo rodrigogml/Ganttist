@@ -168,7 +168,7 @@ final class ProjectController
         }
         unset($row);
         $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_task_id, 'to' => $edge->successor_task_id, 'type' => $edge->type, 'critical' => isset($criticalIds[$edge->predecessor_task_id], $criticalIds[$edge->successor_task_id])]);
-        $people = DB::table('project_people')->where('project_id', $projectId)->orderBy('name')->get(['id', 'name', 'email']);
+        $people = DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']);
         $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
         $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['completed']));
         $statusCount = fn (string $status): int => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === $status));
@@ -210,7 +210,7 @@ final class ProjectController
             abort_unless(DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists(), 422, 'Seção inválida.');
         }
         if (! empty($data['assigneePersonId'])) {
-            abort_unless(DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->exists(), 422, 'Responsável inválido.');
+            abort_unless(DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->whereNull('blocked_at')->exists(), 422, 'Responsável inválido.');
         }
         $id = (string) Str::ulid();
         $position = $this->nextSiblingPosition($projectId, $data['sectionId'] ?? null);
@@ -309,7 +309,7 @@ final class ProjectController
         if (array_key_exists('sectionId', $data) && $data['sectionId'] && ! DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists()) {
             abort(422, 'Seção inválida.');
         }
-        if (array_key_exists('assigneePersonId', $data) && $data['assigneePersonId'] && ! DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->exists()) {
+        if (array_key_exists('assigneePersonId', $data) && $data['assigneePersonId'] && ! DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->whereNull('blocked_at')->exists()) {
             abort(422, 'Responsável inválido.');
         }
         $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
@@ -392,9 +392,21 @@ final class ProjectController
     {
         $this->member($request, $projectId);
         abort_unless(DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->exists(), 404, 'Tarefa não encontrada.');
-        $comments = DB::table('project_task_comments')->where('task_id', $taskId)->orderBy('created_at')->get()->map(fn (object $comment): array => ['id' => $comment->id, 'content' => $comment->content, 'author_id' => $comment->author_user_id, 'posted_at' => $comment->created_at, 'editable' => $comment->author_user_id === $request->user()->id]);
+        $comments = DB::table('project_task_comments')
+            ->leftJoin('users', 'users.id', '=', 'project_task_comments.author_user_id')
+            ->where('project_task_comments.task_id', $taskId)
+            ->orderBy('project_task_comments.created_at')
+            ->get(['project_task_comments.*', 'users.name as author_name', 'users.email as author_email'])
+            ->map(fn (object $comment): array => [
+                'id' => $comment->id,
+                'content' => $comment->content,
+                'author_id' => $comment->author_user_id,
+                'author_name' => $comment->author_name ?: $comment->author_email,
+                'posted_at' => $comment->created_at,
+                'editable' => $comment->author_user_id === $request->user()->id,
+            ]);
 
-        return response()->json(['data' => ['collaborators' => DB::table('project_people')->where('project_id', $projectId)->orderBy('name')->get(['id', 'name', 'email']), 'comments' => $comments]]);
+        return response()->json(['data' => ['collaborators' => DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']), 'comments' => $comments]]);
     }
 
     public function createComment(Request $request, string $projectId, string $taskId): JsonResponse
@@ -416,6 +428,20 @@ final class ProjectController
         abort_unless($updated, 404, 'Comentário não encontrado.');
 
         return response()->json(['data' => ['id' => $commentId]]);
+    }
+
+    public function deleteComment(Request $request, string $projectId, string $taskId, string $commentId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $deleted = DB::table('project_task_comments')
+            ->where('id', $commentId)
+            ->where('project_id', $projectId)
+            ->where('task_id', $taskId)
+            ->where('author_user_id', $request->user()->id)
+            ->delete();
+        abort_unless($deleted, 404, 'Comentário não encontrado.');
+
+        return response()->json(null, 204);
     }
 
     public function deleteSection(Request $request, string $projectId, string $sectionId): JsonResponse
@@ -466,23 +492,47 @@ final class ProjectController
 
     public function createPerson(Request $request, string $projectId): JsonResponse
     {
-        $this->editable($request, $projectId);
-        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'email' => ['nullable', 'email', 'max:255']]);
+        $member = $this->editable($request, $projectId);
+        $data = $request->validate([
+            'name' => ['required', 'string', 'max:255'],
+            'email' => ['nullable', 'email', 'max:255'],
+            'accessRole' => ['nullable', 'in:editor,reader'],
+        ]);
+        if (! empty($data['accessRole'])) {
+            abort_unless($member->role === 'owner' && ! empty($data['email']), 403);
+        }
         $id = (string) Str::ulid();
-        DB::table('project_people')->insert(['id' => $id, 'project_id' => $projectId, 'name' => trim($data['name']), 'email' => $data['email'] ?? null, 'created_at' => now(), 'updated_at' => now()]);
+        $email = empty($data['email']) ? null : strtolower(trim($data['email']));
+        if (! empty($data['accessRole'])) {
+            abort_unless(! DB::table('project_people')->where('project_id', $projectId)->where('email', $email)->whereNotNull('blocked_at')->exists(), 422, 'Este responsável está bloqueado.');
+        }
+        DB::table('project_people')->insert(['id' => $id, 'project_id' => $projectId, 'name' => trim($data['name']), 'email' => $email, 'created_at' => now(), 'updated_at' => now()]);
+        if (! empty($data['accessRole'])) {
+            $this->createInvitation($request, $projectId, $email, $data['accessRole']);
+        }
 
-        return response()->json(['data' => ['id' => $id, 'name' => trim($data['name']), 'email' => $data['email'] ?? null]], 201);
+        return response()->json(['data' => ['id' => $id, 'name' => trim($data['name']), 'email' => $email]], 201);
     }
 
     public function updatePerson(Request $request, string $projectId, string $personId): JsonResponse
     {
-        $this->editable($request, $projectId);
-        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'email' => ['nullable', 'email', 'max:255']]);
-        $updated = DB::table('project_people')->where('id', $personId)->where('project_id', $projectId)->update(['name' => trim($data['name']), 'email' => $data['email'] ?? null, 'updated_at' => now()]);
+        $member = $this->editable($request, $projectId);
+        $data = $request->validate(['name' => ['required', 'string', 'max:255'], 'email' => ['nullable', 'email', 'max:255'], 'accessRole' => ['nullable', 'in:editor,reader']]);
+        if (! empty($data['accessRole'])) {
+            abort_unless($member->role === 'owner' && ! empty($data['email']), 403);
+        }
+        $email = empty($data['email']) ? null : strtolower(trim($data['email']));
+        if (! empty($data['accessRole'])) {
+            abort_unless(! DB::table('project_people')->where('project_id', $projectId)->where('email', $email)->whereNotNull('blocked_at')->exists(), 422, 'Este responsável está bloqueado.');
+        }
+        $updated = DB::table('project_people')->where('id', $personId)->where('project_id', $projectId)->update(['name' => trim($data['name']), 'email' => $email, 'updated_at' => now()]);
         abort_unless($updated, 404, 'Pessoa não encontrada.');
+        if (! empty($data['accessRole'])) {
+            $this->createInvitation($request, $projectId, $email, $data['accessRole']);
+        }
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
-        return response()->json(['data' => ['id' => $personId, 'name' => trim($data['name']), 'email' => $data['email'] ?? null]]);
+        return response()->json(['data' => ['id' => $personId, 'name' => trim($data['name']), 'email' => $email]]);
     }
 
     public function deletePerson(Request $request, string $projectId, string $personId): JsonResponse
@@ -495,26 +545,72 @@ final class ProjectController
         return response()->json([], 204);
     }
 
+    public function blockPerson(Request $request, string $projectId, string $personId): JsonResponse
+    {
+        $member = $this->member($request, $projectId);
+        abort_unless($member->role === 'owner', 403);
+        $person = DB::table('project_people')->where('id', $personId)->where('project_id', $projectId)->first();
+        abort_unless($person, 404, 'Pessoa não encontrada.');
+        abort_unless($person->linked_user_id !== $request->user()->id, 422, 'O proprietário não pode bloquear a si mesmo.');
+
+        DB::transaction(function () use ($person, $projectId): void {
+            DB::table('project_people')->where('id', $person->id)->update(['blocked_at' => now(), 'updated_at' => now()]);
+            if ($person->linked_user_id) {
+                DB::table('project_members')->where('project_id', $projectId)->where('user_id', $person->linked_user_id)->where('role', '!=', 'owner')->delete();
+            }
+            if ($person->email) {
+                DB::table('project_invitations')->where('project_id', $projectId)->where('email', strtolower($person->email))->where('status', 'pending')->update(['status' => 'revoked', 'updated_at' => now()]);
+            }
+        });
+
+        return response()->json([], 204);
+    }
+
     public function inviteMember(Request $request, string $projectId): JsonResponse
     {
         $member = $this->member($request, $projectId);
         abort_unless($member->role === 'owner', 403);
         $data = $request->validate(['email' => ['required', 'email', 'max:255'], 'role' => ['required', 'in:editor,reader']]);
-        $project = DB::table('projects')->where('id', $projectId)->firstOrFail();
-        $id = (string) Str::ulid();
-        $expiresAt = now()->addDays(7);
-        Mail::to(strtolower($data['email']))->send(new ProjectInvitation($project->name, $data['role'], $expiresAt));
-        DB::table('project_invitations')->insert(['id' => $id, 'project_id' => $projectId, 'invited_by_user_id' => $request->user()->id, 'email' => strtolower($data['email']), 'role' => $data['role'], 'status' => 'pending', 'token_hash' => hash('sha256', Str::random(64)), 'expires_at' => $expiresAt, 'created_at' => now(), 'updated_at' => now()]);
+        $invitation = $this->createInvitation($request, $projectId, strtolower($data['email']), $data['role']);
 
-        return response()->json(['data' => ['id' => $id, 'status' => 'pending']], 201);
+        return response()->json(['data' => ['id' => $invitation->id, 'status' => 'pending']], 201);
+    }
+
+    public function resendInvitation(Request $request, string $projectId, string $invitationId): JsonResponse
+    {
+        $member = $this->member($request, $projectId);
+        abort_unless($member->role === 'owner', 403);
+        $invitation = DB::table('project_invitations')->where('id', $invitationId)->where('project_id', $projectId)->where('status', 'pending')->first();
+        abort_unless($invitation, 404, 'Convite pendente não encontrado.');
+        $availableAt = $invitation->last_sent_at ? \Carbon\Carbon::parse($invitation->last_sent_at)->addMinutes(10) : now();
+        if ($availableAt->isFuture()) {
+            return response()->json(['message' => 'Aguarde antes de reenviar este convite.', 'retryAfterSeconds' => now()->diffInSeconds($availableAt)], 429);
+        }
+
+        $expiresAt = now()->addDays(7);
+        DB::table('project_invitations')->where('id', $invitation->id)->update(['expires_at' => $expiresAt, 'last_sent_at' => now(), 'updated_at' => now()]);
+        $project = DB::table('projects')->where('id', $projectId)->firstOrFail();
+        Mail::to($invitation->email)->send(new ProjectInvitation($project->name, $invitation->role, $expiresAt));
+
+        return response()->json(['data' => ['id' => $invitation->id, 'lastSentAt' => now()->toISOString(), 'expiresAt' => $expiresAt->toISOString()]]);
+    }
+
+    public function revokeInvitation(Request $request, string $projectId, string $invitationId): JsonResponse
+    {
+        $member = $this->member($request, $projectId);
+        abort_unless($member->role === 'owner', 403);
+        $updated = DB::table('project_invitations')->where('id', $invitationId)->where('project_id', $projectId)->where('status', 'pending')->update(['status' => 'revoked', 'updated_at' => now()]);
+        abort_unless($updated, 404, 'Convite pendente não encontrado.');
+
+        return response()->json([], 204);
     }
 
     public function members(Request $request, string $projectId): JsonResponse
     {
         $this->member($request, $projectId);
         $members = DB::table('project_members')->join('users', 'users.id', '=', 'project_members.user_id')->where('project_members.project_id', $projectId)->orderBy('project_members.created_at')->get(['project_members.id', 'project_members.user_id', 'project_members.role', 'users.name', 'users.email'])->map(fn (object $member): array => (array) $member);
-        $invitations = DB::table('project_invitations')->where('project_id', $projectId)->where('status', 'pending')->orderByDesc('created_at')->get(['id', 'email', 'role', 'status', 'expires_at'])->map(fn (object $invitation): array => (array) $invitation);
-        $people = DB::table('project_people')->where('project_id', $projectId)->orderBy('name')->get(['id', 'name', 'email'])->map(fn (object $person): array => (array) $person);
+        $invitations = DB::table('project_invitations')->where('project_id', $projectId)->where('status', 'pending')->orderByDesc('created_at')->get(['id', 'email', 'role', 'status', 'expires_at', 'last_sent_at'])->map(fn (object $invitation): array => (array) $invitation);
+        $people = DB::table('project_people')->leftJoin('project_tasks', 'project_tasks.assignee_person_id', '=', 'project_people.id')->where('project_people.project_id', $projectId)->groupBy(['project_people.id', 'project_people.name', 'project_people.email', 'project_people.blocked_at'])->orderBy('project_people.name')->get(['project_people.id', 'project_people.name', 'project_people.email', 'project_people.blocked_at', DB::raw('count(project_tasks.id) as task_count')])->map(fn (object $person): array => (array) $person);
 
         return response()->json(['data' => ['members' => $members, 'invitations' => $invitations, 'people' => $people]]);
     }
@@ -586,6 +682,33 @@ final class ProjectController
     private function member(Request $request, string $projectId): object
     {
         return DB::table('project_members')->where('project_id', $projectId)->where('user_id', $request->user()->id)->first() ?? abort(404);
+    }
+
+    private function createInvitation(Request $request, string $projectId, string $email, string $role): object
+    {
+        $email = strtolower($email);
+        abort_unless(! DB::table('project_people')->where('project_id', $projectId)->where('email', $email)->whereNotNull('blocked_at')->exists(), 422, 'Este responsável está bloqueado.');
+        abort_unless(! DB::table('project_invitations')->where('project_id', $projectId)->where('email', $email)->where('status', 'pending')->exists(), 409, 'Já existe um convite pendente para este e-mail.');
+
+        $id = (string) Str::ulid();
+        $expiresAt = now()->addDays(7);
+        DB::table('project_invitations')->insert([
+            'id' => $id,
+            'project_id' => $projectId,
+            'invited_by_user_id' => $request->user()->id,
+            'email' => $email,
+            'role' => $role,
+            'status' => 'pending',
+            'token_hash' => hash('sha256', Str::random(64)),
+            'expires_at' => $expiresAt,
+            'last_sent_at' => now(),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+        $project = DB::table('projects')->where('id', $projectId)->firstOrFail();
+        Mail::to($email)->send(new ProjectInvitation($project->name, $role, $expiresAt));
+
+        return DB::table('project_invitations')->where('id', $id)->firstOrFail();
     }
 
     private function editable(Request $request, string $projectId): object

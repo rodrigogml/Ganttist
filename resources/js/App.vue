@@ -145,7 +145,8 @@ const drawer = ref(false),
     notices = ref(false),
     filters = ref(false),
     account = ref(false),
-    calendarPanel = ref(false),
+    responsiblePanel = ref(false),
+    settingsMenu = ref(false),
     historyPanel = ref(false),
     projectMenu = ref(false),
     projectLoading = ref(false),
@@ -221,9 +222,8 @@ const collaborators = ref<Collaborator[]>([]),
     editingCommentId = ref<string | null>(null),
     commentEditDraft = ref(""),
     commentEditBaseline = ref(""),
-    newPersonName = ref(""),
-    newPersonEmail = ref(""),
-    creatingPerson = ref(false);
+    commentDeletion = ref<TaskComment | null>(null),
+    commentDeleting = ref(false);
 const {
     active: timeGesture,
     mode: gestureMode,
@@ -276,7 +276,10 @@ const filterButton = ref<HTMLElement | null>(null),
     searchInput = ref<HTMLInputElement | null>(null),
     quickAssigneeMenuElement = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
-    appearanceWrap = ref<HTMLElement | null>(null);
+    appearanceWrap = ref<HTMLElement | null>(null),
+    settingsWrap = ref<HTMLElement | null>(null),
+    projectSwitcher = ref<HTMLElement | null>(null),
+    editorPriorityWrap = ref<HTMLElement | null>(null);
 const quickAssigneeMenu = ref<{
     taskId: string;
     top: number;
@@ -864,6 +867,8 @@ function toggleColumnsMenu(event: MouseEvent) {
 }
 function closeFloatingMenusOnOutside(event: PointerEvent) {
     const target = event.target as Node;
+    if (projectMenu.value && !projectSwitcher.value?.contains(target))
+        projectMenu.value = false;
     if (
         columnsMenu.value &&
         !columnPickerButton.value?.contains(target) &&
@@ -889,6 +894,13 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         quickAssigneeMenu.value = null;
     if (appearance.value && !appearanceWrap.value?.contains(target))
         appearance.value = false;
+    if (settingsMenu.value && !settingsWrap.value?.contains(target))
+        settingsMenu.value = false;
+    if (
+        editorPriorityMenu.value &&
+        !editorPriorityWrap.value?.contains(target)
+    )
+        editorPriorityMenu.value = false;
     if (
         creationMenu.value &&
         !creationMenuElement.value?.contains(target) &&
@@ -1530,48 +1542,6 @@ async function loadEditorContext(_taskId: string) {
         editorContextLoading.value = false;
     }
 }
-async function createPerson() {
-    const projectId = store.workspace?.project.id;
-    if (!projectId || !newPersonName.value.trim() || creatingPerson.value)
-        return;
-    creatingPerson.value = true;
-    try {
-        const response = await fetch(`/api/v1/projects/${projectId}/people`, {
-            method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-                ...csrfHeaders(),
-            },
-            body: JSON.stringify({
-                name: newPersonName.value.trim(),
-                email: newPersonEmail.value.trim() || null,
-            }),
-        });
-        if (!response.ok)
-            throw new Error(
-                await responseError(
-                    response,
-                    "Não foi possível cadastrar a pessoa.",
-                ),
-            );
-        newPersonName.value = "";
-        newPersonEmail.value = "";
-        await store.load();
-        collaborators.value = store.workspace?.people ?? [];
-        showToast("Responsável cadastrado", "success");
-    } catch (error) {
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível cadastrar a pessoa.",
-            "error",
-        );
-    } finally {
-        creatingPerson.value = false;
-        setTimeout(() => (toast.value = ""), 3500);
-    }
-}
 function openTaskImmediately(task: Task) {
     const draft = { ...task };
     taskDraft.value = draft;
@@ -1584,6 +1554,7 @@ function openTaskImmediately(task: Task) {
     dependencyConfirmation.value = null;
     commentDraft.value = "";
     editingCommentId.value = null;
+    commentDeletion.value = null;
     drawer.value = true;
     void loadEditorContext(task.id);
     focusTaskTitle();
@@ -1638,6 +1609,7 @@ function finishTaskEditorClose(returnFocus = true) {
     relationModal.value = null;
     commentDraft.value = "";
     editingCommentId.value = null;
+    commentDeletion.value = null;
     if (returnFocus && returnId)
         void nextTick(() =>
             Array.from(document.querySelectorAll<HTMLElement>(".task-row"))
@@ -2475,10 +2447,12 @@ async function persistTask(task: Task) {
         );
     store.updateTask(task);
 }
-function collaboratorName(id: string) {
+function collaboratorName(comment: TaskComment) {
     return (
-        collaborators.value.find((collaborator) => collaborator.id === id)
-            ?.name ?? "Usuário"
+        comment.author_name ||
+        (collaborators.value.find(
+            (collaborator) => collaborator.id === comment.author_id,
+        )?.name ?? "Usuário")
     );
 }
 function beginCommentEdit(comment: TaskComment) {
@@ -2542,6 +2516,42 @@ async function submitCommentEdit() {
         );
     cancelCommentEdit();
     await loadEditorContext(task.id);
+}
+async function deleteComment() {
+    const task = activeTask.value,
+        comment = commentDeletion.value,
+        projectId = store.workspace?.project.id;
+    if (!task || !comment || !projectId || commentDeleting.value) return;
+    commentDeleting.value = true;
+    try {
+        const response = await fetch(
+            `/api/v1/projects/${projectId}/tasks/${task.id}/comments/${comment.id}`,
+            {
+                method: "DELETE",
+                headers: { Accept: "application/json", ...csrfHeaders() },
+            },
+        );
+        if (!response.ok)
+            throw new Error(
+                await responseError(
+                    response,
+                    "Não foi possível excluir o comentário.",
+                ),
+            );
+        commentDeletion.value = null;
+        await loadEditorContext(task.id);
+        showToast("Comentário excluído", "success");
+    } catch (error) {
+        showToast(
+            error instanceof Error
+                ? error.message
+                : "Não foi possível excluir o comentário.",
+            "error",
+        );
+    } finally {
+        commentDeleting.value = false;
+        setTimeout(() => (toast.value = ""), 4000);
+    }
 }
 async function publishComment() {
     try {
@@ -2730,6 +2740,8 @@ function statusLabel(s: string) {
     <AuthGate v-else-if="!auth.user" :auth="auth" />
     <ProjectDashboard
         v-else-if="!store.workspace"
+        :opening="store.loading"
+        :open-error="store.error"
         @open="(id) => store.load(id)"
     />
     <div
@@ -2747,7 +2759,7 @@ function statusLabel(s: string) {
                 <span class="brand-mark"><i></i><i></i><i></i></span
                 ><strong>Ganttist</strong>
             </div>
-            <div class="project-switcher">
+            <div ref="projectSwitcher" class="project-switcher">
                 <span class="eyebrow">PROJETO</span
                 ><button
                     :aria-expanded="projectMenu"
@@ -2805,23 +2817,24 @@ function statusLabel(s: string) {
                         >
                     </div>
                 </div>
-                <button
-                    class="icon-btn settings-trigger"
-                    aria-label="Abrir configurações do projeto"
-                    title="Configurações"
-                    aria-haspopup="dialog"
-                    :aria-expanded="calendarPanel"
-                    @click="calendarPanel = true"
-                >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                            d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z"
-                        />
-                        <path
-                            d="M19.4 13.15c.05-.38.05-.77 0-1.15l1.74-1.35-1.8-3.12-2.04.82a8.2 8.2 0 0 0-1-.58L16 5.6h-3.6l-.3 2.17c-.35.16-.68.35-1 .58l-2.04-.82-1.8 3.12L9 12c-.05.38-.05.77 0 1.15L7.26 14.5l1.8 3.12 2.04-.82c.32.23.65.42 1 .58l.3 2.17H16l.3-2.17c.35-.16.68-.35 1-.58l2.04.82 1.8-3.12-1.74-1.35Z"
-                        />
-                    </svg>
-                </button>
+                <div ref="settingsWrap" class="settings-wrap">
+                    <button
+                        class="icon-btn settings-trigger"
+                        aria-label="Abrir configurações do projeto"
+                        title="Configurações"
+                        aria-haspopup="menu"
+                        :aria-expanded="settingsMenu"
+                        @click="settingsMenu = !settingsMenu"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" />
+                            <path d="M19.4 13.15c.05-.38.05-.77 0-1.15l1.74-1.35-1.8-3.12-2.04.82a8.2 8.2 0 0 0-1-.58L16 5.6h-3.6l-.3 2.17c-.35.16-.68.35-1 .58l-2.04-.82-1.8 3.12L9 12c-.05.38-.05.77 0 1.15L7.26 14.5l1.8 3.12 2.04-.82c.32.23.65.42 1 .58l.3 2.17H16l.3-2.17c.35-.16.68-.35 1-.58l2.04.82 1.8-3.12-1.74-1.35Z" />
+                        </svg>
+                    </button>
+                    <div v-if="settingsMenu" class="settings-menu" role="menu" aria-label="Configurações do projeto">
+                        <button role="menuitem" @click="settingsMenu = false; responsiblePanel = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg><span>Responsáveis</span></button>
+                    </div>
+                </div>
                 <button
                     class="avatar"
                     aria-label="Abrir sessões e configurações da conta"
@@ -4350,7 +4363,7 @@ function statusLabel(s: string) {
                     </div>
                 </header>
                 <div class="drawer-body">
-                    <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
+                    <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
                     <label
                         >Descrição<textarea
                             v-model="activeTask.description"
@@ -4437,7 +4450,7 @@ function statusLabel(s: string) {
                             class="task-comment"
                         >
                             <header>
-                                <b>{{ collaboratorName(comment.author_id) }}</b
+                                <b>{{ collaboratorName(comment) }}</b
                                 ><time v-if="comment.posted_at">{{
                                     new Date(comment.posted_at).toLocaleString(
                                         "pt-BR",
@@ -4465,13 +4478,10 @@ function statusLabel(s: string) {
                                 </div></template
                             ><template v-else
                                 ><p>{{ comment.content }}</p>
-                                <button
-                                    v-if="comment.editable"
-                                    class="comment-edit"
-                                    @click="beginCommentEdit(comment)"
-                                >
-                                    Editar
-                                </button></template
+                                <div v-if="comment.editable" class="comment-tools">
+                                    <button class="comment-icon-action" aria-label="Editar comentário" title="Editar comentário" @click="beginCommentEdit(comment)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5"></path></svg></button>
+                                    <button class="comment-icon-action danger" aria-label="Excluir comentário" title="Excluir comentário" @click="commentDeletion = comment"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg></button>
+                                </div></template
                             >
                         </article>
                         <label
@@ -4726,25 +4736,6 @@ function statusLabel(s: string) {
                         </button>
                     </div>
                 </section>
-                <form class="create-task" @submit.prevent="createPerson">
-                    <input
-                        v-model="newPersonName"
-                        aria-label="Nome do responsável"
-                        placeholder="Cadastrar responsável"
-                    /><input
-                        v-model="newPersonEmail"
-                        aria-label="E-mail do responsável"
-                        type="email"
-                        placeholder="E-mail (opcional)"
-                    /><button
-                        class="soft-btn"
-                        :disabled="creatingPerson || !newPersonName.trim()"
-                    >
-                        {{
-                            creatingPerson ? "Cadastrando…" : "Adicionar pessoa"
-                        }}
-                    </button>
-                </form>
                 <footer>
                     <button
                         v-if="!isCreatingTask && activeTask.kind === 'task' && !deletionPreview"
@@ -4772,6 +4763,7 @@ function statusLabel(s: string) {
                 <footer><button class="soft-btn drawer-cancel" @click="finishTaskEditorClose">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
             </template>
         </aside>
+        <div v-if="commentDeletion" class="relation-modal-scrim" @click.self="commentDeletion = null"><section class="relation-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-comment-title"><header><div><b id="delete-comment-title">Excluir comentário?</b><small>Esta ação não poderá ser desfeita.</small></div></header><footer><button class="soft-btn" :disabled="commentDeleting" @click="commentDeletion = null">Cancelar</button><button class="danger-btn" :disabled="commentDeleting" @click="deleteComment">{{ commentDeleting ? 'Excluindo…' : 'Excluir comentário' }}</button></footer></section></div>
         <div
             v-if="relationModal"
             class="relation-modal-scrim"
@@ -4993,11 +4985,10 @@ function statusLabel(s: string) {
         "
     />
     <ProjectMembersPanel
-        v-if="calendarPanel && store.workspace"
+        v-if="responsiblePanel && store.workspace"
         :project-id="store.workspace.project.id"
         :role="store.workspace.project.role ?? 'reader'"
-        @close="calendarPanel = false"
+        @close="responsiblePanel = false"
         @people-changed="store.load()"
-        @deleted="calendarPanel = false; store.clearWorkspace()"
     />
 </template>

@@ -216,6 +216,26 @@ describe('workspace visibility', () => {
     expect(fetch).toHaveBeenCalledTimes(1)
   })
 
+  it('loads the project clicked while a different restored project is still loading', async () => {
+    const store = useWorkspaceStore()
+    let resolveFirst!: (value: unknown) => void
+    const firstResponse = new Promise(resolve => { resolveFirst = resolve })
+    const clickedWorkspace = { project: { id: 'clicked', name: 'Clicado', source: 'Local', sync_status: 'local', updated_at: '2026-08-27T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0 } }
+    const fetch = vi.fn()
+      .mockReturnValueOnce(firstResponse)
+      .mockResolvedValueOnce({ ok: true, json: async () => workspaceResponse(clickedWorkspace) })
+    vi.stubGlobal('fetch', fetch)
+
+    const restored = store.load('restored')
+    const clicked = store.load('clicked')
+    resolveFirst({ ok: false, status: 404 })
+    await Promise.all([restored, clicked])
+
+    expect(fetch).toHaveBeenNthCalledWith(1, '/api/v1/projects/restored/workspace')
+    expect(fetch).toHaveBeenNthCalledWith(2, '/api/v1/projects/clicked/workspace')
+    expect(store.workspace?.project.id).toBe('clicked')
+  })
+
   it('keeps the last projection when the API response violates the workspace contract', async () => {
     const store = useWorkspaceStore()
     store.workspace = { project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' }, tasks: [], dependencies: [], stats: { progress: 0, completed: 0, total: 0, critical: 0, opened: 0, blocked: 0, scheduled: 0, late: 0, without_dates: 0 } }

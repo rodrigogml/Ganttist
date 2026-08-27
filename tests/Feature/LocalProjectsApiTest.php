@@ -231,7 +231,28 @@ final class LocalProjectsApiTest extends TestCase
         $this->assertDatabaseMissing('project_members', ['project_id' => $project, 'user_id' => $editor->id, 'role' => 'owner']);
     }
 
-    public function test_editor_can_create_and_edit_a_local_comment(): void
+    public function test_owner_can_invite_a_responsible_and_block_them_with_the_pending_access(): void
+    {
+        Mail::fake();
+        $owner = User::factory()->create();
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'responsible-access'])->json('data.id');
+
+        $person = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/people", ['name' => 'Ana', 'email' => 'ana@example.com', 'accessRole' => 'editor'])
+            ->assertCreated()
+            ->json('data.id');
+
+        Mail::assertSent(ProjectInvitation::class, fn (ProjectInvitation $mail): bool => $mail->hasTo('ana@example.com') && $mail->role === 'editor');
+        $invitation = \DB::table('project_invitations')->where('project_id', $project)->where('email', 'ana@example.com')->first();
+        $this->assertNotNull($invitation->last_sent_at);
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/invitations/{$invitation->id}/resend")->assertStatus(429);
+
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/people/{$person}/block")->assertNoContent();
+
+        $this->assertDatabaseMissing('project_people', ['id' => $person, 'blocked_at' => null]);
+        $this->assertDatabaseHas('project_invitations', ['id' => $invitation->id, 'status' => 'revoked']);
+    }
+
+    public function test_editor_can_create_edit_and_delete_a_local_comment(): void
     {
         $user = User::factory()->create();
         $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'comments'])->json('data.id');
@@ -242,7 +263,13 @@ final class LocalProjectsApiTest extends TestCase
         $this->actingAs($user)->getJson("/api/v1/projects/{$project}/tasks/{$task}/context")
             ->assertOk()
             ->assertJsonPath('data.comments.0.content', 'Nota revisada')
+            ->assertJsonPath('data.comments.0.author_name', $user->name)
             ->assertJsonPath('data.comments.0.editable', true);
+
+        $this->actingAs($user)->deleteJson("/api/v1/projects/{$project}/tasks/{$task}/comments/{$comment}")->assertNoContent();
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/tasks/{$task}/context")
+            ->assertOk()
+            ->assertJsonCount(0, 'data.comments');
     }
 
     public function test_only_owner_can_manage_members_or_delete_project(): void

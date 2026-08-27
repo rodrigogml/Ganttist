@@ -81,13 +81,18 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     return source.filter(task => visibleIds.has(task.id))
   })
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
-  let activeLoad: Promise<void> | null = null
+  let activeLoad: { projectId: string | undefined; promise: Promise<void> } | null = null
 
   function load(projectId?: string): Promise<void> {
-    if (activeLoad) return activeLoad
-    activeLoad = performLoad(projectId).finally(() => { activeLoad = null })
+    const requestedProjectId = projectId ?? workspace.value?.project.id
+    if (activeLoad) {
+      if (activeLoad.projectId === requestedProjectId) return activeLoad.promise
+      return activeLoad.promise.then(() => load(projectId))
+    }
+    const promise = performLoad(projectId).finally(() => { activeLoad = null })
+    activeLoad = { projectId: requestedProjectId, promise }
 
-    return activeLoad
+    return promise
   }
 
   async function performLoad(projectId?: string): Promise<void> {
