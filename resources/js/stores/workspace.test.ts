@@ -100,6 +100,43 @@ describe('workspace visibility', () => {
     expect(store.periodEnd).toBe('')
   })
 
+  it('focuses a task, its complete dependency chain, and the required parent sections', () => {
+    const store = useWorkspaceStore()
+    const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'root', title: 'Entrega', kind: 'section' as const, level: 0 },
+        { ...base, id: 'upstream-section', title: 'Preparação', kind: 'section' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'upstream', title: 'Preparar insumo', kind: 'task' as const, level: 2, parent_id: 'upstream-section' },
+        { ...base, id: 'focus', title: 'Executar', kind: 'task' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'downstream', title: 'Revisar', kind: 'task' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'later', title: 'Publicar', kind: 'task' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'unrelated', title: 'Financeiro', kind: 'task' as const, level: 0 },
+      ],
+      dependencies: [
+        { id: 'one', from: 'upstream', to: 'focus', type: 'FS', critical: false },
+        { id: 'two', from: 'focus', to: 'downstream', type: 'FS', critical: false },
+        { id: 'three', from: 'downstream', to: 'later', type: 'FS', critical: false },
+      ],
+      stats: { progress: 0, completed: 0, total: 5, critical: 0, opened: 5, blocked: 0, scheduled: 0, late: 0, without_dates: 5 },
+    }
+    store.hiddenGroups = new Set(['root', 'upstream-section'])
+    store.search = 'financeiro'
+
+    store.focusTaskRelations('focus')
+
+    expect(store.relationshipFocusTaskId).toBe('focus')
+    expect(store.hiddenGroups.has('root')).toBe(false)
+    expect(store.hiddenGroups.has('upstream-section')).toBe(false)
+    expect(store.tasks.map(task => task.id)).toEqual(['root', 'upstream-section', 'upstream', 'focus', 'downstream', 'later'])
+
+    store.search = 'executar'
+
+    expect(store.relationshipFocusTaskId).toBeNull()
+    expect(store.tasks.map(task => task.id)).toEqual(['root', 'focus'])
+  })
+
   it('keeps the last valid task query applied while the current expression is invalid', () => {
     const store = useWorkspaceStore()
     const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }

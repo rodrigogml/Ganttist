@@ -29,6 +29,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const zoom = ref<'day' | 'week' | 'month'>('week')
   const hiddenGroups = ref(new Set<string>())
   const filterExceptions = ref(new Set<string>())
+  const relationshipFocusTaskId = ref<string | null>(null)
   watch(search, value => {
     const query = parseTaskQuery(value)
     if (query.valid) {
@@ -40,6 +41,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   }, { flush: 'sync' })
   watch([search, statusFilters, assigneeFilters, periodStart, periodEnd], () => {
     if (filterExceptions.value.size) filterExceptions.value = new Set()
+    if (relationshipFocusTaskId.value) relationshipFocusTaskId.value = null
   }, { flush: 'sync' })
   const matchesTaskFilters = (task: Task): boolean => {
     if (!activeTaskQuery.value.matches(task.title)) return false
@@ -60,10 +62,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const tasks = computed(() => {
     const source = workspace.value?.tasks ?? []
     const byId = new Map(source.map(task => [task.id, task]))
-    const visibleIds = new Set([
-      ...source.filter(matchesTaskFilters).map(task => task.id),
-      ...filterExceptions.value,
-    ])
+    const visibleIds = relationshipFocusTaskId.value
+      ? relationshipFocusIds(relationshipFocusTaskId.value, source, workspace.value?.dependencies ?? [])
+      : new Set([
+          ...source.filter(matchesTaskFilters).map(task => task.id),
+          ...filterExceptions.value,
+        ])
 
     for (const task of source) {
       if (!visibleIds.has(task.id)) continue
@@ -129,6 +133,34 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     periodStart.value = ''
     periodEnd.value = ''
     filterExceptions.value = new Set()
+    relationshipFocusTaskId.value = null
+  }
+
+  function focusTaskRelations(id: string): void {
+    const source = workspace.value?.tasks ?? []
+    const task = source.find(current => current.id === id)
+    if (!task || task.kind !== 'task') return
+
+    relationshipFocusTaskId.value = null
+    search.value = ''
+    statusFilters.value = [...workspaceTaskStatuses]
+    assigneeFilters.value = []
+    periodStart.value = ''
+    periodEnd.value = ''
+    filterExceptions.value = new Set()
+    relationshipFocusTaskId.value = id
+
+    const taskById = new Map(source.map(current => [current.id, current]))
+    const focusedIds = relationshipFocusIds(id, source, workspace.value?.dependencies ?? [])
+    const next = new Set(hiddenGroups.value)
+    for (const focusedId of focusedIds) {
+      let current = taskById.get(focusedId)
+      while (current?.parent_id) {
+        next.delete(current.parent_id)
+        current = taskById.get(current.parent_id)
+      }
+    }
+    hiddenGroups.value = next
   }
 
   function clearFilterExceptions(): void {
@@ -200,5 +232,27 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeProjectStorage()?.removeItem(activeProjectStorageKey)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, filterExceptions, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, revealFilterException, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
+  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, filterExceptions, relationshipFocusTaskId, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, focusTaskRelations, revealFilterException, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
 })
+
+function relationshipFocusIds(focusId: string, tasks: readonly Task[], dependencies: readonly Dependency[]): Set<string> {
+  const knownIds = new Set(tasks.map(task => task.id))
+  if (!knownIds.has(focusId)) return new Set()
+
+  const related = new Map<string, string[]>()
+  for (const dependency of dependencies) {
+    if (!knownIds.has(dependency.from) || !knownIds.has(dependency.to)) continue
+    related.set(dependency.from, [...(related.get(dependency.from) ?? []), dependency.to])
+    related.set(dependency.to, [...(related.get(dependency.to) ?? []), dependency.from])
+  }
+
+  const visibleIds = new Set<string>()
+  const pending = [focusId]
+  while (pending.length) {
+    const id = pending.pop()!
+    if (visibleIds.has(id)) continue
+    visibleIds.add(id)
+    pending.push(...(related.get(id) ?? []))
+  }
+  return visibleIds
+}

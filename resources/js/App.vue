@@ -346,7 +346,8 @@ const activeFilterFieldCount = computed(
     () =>
         Number(!allStatusesSelected.value) +
         Number(store.assigneeFilters.length > 0) +
-        Number(Boolean(store.periodStart || store.periodEnd)),
+        Number(Boolean(store.periodStart || store.periodEnd)) +
+        Number(Boolean(store.relationshipFocusTaskId)),
 );
 const filterExceptionCount = computed(() => store.filterExceptions.size);
 const hasActiveTaskFilters = computed(
@@ -1145,6 +1146,12 @@ function cancelTaskContextLongPress() {
     if (!taskContextLongPress) return;
     clearTimeout(taskContextLongPress.timer);
     taskContextLongPress = null;
+}
+function focusTaskRelationsFromContext() {
+    const task = taskContextMenu.value?.task;
+    if (!task || task.kind !== "task") return;
+    store.focusTaskRelations(task.id);
+    taskContextMenu.value = null;
 }
 async function toggleTaskCompletionFromContext() {
     const menu = taskContextMenu.value,
@@ -3251,6 +3258,17 @@ function statusLabel(s: string) {
                                 ? "Desfazer conclusão"
                                 : "Concluir tarefa"
                         }}</span>
+                    </button>
+                    <button
+                        v-if="taskContextMenu.task.kind === 'task'"
+                        type="button"
+                        role="menuitem"
+                        @click="focusTaskRelationsFromContext"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M3.5 5.5h17l-6.7 7.3v4.8l-3.6 1.9v-6.7L3.5 5.5Z" />
+                        </svg>
+                        <span>Filtrar esta tarefa</span>
                     </button>
                     <div v-if="taskContextMenu.task.kind === 'task'" class="task-context-priorities" role="group" aria-label="Definir prioridade"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" class="task-context-priority" :class="[option.flag, { active: (taskContextMenu.task.priority ?? 1) === option.priority }]" :disabled="taskContextBusy" :aria-label="option.label" :title="option.label" @click="setTaskPriorityFromContext(option.priority)"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div>
                     <template v-if="taskContextMenu.task.kind === 'task'"><button type="button" role="menuitem" @click="duplicateTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5"></rect><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"></path></svg>Duplicar tarefa</button><button type="button" role="menuitem" class="context-danger" @click="deleteTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir tarefa</button></template>
