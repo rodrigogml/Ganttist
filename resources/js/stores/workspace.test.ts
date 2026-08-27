@@ -58,6 +58,67 @@ describe('workspace visibility', () => {
     expect(store.tasks.map(task => task.id)).toEqual(['scheduled', 'late', 'blocked'])
   })
 
+  it('keeps ancestor sections visible when a nested task matches the search', () => {
+    const store = useWorkspaceStore()
+    const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'root', title: 'Entrega', kind: 'section' as const, level: 0 },
+        { ...base, id: 'planning', title: 'Planejamento', kind: 'section' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'match', title: 'Preparar protótipo', kind: 'task' as const, level: 2, parent_id: 'planning' },
+        { ...base, id: 'other', title: 'Outra atividade', kind: 'task' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'unrelated', title: 'Financeiro', kind: 'section' as const, level: 0 },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 0, total: 2, critical: 0, opened: 2, blocked: 0, scheduled: 0, late: 0, without_dates: 2 },
+    }
+
+    store.search = 'protótipo'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['root', 'planning', 'match'])
+
+    store.search = 'financeiro'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['unrelated'])
+  })
+
+  it('clears the task search and every task filter', () => {
+    const store = useWorkspaceStore()
+
+    store.search = 'protótipo'
+    store.setStatusFilters(['blocked'])
+    store.toggleAssigneeFilter('person-1')
+    store.periodStart = '2026-08-01'
+    store.periodEnd = '2026-08-31'
+
+    store.clearTaskFilters()
+
+    expect(store.search).toBe('')
+    expect(store.statusFilters).toEqual(['opened', 'scheduled', 'late', 'blocked', 'completed'])
+    expect(store.assigneeFilters).toEqual([])
+    expect(store.periodStart).toBe('')
+    expect(store.periodEnd).toBe('')
+  })
+
+  it('keeps the last valid task query applied while the current expression is invalid', () => {
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'kitchen', title: 'Planejar cozinha' },
+        { ...base, id: 'office', title: 'Planejar escritório' },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 0, total: 2, critical: 0, opened: 2, blocked: 0, scheduled: 0, late: 0, without_dates: 2 },
+    }
+
+    store.search = 'cozinha'
+    store.search = '(cozinha'
+
+    expect(store.searchError).toBe('Parêntese de fechamento ausente.')
+    expect(store.tasks.map(task => task.id)).toEqual(['kitchen'])
+  })
+
   it('reconciles an already-open workspace without resetting selection or replacing it with an error', async () => {
     const store = useWorkspaceStore()
     store.workspace = {

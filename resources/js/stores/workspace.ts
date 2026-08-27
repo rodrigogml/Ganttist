@@ -1,8 +1,9 @@
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
 import type { Dependency, Task, TaskStatus, Workspace } from '../types'
+import { parseTaskQuery } from '../utils/task-query'
 
 export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late', 'blocked', 'completed']
 export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late']
@@ -16,6 +17,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const stale = ref(false)
   const error = ref('')
   const search = ref('')
+  const initialTaskQuery = parseTaskQuery('')
+  if (!initialTaskQuery.valid) throw new Error('A consulta vazia deve ser válida.')
+  const activeTaskQuery = ref(initialTaskQuery)
+  const searchError = ref('')
   const statusFilters = ref<TaskStatus[]>([...workspaceTaskStatuses])
   const assigneeFilters = ref<string[]>([])
   const periodStart = ref('')
@@ -23,8 +28,17 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const selected = ref<string[]>([])
   const zoom = ref<'day' | 'week' | 'month'>('week')
   const hiddenGroups = ref(new Set<string>())
-  const tasks = computed(() => (workspace.value?.tasks ?? []).filter(task => {
-    if (search.value && !task.title.toLocaleLowerCase('pt-BR').includes(search.value.toLocaleLowerCase('pt-BR'))) return false
+  watch(search, value => {
+    const query = parseTaskQuery(value)
+    if (query.valid) {
+      activeTaskQuery.value = query
+      searchError.value = ''
+    } else {
+      searchError.value = query.error.message
+    }
+  }, { flush: 'sync' })
+  const matchesTaskFilters = (task: Task): boolean => {
+    if (!activeTaskQuery.value.matches(task.title)) return false
     if (task.kind === 'task' && !statusFilters.value.includes(task.status)) return false
     if (task.kind === 'task' && assigneeFilters.value.length) {
       const assignee = task.assignee_id ?? '__unassigned__'
@@ -38,7 +52,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       if (periodEnd.value && start > periodEnd.value) return false
     }
     return true
-  }))
+  }
+  const tasks = computed(() => {
+    const source = workspace.value?.tasks ?? []
+    const byId = new Map(source.map(task => [task.id, task]))
+    const visibleIds = new Set(source.filter(matchesTaskFilters).map(task => task.id))
+
+    for (const task of source) {
+      if (!visibleIds.has(task.id)) continue
+      let parentId = task.parent_id
+      while (parentId) {
+        visibleIds.add(parentId)
+        parentId = byId.get(parentId)?.parent_id
+      }
+    }
+
+    return source.filter(task => visibleIds.has(task.id))
+  })
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
   let activeLoad: Promise<void> | null = null
 
@@ -85,6 +115,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     hiddenGroups.value = next
   }
 
+  function clearTaskFilters(): void {
+    search.value = ''
+    statusFilters.value = [...workspaceTaskStatuses]
+    assigneeFilters.value = []
+    periodStart.value = ''
+    periodEnd.value = ''
+  }
+
   function revealTask(id: string): void {
     const taskById = new Map((workspace.value?.tasks ?? []).map(task => [task.id, task]))
     const next = new Set(hiddenGroups.value)
@@ -94,11 +132,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       current = taskById.get(current.parent_id)
     }
     hiddenGroups.value = next
-    search.value = ''
-    statusFilters.value = [...workspaceTaskStatuses]
-    assigneeFilters.value = []
-    periodStart.value = ''
-    periodEnd.value = ''
+    clearTaskFilters()
   }
 
   function setStatusFilters(statuses: readonly TaskStatus[]): void {
@@ -141,5 +175,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeProjectStorage()?.removeItem(activeProjectStorageKey)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, tasks, empty, load, clearWorkspace, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
+  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, tasks, empty, load, clearWorkspace, clearTaskFilters, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
 })

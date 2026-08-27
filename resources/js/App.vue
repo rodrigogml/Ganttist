@@ -255,8 +255,15 @@ const taskColumnWidth = ref(TASK_COLUMN_MIN),
 const filterButton = ref<HTMLElement | null>(null),
     filterMenu = ref<HTMLElement | null>(null),
     searchInput = ref<HTMLInputElement | null>(null),
+    quickAssigneeMenuElement = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
     appearanceWrap = ref<HTMLElement | null>(null);
+const quickAssigneeMenu = ref<{
+    taskId: string;
+    top: number;
+    left: number;
+} | null>(null);
+const quickAssigneeBusy = ref(false);
 const taskContextMenu = ref<{ task: Task; x: number; y: number } | null>(null),
     taskContextBusy = ref(false),
     editorPriorityMenu = ref(false);
@@ -274,6 +281,10 @@ const structureMoveBusy = ref(false);
 const canMoveStructure = computed(
     () => store.workspace?.project.role !== "reader" && !structureMoveBusy.value,
 );
+const canQuickAssign = computed(
+    () => store.workspace?.project.role !== "reader" && !quickAssigneeBusy.value,
+);
+const quickAssigneePeople = computed(() => store.workspace?.people ?? []);
 const sectionDeleteDialog = ref<{ task: Task; action: "delete" | "move"; destinationId: string | null } | null>(null);
 const taskPriorityOptions: ReadonlyArray<{
     priority: 1 | 2 | 3 | 4;
@@ -317,6 +328,9 @@ const activeFilterFieldCount = computed(
         Number(!allStatusesSelected.value) +
         Number(store.assigneeFilters.length > 0) +
         Number(Boolean(store.periodStart || store.periodEnd)),
+);
+const hasActiveTaskFilters = computed(
+    () => Boolean(store.search) || activeFilterFieldCount.value > 0,
 );
 const unblockedStatusesSelected = computed(
     () =>
@@ -844,6 +858,12 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         !taskContextMenuElement.value?.contains(target)
     )
         taskContextMenu.value = null;
+    if (
+        quickAssigneeMenu.value &&
+        !quickAssigneeMenuElement.value?.contains(target) &&
+        !(target instanceof Element && target.closest("[data-quick-assignee-trigger]"))
+    )
+        quickAssigneeMenu.value = null;
     if (appearance.value && !appearanceWrap.value?.contains(target))
         appearance.value = false;
     if (
@@ -852,6 +872,58 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         !creationTrigger.value?.contains(target)
     )
         creationMenu.value = false;
+}
+function toggleQuickAssigneeMenu(task: Task, event: MouseEvent) {
+    if (!canQuickAssign.value) return;
+    if (quickAssigneeMenu.value?.taskId === task.id) {
+        quickAssigneeMenu.value = null;
+        return;
+    }
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    quickAssigneeMenu.value = {
+        taskId: task.id,
+        top: Math.round(rect.bottom + 6),
+        left: Math.round(Math.min(rect.left, globalThis.innerWidth - 226)),
+    };
+}
+async function assignQuickAssignee(assigneeId: string | null) {
+    const menu = quickAssigneeMenu.value;
+    const projectId = store.workspace?.project.id;
+    const task = store.workspace?.tasks.find((item) => item.id === menu?.taskId);
+    if (!menu || !projectId || !task || quickAssigneeBusy.value) return;
+    if ((task.assignee_id ?? null) === assigneeId) {
+        quickAssigneeMenu.value = null;
+        return;
+    }
+    quickAssigneeBusy.value = true;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}`, {
+            method: "PUT",
+            headers: {
+                "Content-Type": "application/json",
+                Accept: "application/json",
+                ...csrfHeaders(),
+            },
+            body: JSON.stringify({ assigneePersonId: assigneeId }),
+        });
+        if (!response.ok)
+            throw new Error(await responseError(response, "Não foi possível atualizar o responsável."));
+        const person = quickAssigneePeople.value.find((item) => item.id === assigneeId);
+        store.updateTask({
+            ...task,
+            assignee_id: assigneeId,
+            assignee: person?.name ?? null,
+        });
+        quickAssigneeMenu.value = null;
+        showToast(person ? `Responsável definido: ${person.name}` : "Responsável removido", "success");
+    } catch (error) {
+        showToast(
+            error instanceof Error ? error.message : "Não foi possível atualizar o responsável.",
+            "error",
+        );
+    } finally {
+        quickAssigneeBusy.value = false;
+    }
 }
 function structureDescendsFrom(task: Task, ancestorId: string) {
     return task.id === ancestorId || ancestorsFor(task).includes(ancestorId);
@@ -971,6 +1043,17 @@ function openCreationDialog(kind: "task" | "section", parentId: string | null = 
 }
 function focusTaskSearchFromShortcut(event: KeyboardEvent) {
     if (
+        event.key.toLocaleLowerCase("pt-BR") === "l" &&
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey
+    ) {
+        event.preventDefault();
+        clearTaskFilters();
+        return;
+    }
+    if (
         event.key.toLocaleLowerCase("pt-BR") !== "k" ||
         (!event.metaKey && !event.ctrlKey) ||
         event.altKey
@@ -978,6 +1061,13 @@ function focusTaskSearchFromShortcut(event: KeyboardEvent) {
         return;
     event.preventDefault();
     searchInput.value?.focus();
+}
+function clearTaskFilters() {
+    store.clearTaskFilters();
+    filters.value = false;
+}
+function selectSearchText(event: FocusEvent) {
+    (event.target as HTMLInputElement).select();
 }
 function isRowContextTarget(target: EventTarget | null) {
     return (
@@ -1152,8 +1242,9 @@ async function duplicateTaskFromContext() {
 }
 async function deleteTaskFromContext() {
     const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
-    if (!menu || menu.task.kind !== "task" || !projectId || !confirm(`Excluir a tarefa “${menu.task.title}”?`)) return;
+    if (!menu || menu.task.kind !== "task" || !projectId) return;
     taskContextMenu.value = null;
+    if (!confirm(`Excluir a tarefa “${menu.task.title}”?`)) return;
     const response = await fetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
     if (!response.ok) { showToast(await responseError(response, "Não foi possível excluir a tarefa."), "error"); return; }
     await store.load(); showToast("Tarefa excluída", "success");
@@ -2665,15 +2756,26 @@ function statusLabel(s: string) {
                     >
                 </div>
                 <div class="commands">
-                    <label class="search"
-                        ><span>⌕</span
-                        ><input
-                            ref="searchInput"
-                            v-model="store.search"
-                            placeholder="Buscar tarefa…"
-                            aria-keyshortcuts="Meta+K Control+K"
-                        /><kbd>⌘ K</kbd></label
-                    >
+                    <div class="search-control">
+                        <label
+                            class="search"
+                            :class="{ 'search-invalid': store.searchError }"
+                            ><span>⌕</span
+                            ><input
+                                ref="searchInput"
+                                v-model="store.search"
+                                placeholder="Buscar tarefa…"
+                                aria-keyshortcuts="Meta+K Control+K"
+                                :aria-invalid="Boolean(store.searchError)"
+                                :aria-describedby="store.searchError ? 'task-search-error' : undefined"
+                                title="Use &, |, !, (), * e \\ para buscas avançadas"
+                                @focus="selectSearchText"
+                            /><kbd>⌘ K</kbd></label
+                        >
+                        <small v-if="store.searchError" id="task-search-error" class="search-query-error" role="alert">
+                            {{ store.searchError }} A busca anterior continua aplicada.
+                        </small>
+                    </div>
                     <div class="segmented">
                         <button
                             :class="{ active: store.zoom === 'day' }"
@@ -2692,23 +2794,39 @@ function statusLabel(s: string) {
                             Mês
                         </button>
                     </div>
-                    <button
-                        ref="filterButton"
-                        class="soft-btn filter-trigger"
-                        :aria-expanded="filters"
-                        aria-haspopup="true"
-                        aria-label="Filtros"
-                        title="Filtros"
-                        @click="filters = !filters"
-                    >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path
-                                d="M3.5 5.5h17l-6.7 7.3v4.8l-3.6 1.9v-6.7L3.5 5.5Z"
-                            /></svg
-                        ><span v-if="activeFilterFieldCount" class="count">{{
-                            activeFilterFieldCount
-                        }}</span>
-                    </button>
+                    <div class="filter-control">
+                        <button
+                            ref="filterButton"
+                            class="soft-btn filter-trigger"
+                            :aria-expanded="filters"
+                            aria-haspopup="true"
+                            aria-label="Filtros"
+                            title="Filtros"
+                            @click="filters = !filters"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path
+                                    d="M3.5 5.5h17l-6.7 7.3v4.8l-3.6 1.9v-6.7L3.5 5.5Z"
+                                /></svg
+                            ><span v-if="activeFilterFieldCount" class="count">{{
+                                activeFilterFieldCount
+                            }}</span>
+                        </button>
+                        <button
+                            class="soft-btn clear-filter-trigger"
+                            :disabled="!hasActiveTaskFilters"
+                            aria-keyshortcuts="Control+Shift+L"
+                            aria-label="Limpar filtros e busca"
+                            data-tooltip="Limpar filtros e busca (Ctrl + Shift + L)"
+                            @click="clearTaskFilters"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="m4 16 7-7 4 4-7 7H4v-4Z" />
+                                <path d="m13 7 1.5-1.5a2.1 2.1 0 0 1 3 3L16 10" />
+                                <path d="m3.5 20.5 5-5M6.5 22l5-5" />
+                            </svg>
+                        </button>
+                    </div>
                     <div class="creation-control">
                         <button ref="creationTrigger" class="primary create-item-trigger" :aria-expanded="creationMenu" aria-haspopup="menu" aria-label="Criar item" title="Criar tarefa ou seção" @click="creationMenu = !creationMenu">+</button>
                         <div v-if="creationMenu" ref="creationMenuElement" class="creation-menu" role="menu" aria-label="Criar item"><button role="menuitem" @click="openCreationDialog('task')"><b>＋</b><span><strong>Tarefa</strong><small>Uma atividade do projeto</small></span></button><button role="menuitem" @click="openCreationDialog('section')"><b>▤</b><span><strong>Seção</strong><small>Um agrupamento hierárquico</small></span></button></div>
@@ -2936,6 +3054,52 @@ function statusLabel(s: string) {
                 </div></Teleport
             >
 
+            <Teleport to="body">
+                <section
+                    v-if="quickAssigneeMenu"
+                    ref="quickAssigneeMenuElement"
+                    class="quick-assignee-popover"
+                    role="menu"
+                    aria-label="Definir responsável"
+                    :style="{
+                        top: quickAssigneeMenu.top + 'px',
+                        left: quickAssigneeMenu.left + 'px',
+                    }"
+                    @keydown.esc="quickAssigneeMenu = null"
+                >
+                    <header>
+                        <b>Definir responsável</b>
+                        <small>Atualização rápida da tarefa</small>
+                    </header>
+                    <button
+                        class="quick-assignee-option"
+                        role="menuitemradio"
+                        :aria-checked="!store.workspace?.tasks.find((task) => task.id === quickAssigneeMenu?.taskId)?.assignee_id"
+                        :disabled="quickAssigneeBusy"
+                        @click="assignQuickAssignee(null)"
+                    >
+                        <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+                        </svg>
+                        <span>Sem responsável</span>
+                    </button>
+                    <p v-if="!quickAssigneePeople.length" class="quick-assignee-empty">
+                        Nenhum responsável disponível.
+                    </p>
+                    <button
+                        v-for="person in quickAssigneePeople"
+                        :key="person.id"
+                        class="quick-assignee-option"
+                        role="menuitemradio"
+                        :aria-checked="store.workspace?.tasks.find((task) => task.id === quickAssigneeMenu?.taskId)?.assignee_id === person.id"
+                        :disabled="quickAssigneeBusy"
+                        @click="assignQuickAssignee(person.id)"
+                    >
+                        <i>{{ person.name }}</i><span>{{ person.name }}</span>
+                    </button>
+                </section>
+            </Teleport>
+
             <Teleport to="body"
                 ><section
                     v-if="taskContextMenu"
@@ -2948,6 +3112,7 @@ function statusLabel(s: string) {
                         top: taskContextMenu.y + 'px',
                     }"
                     @contextmenu.prevent
+                    @click="taskContextMenu = null"
                 >
                     <button
                         v-if="taskContextMenu.task.kind === 'task'"
@@ -3557,12 +3722,24 @@ function statusLabel(s: string) {
                                             task.kind === 'task' &&
                                             !isExpandable(task)
                                         "
-                                        ><span
-                                            v-if="task.assignee"
-                                            class="mini-avatar"
-                                            :title="task.assignee"
-                                            >{{ task.assignee }}</span
-                                        ><span v-else>—</span></template
+                                        ><button
+                                            type="button"
+                                            class="assignee-trigger"
+                                            data-quick-assignee-trigger
+                                            :disabled="!canQuickAssign"
+                                            :aria-expanded="quickAssigneeMenu?.taskId === task.id"
+                                            aria-haspopup="menu"
+                                            :aria-label="task.assignee ? `Responsável: ${task.assignee}. Alterar responsável` : 'Sem responsável. Definir responsável'"
+                                            :title="task.assignee ? `Responsável: ${task.assignee}` : 'Sem responsável'"
+                                            @click.stop="toggleQuickAssigneeMenu(task, $event)"
+                                            ><span
+                                                v-if="task.assignee"
+                                                class="mini-avatar"
+                                                >{{ task.assignee }}</span
+                                            ><svg v-else viewBox="0 0 24 24" aria-hidden="true">
+                                                <path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
+                                            </svg></button
+                                        ></template
                                     >
                                 </div>
                                 <div
