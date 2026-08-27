@@ -31,7 +31,7 @@ import {
     resizePreview,
     shiftCivilDate,
 } from "./utils/timeblock-gesture";
-import { dependencyPath } from "./utils/dependency-path";
+import { dependencyPath, dependencyStub } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
 import { parseTaskQuery } from "./utils/task-query";
 const store = useWorkspaceStore();
@@ -189,6 +189,18 @@ const dependencyConfirmation = ref<{ action: "remove"; id: string } | null>(
 );
 type RelationDirection = "predecessor" | "dependent";
 type RelationType = "FS" | "SS" | "FF" | "SF";
+type DependencyRendering = {
+    id: string;
+    dependencies: Dependency[];
+} & (
+    | { path: string; terminal: null; hiddenDirection: null }
+    | {
+          stemPath: string;
+          arrowPath: string;
+          terminal: { x: number; y: number };
+          hiddenDirection: "incoming" | "outgoing";
+      }
+);
 const relationModal = ref<{
         direction: RelationDirection;
         search: string;
@@ -336,6 +348,7 @@ const activeFilterFieldCount = computed(
         Number(store.assigneeFilters.length > 0) +
         Number(Boolean(store.periodStart || store.periodEnd)),
 );
+const filterExceptionCount = computed(() => store.filterExceptions.size);
 const hasActiveTaskFilters = computed(
     () => Boolean(store.search) || activeFilterFieldCount.value > 0,
 );
@@ -1351,25 +1364,105 @@ const monthSegments = computed(() => {
     });
     return out;
 });
-const pathFor = (dependency: Dependency) => {
-    const from = visibleTasks.value.find((task) => task.id === dependency.from),
-        to = visibleTasks.value.find((task) => task.id === dependency.to);
-    if (!from || !to) return "";
-    const sourceEndpoint: TimeEndpoint = dependency.type.startsWith("F")
+const dependencyRenderings = computed<DependencyRendering[]>(() => {
+    const visible = new Map(visibleTasks.value.map((task) => [task.id, task]));
+    const clearance = Math.max(6, Math.min(12, dayWidth.value * 0.2)) + 4;
+    const renderings: DependencyRendering[] = [];
+    const hiddenGroups = new Map<string, {
+        dependencies: Dependency[];
+        task: Task;
+        port: TimeEndpoint;
+        direction: "incoming" | "outgoing";
+    }>();
+    for (const dependency of store.workspace?.dependencies ?? []) {
+        const from = visible.get(dependency.from), to = visible.get(dependency.to);
+        const sourceEndpoint: TimeEndpoint = dependency.type.startsWith("F")
             ? "finish"
-            : "start",
-        targetEndpoint: TimeEndpoint = dependency.type.endsWith("F")
+            : "start";
+        const targetEndpoint: TimeEndpoint = dependency.type.endsWith("F")
             ? "finish"
-            : "start",
-        source = endpointPoint(from, sourceEndpoint),
-        target = endpointPoint(to, targetEndpoint);
-    return dependencyPath(source, target, {
-        sourcePort: sourceEndpoint,
-        targetPort: targetEndpoint,
-        clearance: Math.max(6, Math.min(12, dayWidth.value * 0.2)) + 4,
-        rowHeight: rowHeight.value,
-    });
-};
+            : "start";
+        if (from && to) {
+            renderings.push({
+                id: dependency.id,
+                dependencies: [dependency],
+                path: dependencyPath(
+                    endpointPoint(from, sourceEndpoint),
+                    endpointPoint(to, targetEndpoint),
+                    { sourcePort: sourceEndpoint, targetPort: targetEndpoint, clearance, rowHeight: rowHeight.value },
+                ),
+                terminal: null,
+                hiddenDirection: null,
+            });
+            continue;
+        }
+        const visibleTask = from ?? to;
+        if (!visibleTask) continue;
+        const port = from ? sourceEndpoint : targetEndpoint;
+        const hiddenDirection = from ? "outgoing" as const : "incoming" as const;
+        const key = [visibleTask.id, port, hiddenDirection, dependency.critical].join(":");
+        const group = hiddenGroups.get(key);
+        if (group) {
+            group.dependencies.push(dependency);
+            continue;
+        }
+        hiddenGroups.set(key, {
+            dependencies: [dependency],
+            task: visibleTask,
+            port,
+            direction: hiddenDirection,
+        });
+    }
+    for (const [id, group] of hiddenGroups) {
+        const stub = dependencyStub(
+            endpointPoint(group.task, group.port),
+            group.port,
+            clearance + 18,
+            group.direction,
+        );
+        renderings.push({
+            id,
+            dependencies: group.dependencies,
+            stemPath: stub.stemPath,
+            arrowPath: stub.arrowPath,
+            terminal: stub.terminal,
+            hiddenDirection: group.direction,
+        });
+    }
+    return renderings;
+});
+function hiddenDependencyTitles(
+    dependencies: readonly Dependency[],
+    direction: "incoming" | "outgoing",
+) {
+    return [...new Set(dependencies.map((dependency) =>
+        taskTitle(direction === "outgoing" ? dependency.to : dependency.from),
+    ))].join("\n");
+}
+function hiddenDependencyAriaLabel(
+    dependencies: readonly Dependency[],
+    direction: "incoming" | "outgoing",
+) {
+    return `Clique para exibir ${dependencies.length} tarefa(s) oculta(s): ${hiddenDependencyTitles(dependencies, direction).replaceAll("\n", ", ")}.`;
+}
+function revealHiddenDependency(
+    dependencies: readonly Dependency[],
+    direction: "incoming" | "outgoing",
+) {
+    const taskIds = new Set(dependencies.map((dependency) =>
+        direction === "outgoing" ? dependency.to : dependency.from,
+    ));
+    taskIds.forEach((taskId) => store.revealFilterException(taskId));
+}
+function dependencyIsHighlighted(dependencies: readonly Dependency[]) {
+    return dependencies.some((dependency) =>
+        hoveredDependencyHighlight.value.dependencyIds.has(dependency.id),
+    );
+}
+function dependencyMarker(dependencies: readonly Dependency[]) {
+    if (dependencyIsHighlighted(dependencies)) return "url(#arrow-highlight)";
+    return dependencies[0]?.critical ? "url(#arrow-critical)" : "url(#arrow)";
+}
 function moveCursorTo(task: Task) {
     cursorTaskId.value = task.id;
 }
@@ -2920,6 +3013,14 @@ function statusLabel(s: string) {
                 <header>
                     <b>Filtros</b
                     ><small>Combine critérios para restringir a lista.</small>
+                    ><button
+                        v-if="filterExceptionCount"
+                        type="button"
+                        class="clear-filter-exceptions"
+                        @click="store.clearFilterExceptions()"
+                    >
+                        Remover exceções ({{ filterExceptionCount }})
+                    </button>
                 </header>
                 <section
                     class="filter-section"
@@ -3358,27 +3459,50 @@ function statusLabel(s: string) {
                                         <path d="M0 0 L8 4 L0 8Z" />
                                     </marker>
                                 </defs>
-                                <path
-                                    v-for="dep in store.workspace?.dependencies"
-                                    :key="dep.id"
-                                    :d="pathFor(dep)"
-                                    :class="{
-                                        critical: dep.critical,
-                                        'dependency-highlighted':
-                                            hoveredDependencyHighlight.dependencyIds.has(
-                                                dep.id,
-                                            ),
-                                    }"
-                                    :marker-end="
-                                        hoveredDependencyHighlight.dependencyIds.has(
-                                            dep.id,
-                                        )
-                                            ? 'url(#arrow-highlight)'
-                                            : dep.critical
-                                              ? 'url(#arrow-critical)'
-                                              : 'url(#arrow)'
-                                    "
-                                />
+                                <template
+                                    v-for="rendering in dependencyRenderings"
+                                    :key="rendering.id"
+                                >
+                                    <path
+                                        v-if="!rendering.hiddenDirection"
+                                        :d="rendering.path"
+                                        :class="{
+                                            critical: rendering.dependencies[0]?.critical,
+                                            'dependency-highlighted': dependencyIsHighlighted(rendering.dependencies),
+                                        }"
+                                        :marker-end="dependencyMarker(rendering.dependencies)"
+                                    />
+                                    <g
+                                        v-else
+                                        class="dependency-stub"
+                                        :class="{
+                                            critical: rendering.dependencies[0]?.critical,
+                                            'dependency-highlighted': dependencyIsHighlighted(rendering.dependencies),
+                                        }"
+                                        role="img"
+                                        tabindex="0"
+                                        :aria-label="hiddenDependencyAriaLabel(rendering.dependencies, rendering.hiddenDirection)"
+                                        @click.stop="revealHiddenDependency(rendering.dependencies, rendering.hiddenDirection)"
+                                        @keydown.enter.prevent.stop="revealHiddenDependency(rendering.dependencies, rendering.hiddenDirection)"
+                                        @keydown.space.prevent.stop="revealHiddenDependency(rendering.dependencies, rendering.hiddenDirection)"
+                                    >
+                                        <title>{{ hiddenDependencyTitles(rendering.dependencies, rendering.hiddenDirection) }}</title>
+                                        <path
+                                            class="dependency-stub-arrow"
+                                            :d="rendering.arrowPath"
+                                            :marker-end="dependencyMarker(rendering.dependencies)"
+                                        />
+                                        <path
+                                            v-if="rendering.stemPath"
+                                            :d="rendering.stemPath"
+                                        />
+                                        <circle
+                                            :cx="rendering.terminal?.x"
+                                            :cy="rendering.terminal?.y"
+                                            r="4"
+                                        />
+                                    </g>
+                                </template>
                             </svg>
                             <svg
                                 v-if="connectionPreview"
@@ -3707,7 +3831,13 @@ function statusLabel(s: string) {
                                         ></span>
                                         <div class="task-title">
                                             <div class="task-title-line">
-                                                <b>{{ task.title }}</b>
+                                                <b>{{ task.title }}</b
+                                                ><span
+                                                    v-if="store.filterExceptions.has(task.id)"
+                                                    class="filter-exception-badge"
+                                                    title="Exibida por uma dependência, apesar do filtro atual"
+                                                    >Exceção de filtro</span
+                                                >
                                             </div>
                                             <small
                                                 v-if="

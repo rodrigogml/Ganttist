@@ -11,6 +11,31 @@ type DependencyPathOptions = {
 
 const sideFor = (port: DependencyPort) => (port === "finish" ? 1 : -1);
 
+export function dependencyStub(
+    point: DependencyPoint,
+    port: DependencyPort,
+    length: number,
+    direction: "incoming" | "outgoing",
+): { stemPath: string; arrowPath: string; terminal: DependencyPoint } {
+    const terminal = { x: point.x + sideFor(port) * length, y: point.y };
+    if (direction === "incoming") {
+        return {
+            stemPath: "",
+            arrowPath: `M${terminal.x},${terminal.y} H${point.x}`,
+            terminal,
+        };
+    }
+    const arrowTerminal = {
+        x: terminal.x - sideFor(port) * 12,
+        y: terminal.y,
+    };
+    return {
+        stemPath: `M${arrowTerminal.x},${arrowTerminal.y} H${terminal.x}`,
+        arrowPath: `M${point.x},${point.y} H${arrowTerminal.x}`,
+        terminal,
+    };
+}
+
 /**
  * Routes an orthogonal dependency while preserving the direction of both ports.
  * A close pair of opposing ports receives an approach lane around the target so

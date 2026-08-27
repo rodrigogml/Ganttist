@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dependencyPath } from "./dependency-path";
+import { dependencyPath, dependencyStub } from "./dependency-path";
 
 describe("dependencyPath", () => {
     it("uses a forward final segment for an FS dependency on consecutive days", () => {
@@ -30,5 +30,18 @@ describe("dependencyPath", () => {
                 { sourcePort: "finish", targetPort: "finish", clearance: 8, rowHeight: 54 },
             ),
         ).toBe("M42,81 H50 H92 V27 H134 H126");
+    });
+
+    it("terminates a hidden relation at the side of its visible port", () => {
+        expect(dependencyStub({ x: 42, y: 27 }, "finish", 24, "outgoing")).toEqual({
+            stemPath: "M54,27 H66",
+            arrowPath: "M42,27 H54",
+            terminal: { x: 66, y: 27 },
+        });
+        expect(dependencyStub({ x: 42, y: 27 }, "start", 24, "incoming")).toEqual({
+            stemPath: "",
+            arrowPath: "M18,27 H42",
+            terminal: { x: 18, y: 27 },
+        });
     });
 });

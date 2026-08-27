@@ -619,6 +619,43 @@ body.resizing-task-column * {
   marker-end: url(#arrow-highlight);
 }
 
+.dependencies .dependency-stub {
+  pointer-events: auto;
+  cursor: copy;
+}
+
+.dependencies .dependency-stub path {
+  fill: none;
+  stroke: #a5aaba;
+  stroke-width: 1.8;
+}
+
+.dependencies .dependency-stub circle {
+  fill: #a5aaba;
+}
+
+.dependencies .dependency-stub.critical path {
+  stroke: #e46b68;
+}
+
+.dependencies .dependency-stub.critical circle {
+  fill: #e46b68;
+}
+
+.dependencies .dependency-stub.dependency-highlighted path {
+  stroke: #252b36;
+  stroke-width: 3;
+}
+
+.dependencies .dependency-stub.dependency-highlighted circle {
+  fill: #252b36;
+}
+
+.dependencies .dependency-stub:focus-visible circle {
+  stroke: #252b36;
+  stroke-width: 3;
+}
+
 #arrow-highlight path {
   fill: #252b36;
 }
@@ -825,6 +862,21 @@ body.resizing-task-column * {
 .task-title b {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.filter-exception-badge {
+  display: inline-block;
+  margin-left: 5px;
+  border: 1px solid #cfc8fa;
+  border-radius: 4px;
+  padding: 1px 4px;
+  background: #f5f3ff;
+  color: #5b51b6;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.2;
+  vertical-align: 1px;
   white-space: nowrap;
 }
 
@@ -1724,9 +1776,31 @@ body.resizing-task-column * {
 }
 
 .filter-popover > header {
+  position: relative;
   grid-column: 1 / -1;
   padding: 14px 16px 12px;
   border-bottom: 1px solid #e8eaf0;
+}
+
+.clear-filter-exceptions {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  border: 0;
+  border-radius: 5px;
+  padding: 4px 6px;
+  background: #f0edff;
+  color: #5448bd;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.clear-filter-exceptions:hover,
+.clear-filter-exceptions:focus-visible {
+  background: #e3dfff;
+  outline: none;
 }
 
 .filter-popover > header b,

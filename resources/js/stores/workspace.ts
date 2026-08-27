@@ -28,6 +28,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const selected = ref<string[]>([])
   const zoom = ref<'day' | 'week' | 'month'>('week')
   const hiddenGroups = ref(new Set<string>())
+  const filterExceptions = ref(new Set<string>())
   watch(search, value => {
     const query = parseTaskQuery(value)
     if (query.valid) {
@@ -36,6 +37,9 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     } else {
       searchError.value = query.error.message
     }
+  }, { flush: 'sync' })
+  watch([search, statusFilters, assigneeFilters, periodStart, periodEnd], () => {
+    if (filterExceptions.value.size) filterExceptions.value = new Set()
   }, { flush: 'sync' })
   const matchesTaskFilters = (task: Task): boolean => {
     if (!activeTaskQuery.value.matches(task.title)) return false
@@ -56,7 +60,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   const tasks = computed(() => {
     const source = workspace.value?.tasks ?? []
     const byId = new Map(source.map(task => [task.id, task]))
-    const visibleIds = new Set(source.filter(matchesTaskFilters).map(task => task.id))
+    const visibleIds = new Set([
+      ...source.filter(matchesTaskFilters).map(task => task.id),
+      ...filterExceptions.value,
+    ])
 
     for (const task of source) {
       if (!visibleIds.has(task.id)) continue
@@ -121,6 +128,24 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     assigneeFilters.value = []
     periodStart.value = ''
     periodEnd.value = ''
+    filterExceptions.value = new Set()
+  }
+
+  function clearFilterExceptions(): void {
+    filterExceptions.value = new Set()
+  }
+
+  function revealFilterException(id: string): void {
+    const taskById = new Map((workspace.value?.tasks ?? []).map(task => [task.id, task]))
+    if (!taskById.has(id)) return
+    filterExceptions.value = new Set([...filterExceptions.value, id])
+    const next = new Set(hiddenGroups.value)
+    let current = taskById.get(id)
+    while (current?.parent_id) {
+      next.delete(current.parent_id)
+      current = taskById.get(current.parent_id)
+    }
+    hiddenGroups.value = next
   }
 
   function revealTask(id: string): void {
@@ -175,5 +200,5 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeProjectStorage()?.removeItem(activeProjectStorageKey)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, tasks, empty, load, clearWorkspace, clearTaskFilters, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
+  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, filterExceptions, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, revealFilterException, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
 })

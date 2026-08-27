@@ -119,6 +119,32 @@ describe('workspace visibility', () => {
     expect(store.tasks.map(task => task.id)).toEqual(['kitchen'])
   })
 
+  it('reveals a filtered dependency endpoint with its ancestors until filters change', () => {
+    const store = useWorkspaceStore()
+    const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'group', title: 'Grupo', kind: 'section' as const, level: 0 },
+        { ...base, id: 'visible', title: 'Planejar cozinha', kind: 'task' as const, level: 1, parent_id: 'group' },
+        { ...base, id: 'exception', title: 'Comprar granito', kind: 'task' as const, level: 1, parent_id: 'group' },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 0, total: 2, critical: 0, opened: 2, blocked: 0, scheduled: 0, late: 0, without_dates: 2 },
+    }
+    store.search = 'cozinha'
+    store.hiddenGroups = new Set(['group'])
+
+    store.revealFilterException('exception')
+
+    expect(store.filterExceptions).toEqual(new Set(['exception']))
+    expect(store.hiddenGroups.has('group')).toBe(false)
+    expect(store.tasks.map(task => task.id)).toEqual(['group', 'visible', 'exception'])
+
+    store.search = 'granito'
+
+    expect(store.filterExceptions).toEqual(new Set())
+  })
+
   it('reconciles an already-open workspace without resetting selection or replacing it with an error', async () => {
     const store = useWorkspaceStore()
     store.workspace = {
