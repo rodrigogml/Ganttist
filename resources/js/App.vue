@@ -3963,10 +3963,14 @@ function statusLabel(s: string) {
                                     height: rowHeight + 'px',
                                 }"
                                 @click="moveCursorTo(task)"
+                                @contextmenu="
+                                    openTaskContextMenuFromMouse(task, $event)
+                                "
                             >
                                 <div
                                     v-if="gesturePreviewFor(task)"
                                     class="task-bar drag-ghost"
+                                    data-context-menu-owner
                                     :class="[
                                         `gesture-${gesturePreviewFor(task)?.kind}`,
                                         {
@@ -3996,6 +4000,7 @@ function statusLabel(s: string) {
                                 <div
                                     v-else-if="hasTimelineMark(task)"
                                     class="task-bar"
+                                    data-context-menu-owner
                                     :class="[
                                         task.kind,
                                         task.status,
