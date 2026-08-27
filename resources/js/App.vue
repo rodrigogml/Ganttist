@@ -33,6 +33,7 @@ import {
 } from "./utils/timeblock-gesture";
 import { dependencyPath } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
+import { parseTaskQuery } from "./utils/task-query";
 const store = useWorkspaceStore();
 const auth = useAuthStore();
 const appearance = ref(false),
@@ -195,6 +196,12 @@ const relationModal = ref<{
         type: RelationType | null;
     } | null>(null),
     relationBusy = ref(false);
+const initialRelationQuery = parseTaskQuery("");
+if (!initialRelationQuery.valid)
+    throw new Error("A consulta vazia deve ser válida.");
+const activeRelationQuery = ref(initialRelationQuery);
+const relationSearchError = ref("");
+const hasActiveRelationSearch = ref(false);
 const collaborators = ref<Collaborator[]>([]),
     taskComments = ref<TaskComment[]>([]),
     editorContextLoading = ref(false),
@@ -418,27 +425,29 @@ const dependentDependencies = computed(() =>
         (dependency) => dependency.from === activeTask.value?.id,
     ),
 );
-const normalizedRelationSearch = computed(
-    () =>
-        relationModal.value?.search
-            .toLocaleLowerCase("pt-BR")
-            .normalize("NFD")
-            .replace(/\p{Diacritic}/gu, "")
-            .trim() ?? "",
+watch(
+    () => relationModal.value?.search ?? "",
+    (search) => {
+        const query = parseTaskQuery(search);
+        if (query.valid) {
+            activeRelationQuery.value = query;
+            relationSearchError.value = "";
+            hasActiveRelationSearch.value = Boolean(search.trim());
+        } else relationSearchError.value = query.error.message;
+    },
+    { flush: "sync" },
+);
+const relationSearchHasText = computed(() =>
+    Boolean(relationModal.value?.search.trim()),
 );
 const relationCandidates = computed(() => {
-    const query = normalizedRelationSearch.value;
-    if (!query) return [];
+    if (!hasActiveRelationSearch.value) return [];
     return (store.workspace?.tasks ?? [])
         .filter(
             (task) =>
                 task.kind === "task" &&
                 task.id !== activeTask.value?.id &&
-                task.title
-                    .toLocaleLowerCase("pt-BR")
-                    .normalize("NFD")
-                    .replace(/\p{Diacritic}/gu, "")
-                    .includes(query),
+                activeRelationQuery.value.matches(task.title),
         )
         .slice(0, 50);
 });
@@ -1880,7 +1889,7 @@ function openRelationModal(direction: RelationDirection) {
 function chooseRelationTask(task: Task) {
     if (!relationModal.value) return;
     relationModal.value.selectedId = task.id;
-    relationModal.value.search = task.title;
+    relationModal.value.search = "";
     relationModal.value.type = null;
 }
 async function confirmRelationModal() {
@@ -4692,13 +4701,24 @@ function statusLabel(s: string) {
                             role="combobox"
                             aria-controls="relation-results"
                             :aria-expanded="relationCandidates.length > 0"
+                            :aria-invalid="Boolean(relationSearchError)"
+                            :aria-describedby="relationSearchError ? 'relation-search-error' : undefined"
                             v-model="relationModal.search"
-                            placeholder="Digite parte do título…"
+                            placeholder="Buscar com &, |, !, (), *…"
+                            title="Use &, |, !, (), * e \\ para buscas avançadas"
                             @input="
                                 relationModal.selectedId = null;
                                 relationModal.type = null;
                             "
                     /></label>
+                    <p
+                        v-if="relationSearchError && !relationModal.selectedId"
+                        id="relation-search-error"
+                        class="relation-validation"
+                        role="alert"
+                    >
+                        {{ relationSearchError }} A busca anterior continua aplicada.
+                    </p>
                     <ul
                         v-if="
                             relationCandidates.length &&
@@ -4723,7 +4743,8 @@ function statusLabel(s: string) {
                     </ul>
                     <p
                         v-else-if="
-                            normalizedRelationSearch &&
+                            relationSearchHasText &&
+                            !relationSearchError &&
                             !relationModal.selectedId
                         "
                         class="relation-empty"
