@@ -2718,6 +2718,7 @@ function statusLabel(s: string) {
             blocked: "Bloqueada",
             scheduled: "Agendada",
             late: "Atrasada",
+            in_progress: "Em andamento",
             opened: "Aberta",
         } as Record<string, string>
     )[s];
@@ -3071,6 +3072,7 @@ function statusLabel(s: string) {
                             <label
                                 v-for="f in [
                                     ['opened', 'Abertas'],
+                                    ['in_progress', 'Em andamento'],
                                     ['scheduled', 'Agendadas'],
                                     ['late', 'Atrasadas'],
                                 ] as const"
@@ -4252,6 +4254,7 @@ function statusLabel(s: string) {
                 </div>
                 <div class="gantt-footer">
                     <span><i class="legend opened"></i> Aberta</span
+                    ><span><i class="legend in_progress"></i> Em andamento</span
                     ><span><i class="legend blocked"></i> Bloqueada</span
                     ><span><i class="legend scheduled"></i> Agendada</span
                     ><span><i class="legend late"></i> Atrasada</span

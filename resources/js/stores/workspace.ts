@@ -5,8 +5,8 @@ import { parseWorkspaceResponse } from '../contracts/workspace-contract'
 import type { Dependency, Task, TaskStatus, Workspace } from '../types'
 import { parseTaskQuery } from '../utils/task-query'
 
-export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late', 'blocked', 'completed']
-export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'scheduled', 'late']
+export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed']
+export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'in_progress', 'scheduled', 'late']
 const activeProjectStorageKey = 'ganttist.active-project-id'
 const activeProjectStorage = () => typeof localStorage === 'undefined' ? null : localStorage
 

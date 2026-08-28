@@ -29,7 +29,7 @@ describe('workspace visibility', () => {
 
     expect(store.hiddenGroups.has('group')).toBe(false)
     expect(store.search).toBe('')
-    expect(store.statusFilters).toEqual(['opened', 'scheduled', 'late', 'blocked', 'completed'])
+    expect(store.statusFilters).toEqual(['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed'])
   })
 
   it('combines multiple status choices and toggles the unlocked virtual parent', () => {
@@ -39,23 +39,24 @@ describe('workspace visibility', () => {
       project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
       tasks: [
         { ...base, id: 'opened', title: 'Aberta', status: 'opened' },
+        { ...base, id: 'in-progress', title: 'Em andamento', status: 'in_progress' },
         { ...base, id: 'scheduled', title: 'Agendada', status: 'scheduled' },
         { ...base, id: 'late', title: 'Atrasada', status: 'late' },
         { ...base, id: 'blocked', title: 'Bloqueada', status: 'blocked' },
         { ...base, id: 'completed', title: 'Concluída', status: 'completed' },
       ],
-      dependencies: [], stats: { progress: 0, completed: 1, total: 5, critical: 0, opened: 1, blocked: 1, scheduled: 1, late: 1, without_dates: 5 },
+      dependencies: [], stats: { progress: 0, completed: 1, total: 6, critical: 0, opened: 1, in_progress: 1, blocked: 1, scheduled: 1, late: 1, without_dates: 5 },
     }
 
     store.setStatusFilters([])
     store.toggleUnblockedStatusFilters()
-    expect(store.tasks.map(task => task.id)).toEqual(['opened', 'scheduled', 'late'])
+    expect(store.tasks.map(task => task.id)).toEqual(['opened', 'in-progress', 'scheduled', 'late'])
 
     store.toggleStatusFilter('blocked')
-    expect(store.tasks.map(task => task.id)).toEqual(['opened', 'scheduled', 'late', 'blocked'])
+    expect(store.tasks.map(task => task.id)).toEqual(['opened', 'in-progress', 'scheduled', 'late', 'blocked'])
 
     store.toggleStatusFilter('opened')
-    expect(store.tasks.map(task => task.id)).toEqual(['scheduled', 'late', 'blocked'])
+    expect(store.tasks.map(task => task.id)).toEqual(['in-progress', 'scheduled', 'late', 'blocked'])
   })
 
   it('keeps ancestor sections visible when a nested task matches the search', () => {
@@ -94,7 +95,7 @@ describe('workspace visibility', () => {
     store.clearTaskFilters()
 
     expect(store.search).toBe('')
-    expect(store.statusFilters).toEqual(['opened', 'scheduled', 'late', 'blocked', 'completed'])
+    expect(store.statusFilters).toEqual(['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed'])
     expect(store.assigneeFilters).toEqual([])
     expect(store.periodStart).toBe('')
     expect(store.periodEnd).toBe('')

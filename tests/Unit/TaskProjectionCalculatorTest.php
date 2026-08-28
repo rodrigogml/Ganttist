@@ -20,6 +20,7 @@ final class TaskProjectionCalculatorTest extends TestCase
         $result = $this->calculator()->calculate([
             $this->task('completed', null, null, true),
             $this->task('opened'),
+            $this->task('in-progress', '2026-08-19', '2026-08-21'),
             $this->task('scheduled', '2026-08-24', '2026-08-24'),
             $this->task('late', '2026-08-17', '2026-08-19'),
             $this->task('blocker', '2026-08-20', '2026-08-21'),
@@ -28,6 +29,7 @@ final class TaskProjectionCalculatorTest extends TestCase
 
         self::assertSame(ProjectedTaskStatus::Completed, $result['completed']->status);
         self::assertSame(ProjectedTaskStatus::Opened, $result['opened']->status);
+        self::assertSame(ProjectedTaskStatus::InProgress, $result['in-progress']->status);
         self::assertSame(ProjectedTaskStatus::Scheduled, $result['scheduled']->status);
         self::assertSame(ProjectedTaskStatus::Late, $result['late']->status);
         self::assertSame(ProjectedTaskStatus::Blocked, $result['blocked']->status);

@@ -98,11 +98,13 @@ final readonly class TaskProjectionCalculator
                 ProjectionPolicy::PreserveDeadline => $baseDeadline >= $consideredStart ? $baseDeadline : $consideredStart,
             };
             $completionDate = $this->date($input->completionDate ?? $today);
+            $hasExplicitSchedule = $input->start !== null || $input->deadline !== null;
             $status = match (true) {
                 $input->completed => ProjectedTaskStatus::Completed,
                 $blocked => ProjectedTaskStatus::Blocked,
                 $consideredStart > $today => ProjectedTaskStatus::Scheduled,
                 $consideredDeadline < $today => ProjectedTaskStatus::Late,
+                $hasExplicitSchedule => ProjectedTaskStatus::InProgress,
                 default => ProjectedTaskStatus::Opened,
             };
             $result[$id] = new TaskProjection($id, $consideredStart, $consideredDeadline, $unlockDate, $earliestStart, $completionDate, $status);

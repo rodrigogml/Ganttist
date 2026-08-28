@@ -181,6 +181,7 @@ final class ProjectController
             'blocked' => $statusCount('blocked'),
             'scheduled' => $statusCount('scheduled'),
             'late' => $statusCount('late'),
+            'in_progress' => $statusCount('in_progress'),
             'without_dates' => count(array_filter($leafTasks, fn (array $task): bool => $task['start'] === null && $task['finish'] === null)),
         ];
 
@@ -751,7 +752,11 @@ final class ProjectController
             return 'blocked';
         }
 
-        return $task->planned_start && $task->planned_start > now()->toDateString() ? 'scheduled' : 'opened';
+        if ($task->planned_start && $task->planned_start > now()->toDateString()) {
+            return 'scheduled';
+        }
+
+        return $task->planned_start || $task->planned_finish ? 'in_progress' : 'opened';
     }
 
     private function wouldCycle(string $projectId, string $from, string $to): bool
@@ -827,7 +832,7 @@ final class ProjectController
             $overdue += ! $task->completed_at && $task->planned_finish && $task->planned_finish < now()->toDateString() ? 1 : 0;
         }
 
-        $statusCounts = ['opened' => 0, 'blocked' => 0, 'scheduled' => 0, 'late' => 0];
+        $statusCounts = ['opened' => 0, 'blocked' => 0, 'scheduled' => 0, 'late' => 0, 'in_progress' => 0];
         $incompletePredecessors = DB::table('project_task_dependencies')->join('project_tasks as predecessor', 'predecessor.id', '=', 'project_task_dependencies.predecessor_task_id')->where('project_task_dependencies.project_id', $project->id)->whereNull('predecessor.completed_at')->pluck('project_task_dependencies.successor_task_id')->all();
         foreach (DB::table('project_tasks')->where('project_id', $project->id)->get() as $task) {
             $status = $this->status($task, $incompletePredecessors);
@@ -836,6 +841,6 @@ final class ProjectController
             }
         }
 
-        return ['id' => $project->id, 'name' => $project->name, 'taskCount' => $tasks->count(), 'progress' => $totalWeight ? (int) round($completedWeight / $totalWeight * 100) : 0, 'overdueTaskCount' => $overdue, 'role' => $project->role, 'updatedAt' => $project->updated_at, 'completed' => $tasks->whereNotNull('completed_at')->count(), 'total' => $tasks->count(), 'critical' => 0, 'opened' => $statusCounts['opened'], 'blocked' => $statusCounts['blocked'], 'scheduled' => $statusCounts['scheduled'], 'late' => $statusCounts['late'], 'without_dates' => $tasks->filter(fn (object $task): bool => ! $task->planned_start && ! $task->planned_finish)->count()];
+        return ['id' => $project->id, 'name' => $project->name, 'taskCount' => $tasks->count(), 'progress' => $totalWeight ? (int) round($completedWeight / $totalWeight * 100) : 0, 'overdueTaskCount' => $overdue, 'role' => $project->role, 'updatedAt' => $project->updated_at, 'completed' => $tasks->whereNotNull('completed_at')->count(), 'total' => $tasks->count(), 'critical' => 0, 'opened' => $statusCounts['opened'], 'blocked' => $statusCounts['blocked'], 'scheduled' => $statusCounts['scheduled'], 'late' => $statusCounts['late'], 'in_progress' => $statusCounts['in_progress'], 'without_dates' => $tasks->filter(fn (object $task): bool => ! $task->planned_start && ! $task->planned_finish)->count()];
     }
 }

@@ -1509,6 +1509,46 @@ body.resizing-task-column * {
   background: var(--green);
 }
 
+.task-row.in_progress .status-label {
+  background: #eeecfb;
+  color: #5d52bf;
+}
+
+.task-row.in_progress .status-label i,
+.legend.in_progress {
+  background: var(--violet);
+}
+
+.task-bar.opened:not(.summary),
+.task-bar.opened:not(.summary) .progress-fill {
+  background: #35a97b;
+  border-color: #2f956c;
+}
+
+.task-bar.in_progress:not(.summary),
+.task-bar.in_progress:not(.summary) .progress-fill {
+  background: var(--violet);
+  border-color: #5e50d1;
+}
+
+.task-bar.scheduled:not(.summary),
+.task-bar.scheduled:not(.summary) .progress-fill {
+  background: #477fce;
+  border-color: #3d70b7;
+}
+
+.task-bar.late:not(.summary),
+.task-bar.late:not(.summary) .progress-fill {
+  background: #e65d59;
+  border-color: #cb504d;
+}
+
+.task-bar.blocked:not(.summary),
+.task-bar.blocked:not(.summary) .progress-fill {
+  background: #d99a28;
+  border-color: #bd821f;
+}
+
 .filter-popover {
   width: 210px;
   gap: 2px;

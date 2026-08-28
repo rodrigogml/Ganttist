@@ -10,5 +10,6 @@ enum ProjectedTaskStatus: string
     case Blocked = 'blocked';
     case Scheduled = 'scheduled';
     case Late = 'late';
+    case InProgress = 'in_progress';
     case Opened = 'opened';
 }
