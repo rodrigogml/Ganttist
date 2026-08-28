@@ -1176,6 +1176,38 @@ body.resizing-task-column * {
   line-height: 1.45;
 }
 
+.rich-markdown {
+  overflow: hidden;
+  border: 1px solid #dfe2e9;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.rich-markdown:focus-within { border-color: #8679e5; box-shadow: 0 0 0 3px #7165dd1c; }
+.rich-markdown-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; min-height: 35px; padding: 4px 6px; border-bottom: 1px solid #eeeaf8; background: #faf9ff; }
+.rich-markdown-toolbar button { min-width: 27px; height: 26px; padding: 0 6px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #596174; font: 700 11px/1 var(--font, inherit); cursor: pointer; }
+.rich-markdown-toolbar button:hover:not(:disabled), .rich-markdown-toolbar button.active { border-color: #d9d3f7; background: #edeaff; color: #564ab9; }
+.rich-markdown-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
+.rich-markdown-divider { width: 1px; height: 16px; margin: 0 3px; background: #ddd9ec; }
+.rich-markdown-content { min-height: 104px; padding: 10px; outline: 0; color: var(--ink); font: inherit; line-height: 1.5; white-space: pre-wrap; }
+.rich-markdown.compact .rich-markdown-content { min-height: 70px; }
+.rich-markdown-content p, .rich-markdown-content h1, .rich-markdown-content h2, .rich-markdown-content h3, .rich-markdown-content h4 { margin: 0 0 8px; }
+.rich-markdown-content > :last-child { margin-bottom: 0; }
+.rich-markdown-content h1 { font-size: 1.35em; }.rich-markdown-content h2 { font-size: 1.22em; }.rich-markdown-content h3 { font-size: 1.1em; }.rich-markdown-content h4 { font-size: 1em; }
+.rich-markdown-content ul, .rich-markdown-content ol { margin: 0 0 8px; padding-left: 22px; }
+.rich-markdown-content.is-editor-empty:first-child::before { float: left; height: 0; color: #9399a8; content: attr(data-placeholder); pointer-events: none; }
+.rich-markdown-help { display: block; padding: 5px 9px; border-top: 1px solid #f0edf8; color: #858c9b; font-size: var(--editor-helper-font-size); line-height: 1.4; }
+.rich-markdown.compact .rich-markdown-help { display: none; }
+
+.markdown-content { margin-top: 7px; color: #545c6d; line-height: 1.5; overflow-wrap: anywhere; }
+.markdown-content > :first-child { margin-top: 0; }
+.markdown-content > :last-child { margin-bottom: 0; }
+.markdown-content p { margin: 0 0 7px; white-space: pre-wrap; }
+.markdown-content h1, .markdown-content h2, .markdown-content h3, .markdown-content h4 { margin: 10px 0 6px; color: #333a4b; line-height: 1.25; }
+.markdown-content h1 { font-size: 1.3em; }.markdown-content h2 { font-size: 1.18em; }.markdown-content h3 { font-size: 1.08em; }.markdown-content h4 { font-size: 1em; }
+.markdown-content ul, .markdown-content ol { margin: 0 0 7px; padding-left: 20px; }
+.markdown-content a { color: #5d50c2; text-decoration: underline; }
+
 .dependency-direction > header .dependency-add {
   display: inline-grid;
   width: 26px;

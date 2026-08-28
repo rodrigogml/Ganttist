@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
+import {
+    computed,
+    defineAsyncComponent,
+    nextTick,
+    onMounted,
+    onUnmounted,
+    ref,
+    watch,
+} from "vue";
 import AuthGate from "./AuthGate.vue";
 import AccountPanel from "./AccountPanel.vue";
 import ProjectMembersPanel from "./ProjectMembersPanel.vue";
 import ProjectDashboard from "./ProjectDashboard.vue";
 import HierarchyCombobox from "./HierarchyCombobox.vue";
 import PersonCombobox from "./PersonCombobox.vue";
+import MarkdownContent from "./MarkdownContent.vue";
 import { useAuthStore } from "./stores/auth";
 import {
     unblockedTaskStatuses,
@@ -36,6 +45,9 @@ import { dependencyHighlight } from "./utils/dependency-highlight";
 import { parseTaskQuery } from "./utils/task-query";
 const store = useWorkspaceStore();
 const auth = useAuthStore();
+const RichMarkdownEditor = defineAsyncComponent(
+    () => import("./RichMarkdownEditor.vue"),
+);
 const appearance = ref(false),
     textScale = ref<"compact" | "comfortable" | "large">("comfortable"),
     spacing = ref<"compact" | "comfortable" | "spacious">("comfortable");
@@ -4364,13 +4376,7 @@ function statusLabel(s: string) {
                 </header>
                 <div class="drawer-body">
                     <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
-                    <label
-                        >Descrição<textarea
-                            v-model="activeTask.description"
-                            rows="4"
-                            placeholder="Descrição da tarefa"
-                        ></textarea>
-                    </label>
+                    <label>Descrição<RichMarkdownEditor :model-value="activeTask?.description ?? ''" ariaLabel="Descrição da tarefa" placeholder="Descreva a tarefa…" @update:model-value="(value) => { if (activeTask) activeTask.description = value }" /></label>
                     <label>Posição na hierarquia<HierarchyCombobox v-model="activeTask.section_id" :items="store.workspace?.tasks ?? []" /></label>
                     <div class="form-grid" style="grid-template-columns: 1fr">
                         <label
@@ -4458,10 +4464,7 @@ function statusLabel(s: string) {
                                 }}</time>
                             </header>
                             <template v-if="editingCommentId === comment.id">
-                                <textarea
-                                    v-model="commentEditDraft"
-                                    rows="3"
-                                ></textarea>
+                                <RichMarkdownEditor v-model="commentEditDraft" ariaLabel="Editar comentário" placeholder="Edite o comentário…" compact />
                                 <div class="comment-actions">
                                     <button
                                         class="soft-btn"
@@ -4477,7 +4480,7 @@ function statusLabel(s: string) {
                                     </button>
                                 </div></template
                             ><template v-else
-                                ><p>{{ comment.content }}</p>
+                                ><MarkdownContent :content="comment.content" />
                                 <div v-if="comment.editable" class="comment-tools">
                                     <button class="comment-icon-action" aria-label="Editar comentário" title="Editar comentário" @click="beginCommentEdit(comment)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5"></path></svg></button>
                                     <button class="comment-icon-action danger" aria-label="Excluir comentário" title="Excluir comentário" @click="commentDeletion = comment"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg></button>
@@ -4485,11 +4488,7 @@ function statusLabel(s: string) {
                             >
                         </article>
                         <label
-                            >Novo comentário<textarea
-                                v-model="commentDraft"
-                                rows="3"
-                                placeholder="Escreva um comentário"
-                            ></textarea></label
+                            >Novo comentário<RichMarkdownEditor v-model="commentDraft" ariaLabel="Novo comentário" placeholder="Escreva um comentário…" compact /></label
                         ><button
                             class="soft-btn comment-submit"
                             :disabled="!commentDraft.trim()"
@@ -4760,7 +4759,7 @@ function statusLabel(s: string) {
             <template v-else-if="sectionDraft">
                 <header><div><span class="eyebrow">{{ sectionDraft.id === '__new-section__' ? 'NOVA SEÇÃO' : 'EDITAR SEÇÃO' }}</span><h2 id="task-editor-title">{{ sectionDraft.id === '__new-section__' ? 'Adicionar seção' : sectionDraft.title }}</h2></div><div class="drawer-header-actions"><button class="drawer-pin" :class="{ active: editorPinned }" :aria-pressed="editorPinned" :aria-label="editorPinned ? 'Soltar editor do layout' : 'Fixar editor no layout'" :title="editorPinned ? 'Soltar editor' : 'Fixar editor'" @click="toggleEditorPinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3-1-6Z"></path></svg></button><button class="drawer-close" aria-label="Fechar editor" title="Fechar" @click="requestTaskEditorClose">×</button></div></header>
                 <div class="drawer-body section-editor-body"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></div>
-                <footer><button class="soft-btn drawer-cancel" @click="finishTaskEditorClose">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
+                <footer><button class="soft-btn drawer-cancel" @click="() => finishTaskEditorClose()">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
             </template>
         </aside>
         <div v-if="commentDeletion" class="relation-modal-scrim" @click.self="commentDeletion = null"><section class="relation-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-comment-title"><header><div><b id="delete-comment-title">Excluir comentário?</b><small>Esta ação não poderá ser desfeita.</small></div></header><footer><button class="soft-btn" :disabled="commentDeleting" @click="commentDeletion = null">Cancelar</button><button class="danger-btn" :disabled="commentDeleting" @click="deleteComment">{{ commentDeleting ? 'Excluindo…' : 'Excluir comentário' }}</button></footer></section></div>
