@@ -14,7 +14,7 @@ import ProjectMembersPanel from "./ProjectMembersPanel.vue";
 import ProjectDashboard from "./ProjectDashboard.vue";
 import HierarchyCombobox from "./HierarchyCombobox.vue";
 import PersonCombobox from "./PersonCombobox.vue";
-import MarkdownContent from "./MarkdownContent.vue";
+import TaskCommentsWindow from "./TaskCommentsWindow.vue";
 import DateInput from "./DateInput.vue";
 import { useAuthStore } from "./stores/auth";
 import {
@@ -22,7 +22,7 @@ import {
     useWorkspaceStore,
     workspaceTaskStatuses,
 } from "./stores/workspace";
-import type { Collaborator, Dependency, Task, TaskComment } from "./types";
+import type { Collaborator, Dependency, Task } from "./types";
 import {
     barWidth,
     civilDate,
@@ -228,15 +228,8 @@ if (!initialRelationQuery.valid)
 const activeRelationQuery = ref(initialRelationQuery);
 const relationSearchError = ref("");
 const hasActiveRelationSearch = ref(false);
-const collaborators = ref<Collaborator[]>([]),
-    taskComments = ref<TaskComment[]>([]),
-    editorContextLoading = ref(false),
-    commentDraft = ref(""),
-    editingCommentId = ref<string | null>(null),
-    commentEditDraft = ref(""),
-    commentEditBaseline = ref(""),
-    commentDeletion = ref<TaskComment | null>(null),
-    commentDeleting = ref(false);
+const collaborators = ref<Collaborator[]>([]);
+const commentWindowTaskIds = ref<string[]>([]);
 const {
     active: timeGesture,
     mode: gestureMode,
@@ -428,11 +421,6 @@ const taskDraftDirty = computed(
             taskDraft.value &&
             taskDraftBaseline.value &&
             editableTaskSnapshot(taskDraft.value) !== taskDraftBaseline.value,
-        ) ||
-        Boolean(commentDraft.value.trim()) ||
-        Boolean(
-            editingCommentId.value &&
-            commentEditDraft.value !== commentEditBaseline.value,
         ),
 );
 const isCreatingTask = computed(() => taskDraft.value?.id === "__new-task__");
@@ -444,6 +432,59 @@ const activeTask = computed(() => {
     const task = store.workspace?.tasks.find((item) => item.id === id);
     return task?.kind === "task" ? task : null;
 });
+const commentWindowTasks = computed(() =>
+    commentWindowTaskIds.value
+        .map((id) => store.workspace?.tasks.find((task) => task.id === id))
+        .filter((task): task is Task => task?.kind === "task"),
+);
+function openComments(task: Task) {
+    if (task.kind !== "task") return;
+    const existingIndex = commentWindowTaskIds.value.indexOf(task.id);
+    if (existingIndex >= 0) {
+        commentWindowTaskIds.value = [
+            ...commentWindowTaskIds.value.slice(0, existingIndex),
+            ...commentWindowTaskIds.value.slice(existingIndex + 1),
+            task.id,
+        ];
+        return;
+    }
+    if (commentWindowTaskIds.value.length >= 3) {
+        showToast("Feche uma conversa para abrir outra.", "info");
+        setTimeout(() => (toast.value = ""), 3500);
+        return;
+    }
+    commentWindowTaskIds.value = [...commentWindowTaskIds.value, task.id];
+}
+function closeComments(taskId: string) {
+    commentWindowTaskIds.value = commentWindowTaskIds.value.filter(
+        (id) => id !== taskId,
+    );
+}
+function focusComments(taskId: string) {
+    const index = commentWindowTaskIds.value.indexOf(taskId);
+    if (index < 0 || index === commentWindowTaskIds.value.length - 1) return;
+    commentWindowTaskIds.value = [
+        ...commentWindowTaskIds.value.slice(0, index),
+        ...commentWindowTaskIds.value.slice(index + 1),
+        taskId,
+    ];
+}
+function updateCommentCount(taskId: string, count: number) {
+    const task = store.workspace?.tasks.find((item) => item.id === taskId);
+    if (!task) return;
+    store.updateTask({ ...task, comment_count: count });
+    if (taskDraft.value?.id === taskId)
+        taskDraft.value.comment_count = count;
+}
+function handleCommentNotice(
+    message: string,
+    kind: Extract<ToastKind, "success" | "error">,
+) {
+    showToast(message, kind);
+    setTimeout(() => {
+        if (toast.value === message) toast.value = "";
+    }, 4000);
+}
 const predecessorDependencies = computed(() =>
     (store.workspace?.dependencies ?? []).filter(
         (dependency) => dependency.to === activeTask.value?.id,
@@ -1076,8 +1117,6 @@ function openCreationDialog(kind: "task" | "section", parentId: string | null = 
     creationMenu.value = false;
     if (kind === "task") {
         collaborators.value = store.workspace?.people ?? [];
-        taskComments.value = [];
-        editorContextLoading.value = false;
         taskDraft.value = { id: "__new-task__", title: "", description: "", kind: "task", level: 0, parent_id: parentId, section_id: parentId, priority: 1, start: null, finish: null, completed: false, progress: 0, status: "opened", critical: false };
         taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
         sectionDraft.value = null;
@@ -1529,7 +1568,6 @@ function focusTaskTitle() {
     );
 }
 async function loadEditorContext(_taskId: string) {
-    editorContextLoading.value = true;
     const projectId = store.workspace?.project.id;
     try {
         collaborators.value = store.workspace?.people ?? [];
@@ -1544,14 +1582,11 @@ async function loadEditorContext(_taskId: string) {
             );
         const data = (await response.json()).data;
         collaborators.value = data.collaborators ?? collaborators.value;
-        taskComments.value = data.comments ?? [];
     } catch (error) {
         showToast(
             error instanceof Error ? error.message : "Não foi possível carregar a tarefa.",
             "error",
         );
-    } finally {
-        editorContextLoading.value = false;
     }
 }
 function openTaskImmediately(task: Task) {
@@ -1564,9 +1599,6 @@ function openTaskImmediately(task: Task) {
     closeConfirmation.value = false;
     deletionPreview.value = null;
     dependencyConfirmation.value = null;
-    commentDraft.value = "";
-    editingCommentId.value = null;
-    commentDeletion.value = null;
     drawer.value = true;
     void loadEditorContext(task.id);
     focusTaskTitle();
@@ -1619,9 +1651,6 @@ function finishTaskEditorClose(returnFocus = true) {
     deletionPreview.value = null;
     dependencyConfirmation.value = null;
     relationModal.value = null;
-    commentDraft.value = "";
-    editingCommentId.value = null;
-    commentDeletion.value = null;
     if (returnFocus && returnId)
         void nextTick(() =>
             Array.from(document.querySelectorAll<HTMLElement>(".task-row"))
@@ -2461,142 +2490,6 @@ async function persistTask(task: Task) {
             await responseError(response, "Não foi possível salvar a tarefa."),
         );
     store.updateTask(task);
-}
-function collaboratorName(comment: TaskComment) {
-    return (
-        comment.author_name ||
-        (collaborators.value.find(
-            (collaborator) => collaborator.id === comment.author_id,
-        )?.name ?? "Usuário")
-    );
-}
-function beginCommentEdit(comment: TaskComment) {
-    editingCommentId.value = comment.id;
-    commentEditDraft.value = comment.content;
-    commentEditBaseline.value = comment.content;
-}
-function cancelCommentEdit() {
-    editingCommentId.value = null;
-    commentEditDraft.value = "";
-    commentEditBaseline.value = "";
-}
-async function submitComment() {
-    const task = activeTask.value,
-        content = commentDraft.value.trim();
-    const projectId = store.workspace?.project.id;
-    if (!task || !content || !projectId) return;
-    const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/comments`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            ...csrfHeaders(),
-        },
-        body: JSON.stringify({ content, commandId: crypto.randomUUID() }),
-    });
-    if (!response.ok)
-        throw new Error(
-            await responseError(
-                response,
-                "Não foi possível publicar o comentário.",
-            ),
-        );
-    commentDraft.value = "";
-    await loadEditorContext(task.id);
-}
-async function submitCommentEdit() {
-    const task = activeTask.value,
-        commentId = editingCommentId.value,
-        content = commentEditDraft.value.trim();
-    const projectId = store.workspace?.project.id;
-    if (!task || !commentId || !content || !projectId) return;
-    const response = await fetch(
-        `/api/v1/projects/${projectId}/tasks/${task.id}/comments/${commentId}`,
-        {
-            method: "PUT",
-            headers: {
-                "Content-Type": "application/json",
-                Accept: "application/json",
-                ...csrfHeaders(),
-            },
-            body: JSON.stringify({ content, commandId: crypto.randomUUID() }),
-        },
-    );
-    if (!response.ok)
-        throw new Error(
-            await responseError(
-                response,
-                "Não foi possível editar o comentário.",
-            ),
-        );
-    cancelCommentEdit();
-    await loadEditorContext(task.id);
-}
-async function deleteComment() {
-    const task = activeTask.value,
-        comment = commentDeletion.value,
-        projectId = store.workspace?.project.id;
-    if (!task || !comment || !projectId || commentDeleting.value) return;
-    commentDeleting.value = true;
-    try {
-        const response = await fetch(
-            `/api/v1/projects/${projectId}/tasks/${task.id}/comments/${comment.id}`,
-            {
-                method: "DELETE",
-                headers: { Accept: "application/json", ...csrfHeaders() },
-            },
-        );
-        if (!response.ok)
-            throw new Error(
-                await responseError(
-                    response,
-                    "Não foi possível excluir o comentário.",
-                ),
-            );
-        commentDeletion.value = null;
-        await loadEditorContext(task.id);
-        showToast("Comentário excluído", "success");
-    } catch (error) {
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível excluir o comentário.",
-            "error",
-        );
-    } finally {
-        commentDeleting.value = false;
-        setTimeout(() => (toast.value = ""), 4000);
-    }
-}
-async function publishComment() {
-    try {
-        await submitComment();
-        showToast("Comentário publicado", "success");
-    } catch (error) {
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível publicar o comentário.",
-            "error",
-        );
-    } finally {
-        setTimeout(() => (toast.value = ""), 4000);
-    }
-}
-async function publishCommentEdit() {
-    try {
-        await submitCommentEdit();
-        showToast("Comentário atualizado", "success");
-    } catch (error) {
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível editar o comentário.",
-            "error",
-        );
-    } finally {
-        setTimeout(() => (toast.value = ""), 4000);
-    }
 }
 async function previewDeletion() {
     if (!activeTask.value || activeTask.value.kind !== "task") return;
@@ -3973,18 +3866,22 @@ function statusLabel(s: string) {
                                     class="task-comments task-meta-cell"
                                 >
                                     <template v-if="task.kind === 'task'">
-                                        <span
+                                        <button
                                             v-if="(task.comment_count ?? 0) > 0"
+                                            type="button"
                                             class="task-comment-count task-comment-count--read"
-                                            :aria-label="`${task.comment_count} comentário(s)`"
+                                            :aria-label="`Abrir ${task.comment_count} comentário(s)`"
                                             :title="`${task.comment_count} comentário(s)`"
-                                            >{{ task.comment_count }}</span
+                                            @click.stop="openComments(task)"
+                                            >{{ task.comment_count }}</button
                                         >
-                                        <span
+                                        <button
                                             v-else
+                                            type="button"
                                             class="task-comment-empty"
-                                            aria-label="Sem comentários"
+                                            aria-label="Abrir comentários: nenhum comentário"
                                             title="Sem comentários"
+                                            @click.stop="openComments(task)"
                                         >
                                             <svg
                                                 viewBox="0 0 24 24"
@@ -3997,7 +3894,7 @@ function statusLabel(s: string) {
                                                     d="M8 12h.01M12 12h.01M16 12h.01"
                                                 />
                                             </svg>
-                                        </span>
+                                        </button>
                                     </template>
                                 </div>
                             </div>
@@ -4436,74 +4333,16 @@ function statusLabel(s: string) {
                     </section>
                     <section
                         v-if="!isCreatingTask"
-                        class="comments-box"
-                        aria-labelledby="comments-title"
+                        class="comments-launcher-box"
                     >
-                        <header>
-                            <div>
-                                <b id="comments-title">Comentários</b
-                                ><small
-                                    >{{
-                                        taskComments.length
-                                    }}
-                                    comentário(s)</small
-                                >
-                            </div>
-                        </header>
-                        <p v-if="editorContextLoading" class="dependency-empty">
-                            Carregando comentários…
-                        </p>
-                        <p
-                            v-else-if="!taskComments.length"
-                            class="dependency-empty"
+                        <button
+                            type="button"
+                            class="comments-launcher"
+                            @click="openComments(activeTask)"
                         >
-                            Nenhum comentário nesta tarefa.
-                        </p>
-                        <article
-                            v-for="comment in taskComments"
-                            :key="comment.id"
-                            class="task-comment"
-                        >
-                            <header>
-                                <b>{{ collaboratorName(comment) }}</b
-                                ><time v-if="comment.posted_at">{{
-                                    new Date(comment.posted_at).toLocaleString(
-                                        "pt-BR",
-                                    )
-                                }}</time>
-                            </header>
-                            <template v-if="editingCommentId === comment.id">
-                                <RichMarkdownEditor v-model="commentEditDraft" ariaLabel="Editar comentário" placeholder="Edite o comentário…" compact />
-                                <div class="comment-actions">
-                                    <button
-                                        class="soft-btn"
-                                        @click="cancelCommentEdit"
-                                    >
-                                        Cancelar</button
-                                    ><button
-                                        class="primary"
-                                        :disabled="!commentEditDraft.trim()"
-                                        @click="publishCommentEdit"
-                                    >
-                                        Salvar
-                                    </button>
-                                </div></template
-                            ><template v-else
-                                ><MarkdownContent :content="comment.content" />
-                                <div v-if="comment.editable" class="comment-tools">
-                                    <button class="comment-icon-action" aria-label="Editar comentário" title="Editar comentário" @click="beginCommentEdit(comment)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5"></path></svg></button>
-                                    <button class="comment-icon-action danger" aria-label="Excluir comentário" title="Excluir comentário" @click="commentDeletion = comment"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg></button>
-                                </div></template
-                            >
-                        </article>
-                        <label
-                            >Novo comentário<RichMarkdownEditor v-model="commentDraft" ariaLabel="Novo comentário" placeholder="Escreva um comentário…" compact /></label
-                        ><button
-                            class="soft-btn comment-submit"
-                            :disabled="!commentDraft.trim()"
-                            @click="publishComment"
-                        >
-                            Publicar comentário
+                            <span class="comments-launcher-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg></span>
+                            <span><b>Comentários</b><small>{{ activeTask.comment_count ?? 0 }} comentário(s) · Abrir conversa</small></span>
+                            <svg class="comments-launcher-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5" /></svg>
                         </button>
                     </section>
                     <section
@@ -4771,7 +4610,19 @@ function statusLabel(s: string) {
                 <footer><button class="soft-btn drawer-cancel" @click="() => finishTaskEditorClose()">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
             </template>
         </aside>
-        <div v-if="commentDeletion" class="relation-modal-scrim" @click.self="commentDeletion = null"><section class="relation-modal" role="alertdialog" aria-modal="true" aria-labelledby="delete-comment-title"><header><div><b id="delete-comment-title">Excluir comentário?</b><small>Esta ação não poderá ser desfeita.</small></div></header><footer><button class="soft-btn" :disabled="commentDeleting" @click="commentDeletion = null">Cancelar</button><button class="danger-btn" :disabled="commentDeleting" @click="deleteComment">{{ commentDeleting ? 'Excluindo…' : 'Excluir comentário' }}</button></footer></section></div>
+        <TaskCommentsWindow
+            v-for="(task, index) in commentWindowTasks"
+            :key="task.id"
+            :task="task"
+            :project-id="store.workspace!.project.id"
+            :people="store.workspace?.people ?? []"
+            :window-index="index"
+            :z-index="140 + index"
+            @close="closeComments(task.id)"
+            @focus="focusComments(task.id)"
+            @comment-count-change="updateCommentCount(task.id, $event)"
+            @notice="handleCommentNotice"
+        />
         <div
             v-if="relationModal"
             class="relation-modal-scrim"
