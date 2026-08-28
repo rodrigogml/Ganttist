@@ -317,6 +317,19 @@ final class LocalProjectsApiTest extends TestCase
         $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->assertJsonPath('data.tasks.0.effective_completion', '2026-08-20')->assertJsonPath('data.tasks.0.status', 'completed');
     }
 
+    public function test_setting_an_already_saved_completion_state_does_not_report_the_task_as_missing(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'completion-idempotency'])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Entrega'])->json('data.id');
+
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['actualCompletionDate' => '2026-08-27'])->assertOk();
+        $this->actingAs($user)->patchJson("/api/v1/projects/{$project}/tasks/{$task}/completion", [
+            'completed' => true,
+            'actualCompletionDate' => '2026-08-27',
+        ])->assertOk();
+    }
+
     public function test_task_creation_accepts_all_local_task_fields(): void
     {
         $user = User::factory()->create();

@@ -15,6 +15,7 @@ import ProjectDashboard from "./ProjectDashboard.vue";
 import HierarchyCombobox from "./HierarchyCombobox.vue";
 import PersonCombobox from "./PersonCombobox.vue";
 import MarkdownContent from "./MarkdownContent.vue";
+import DateInput from "./DateInput.vue";
 import { useAuthStore } from "./stores/auth";
 import {
     unblockedTaskStatuses,
@@ -2432,6 +2433,7 @@ function gesturePreviewFor(task: Task) {
 async function persistTask(task: Task) {
     const projectId = store.workspace?.project.id;
     if (!projectId) throw new Error("Projeto não carregado.");
+    const completed = task.completed ?? task.status === "completed";
     const response = await fetch(
         `/api/v1/projects/${projectId}/tasks/${task.id}`,
         {
@@ -2449,7 +2451,9 @@ async function persistTask(task: Task) {
                 priority: task.priority ?? 1,
                 plannedStart: task.start,
                 plannedFinish: task.finish,
-                actualCompletionDate: task.effective_completion ?? null,
+                actualCompletionDate: completed
+                    ? task.effective_completion ?? null
+                    : null,
             }),
         },
     );
@@ -2653,6 +2657,15 @@ async function saveTask() {
             finishTaskEditorClose();
             return;
         }
+        const completed = task.completed ?? task.status === "completed";
+        const sourceCompleted =
+            source?.completed ?? source?.status === "completed";
+        const completionDate = completed
+            ? task.effective_completion ?? null
+            : null;
+        const sourceCompletionDate = sourceCompleted
+            ? source?.effective_completion ?? null
+            : null;
         const changed =
             !source ||
             task.title !== source.title ||
@@ -2660,44 +2673,11 @@ async function saveTask() {
             (task.assignee_id ?? null) !== (source.assignee_id ?? null) ||
             (task.section_id ?? task.parent_id ?? null) !==
                 (source.section_id ?? source.parent_id ?? null) ||
-            (task.effective_completion ?? null) !==
-                (source.effective_completion ?? null) ||
+            completionDate !== sourceCompletionDate ||
             (task.priority ?? 1) !== (source.priority ?? 1) ||
             task.start !== source.start ||
             task.finish !== source.finish;
         if (changed) await persistTask(task);
-        if (
-            (task.completed ?? task.status === "completed") !==
-            (source?.completed ?? source?.status === "completed")
-        ) {
-            const projectId = store.workspace?.project.id;
-            if (projectId) {
-                const response = await fetch(
-                    `/api/v1/projects/${projectId}/tasks/${task.id}/completion`,
-                    {
-                        method: "PATCH",
-                        headers: {
-                            "Content-Type": "application/json",
-                            Accept: "application/json",
-                            ...csrfHeaders(),
-                        },
-                        body: JSON.stringify({
-                            completed: task.completed ?? false,
-                            actualCompletionDate: task.completed
-                                ? task.effective_completion ?? todayCivil()
-                                : null,
-                        }),
-                    },
-                );
-                if (!response.ok)
-                    throw new Error(
-                        await responseError(
-                            response,
-                            "Não foi possível atualizar a conclusão.",
-                        ),
-                    );
-            }
-        }
         await store.load();
         showToast("Alterações salvas", "success");
         finishTaskEditorClose(!pending);
@@ -3151,15 +3131,13 @@ function statusLabel(s: string) {
                         >Mostra tarefas cuja faixa no Gantt intersecta este
                         intervalo.</small
                     ><label
-                        >De<input
+                        >De<DateInput
                             v-model="store.periodStart"
-                            type="date"
                             aria-label="Período inicial" /></label
-                    ><label
-                        >Até<input
-                            v-model="store.periodEnd"
-                            type="date"
-                            aria-label="Período final"
+                        ><label
+                            >Até<DateInput
+                                v-model="store.periodEnd"
+                                aria-label="Período final"
                     /></label>
                 </section>
             </div>
@@ -4385,16 +4363,15 @@ function statusLabel(s: string) {
                     </div>
                     <div class="form-grid">
                         <label
-                            >Data inicial planejada<input
+                            >Data inicial planejada<DateInput
                                 v-model="activeTask.start"
-                                type="date" /></label
+                            /></label
                         ><label
-                            >Data final planejada<input
+                            >Data final planejada<DateInput
                                 v-model="activeTask.finish"
-                                type="date"
                         /></label>
                     </div>
-                    <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<input v-model="activeTask.effective_completion" type="date" required /></label></div>
+                    <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<DateInput v-model="activeTask.effective_completion" required /></label></div>
                     <section
                         class="projection-summary"
                         aria-label="Projeção calculada"

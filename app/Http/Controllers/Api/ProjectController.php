@@ -296,7 +296,7 @@ final class ProjectController
         $this->editable($request, $projectId);
         $data = $request->validate(['completed' => ['required', 'boolean'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
         $updated = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->update(['completed_at' => $data['completed'] ? ($data['actualCompletionDate'] ?? now()->toDateString()) : null, 'updated_at' => now()]);
-        abort_unless($updated, 404, 'Tarefa não encontrada.');
+        abort_unless($updated || DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->exists(), 404, 'Tarefa não encontrada.');
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $taskId, 'completed' => $data['completed']]]);
