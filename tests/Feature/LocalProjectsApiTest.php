@@ -35,6 +35,19 @@ final class LocalProjectsApiTest extends TestCase
         ])->assertCreated();
     }
 
+    public function test_workspace_includes_the_comment_count_for_each_task(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'comment-count'])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Tarefa comentada'])->assertCreated()->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$task}/comments", ['content' => 'Primeiro comentário'])->assertCreated();
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$task}/comments", ['content' => 'Segundo comentário'])->assertCreated();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.0.comment_count', 2);
+    }
+
     public function test_reader_cannot_create_project_structure(): void
     {
         $owner = User::factory()->create();

@@ -262,14 +262,13 @@ const TASK_COLUMN_MIN = 278;
 const workspaceColumns: ReadonlyArray<{
     id: WorkspaceColumnId;
     label: string;
-    shortLabel: string;
     width: number;
 }> = [
-    { id: "assignee", label: "Responsável", shortLabel: "RESP.", width: 58 },
-    { id: "status", label: "Status", shortLabel: "STATUS", width: 94 },
-    { id: "start", label: "Data inicial", shortLabel: "INÍCIO", width: 92 },
-    { id: "finish", label: "Data final", shortLabel: "DEADLINE", width: 92 },
-    { id: "comments", label: "Comentários", shortLabel: "COMENT.", width: 76 },
+    { id: "assignee", label: "Responsável", width: 58 },
+    { id: "status", label: "Status", width: 94 },
+    { id: "start", label: "Data inicial", width: 92 },
+    { id: "finish", label: "Data final", width: 92 },
+    { id: "comments", label: "Comentários", width: 76 },
 ];
 const columnVisibility = ref<Record<WorkspaceColumnId, boolean>>({
     assignee: true,
@@ -3330,8 +3329,19 @@ function statusLabel(s: string) {
                     ><span
                         v-for="column in visibleWorkspaceColumns"
                         :key="column.id"
-                        class="column-heading"
-                        >{{ column.shortLabel }}</span
+                        :class="['column-heading', `column-heading--${column.id}`]"
+                        :aria-label="column.label"
+                        :title="column.label"
+                        ><svg
+                            v-if="column.id === 'assignee'"
+                            class="column-heading-icon"
+                            viewBox="0 0 24 24"
+                            aria-hidden="true"
+                        ><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg
+                        ><span v-else-if="column.id === 'status'">STATUS</span
+                        ><span v-else-if="column.id === 'comments'" class="column-heading-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg></span
+                        ><span v-else class="column-heading-date-icons"><svg class="column-heading-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M7.5 3v4M16.5 3v4M3.5 9h17" /></svg><svg class="column-heading-icon column-heading-date-direction" viewBox="0 0 24 24" aria-hidden="true"><path v-if="column.id === 'start'" d="M4 4v16m3-8h12m-4-4 4 4-4 4" /><path v-else d="M20 4v16M17 12H5m4-4-4 4 4 4" /></svg></span
+                    ></span
                     ><button
                         type="button"
                         class="task-column-resizer"
@@ -3962,14 +3972,33 @@ function statusLabel(s: string) {
                                     v-if="columnVisibility.comments"
                                     class="task-comments task-meta-cell"
                                 >
-                                    <template v-if="task.kind === 'task'"
-                                        ><span
-                                            :aria-label="`${task.comment_count ?? 0} comentário(s)`"
-                                            :title="`${task.comment_count ?? 0} comentário(s)`"
-                                            >▱
-                                            {{ task.comment_count ?? 0 }}</span
-                                        ></template
-                                    >
+                                    <template v-if="task.kind === 'task'">
+                                        <span
+                                            v-if="(task.comment_count ?? 0) > 0"
+                                            class="task-comment-count task-comment-count--read"
+                                            :aria-label="`${task.comment_count} comentário(s)`"
+                                            :title="`${task.comment_count} comentário(s)`"
+                                            >{{ task.comment_count }}</span
+                                        >
+                                        <span
+                                            v-else
+                                            class="task-comment-empty"
+                                            aria-label="Sem comentários"
+                                            title="Sem comentários"
+                                        >
+                                            <svg
+                                                viewBox="0 0 24 24"
+                                                aria-hidden="true"
+                                            >
+                                                <path
+                                                    d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z"
+                                                />
+                                                <path
+                                                    d="M8 12h.01M12 12h.01M16 12h.01"
+                                                />
+                                            </svg>
+                                        </span>
+                                    </template>
                                 </div>
                             </div>
                             <div

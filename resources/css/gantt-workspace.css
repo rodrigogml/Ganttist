@@ -43,6 +43,35 @@
   white-space: nowrap;
 }
 
+.gantt-head-left .column-heading:not(.task-column-heading) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.column-heading-icon {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.column-heading-date-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.column-heading-date-direction {
+  width: 15px;
+}
+
 .gantt-head-left .task-column-heading {
   padding-left: 12px;
 }
@@ -245,8 +274,45 @@ body.resizing-task-column * {
   white-space: nowrap;
 }
 
-.gantt-row .task-comments span {
-  color: #6155c8;
+.gantt-row .task-comments .task-comment-count {
+  display: inline-flex;
+  min-width: 26px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.gantt-row .task-comments .task-comment-count--read {
+  background: #dfd9fb;
+  color: #4f43ae;
+}
+
+.gantt-row .task-comments .task-comment-count--unread {
+  background: #6255ca;
+  color: #fff;
+}
+
+.gantt-row .task-comments .task-comment-empty {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  color: #858c9b;
+}
+
+.gantt-row .task-comments .task-comment-empty svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .gantt-row .bar-lane {

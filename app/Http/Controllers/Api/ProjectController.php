@@ -61,6 +61,12 @@ final class ProjectController
         $project = DB::table('projects')->where('id', $projectId)->firstOrFail();
         $sections = DB::table('project_sections')->where('project_id', $projectId)->orderBy('position')->get();
         $tasks = DB::table('project_tasks')->leftJoin('project_people', 'project_people.id', '=', 'project_tasks.assignee_person_id')->where('project_tasks.project_id', $projectId)->orderBy('project_tasks.position')->get(['project_tasks.*', 'project_people.name as assignee']);
+        $commentCounts = DB::table('project_task_comments')
+            ->where('project_id', $projectId)
+            ->groupBy('task_id')
+            ->selectRaw('task_id, count(*) as comment_count')
+            ->pluck('comment_count', 'task_id')
+            ->all();
         $dependencyRows = DB::table('project_task_dependencies')->where('project_id', $projectId)->get();
         $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
         $calendar = new WorkCalendar;
@@ -128,7 +134,7 @@ final class ProjectController
         }
         $childrenByParent = $childrenByParent->groupBy(fn (object $child): string => $child->parent_id ?? '__root__')->map(fn ($children) => $children->sortBy('position')->values());
         $appendChildren = null;
-        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation): void {
+        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts): void {
             foreach ($childrenByParent->get($parentId ?? '__root__', collect()) as $child) {
                 if ($child->kind === 'section') {
                     $section = $child->item;
@@ -138,7 +144,7 @@ final class ProjectController
                 }
                 $task = $child->item;
                 $projection = $projections[$task->id];
-                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee];
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0)];
             }
         };
         $appendChildren(null);
