@@ -157,6 +157,7 @@ type AppNotification = { message: string; kind: ToastKind };
 const drawer = ref(false),
     notices = ref(false),
     filters = ref(false),
+    hierarchyMenu = ref(false),
     account = ref(false),
     responsiblePanel = ref(false),
     settingsMenu = ref(false),
@@ -276,7 +277,9 @@ const taskColumnWidth = ref(TASK_COLUMN_MIN),
     columnPickerButton = ref<HTMLElement | null>(null),
     columnPickerMenu = ref<HTMLElement | null>(null),
     columnPickerPosition = ref({ top: 0, left: 0 });
-const filterButton = ref<HTMLElement | null>(null),
+const hierarchyButton = ref<HTMLElement | null>(null),
+    hierarchyMenuElement = ref<HTMLElement | null>(null),
+    filterButton = ref<HTMLElement | null>(null),
     filterMenu = ref<HTMLElement | null>(null),
     searchInput = ref<HTMLInputElement | null>(null),
     quickAssigneeMenuElement = ref<HTMLElement | null>(null),
@@ -929,6 +932,12 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
     )
         columnsMenu.value = false;
     if (
+        hierarchyMenu.value &&
+        !hierarchyButton.value?.contains(target) &&
+        !hierarchyMenuElement.value?.contains(target)
+    )
+        hierarchyMenu.value = false;
+    if (
         filters.value &&
         !filterButton.value?.contains(target) &&
         !filterMenu.value?.contains(target)
@@ -1129,6 +1138,20 @@ function openCreationDialog(kind: "task" | "section", parentId: string | null = 
 }
 function focusTaskSearchFromShortcut(event: KeyboardEvent) {
     if (
+        event.ctrlKey &&
+        event.shiftKey &&
+        !event.altKey &&
+        !event.metaKey
+    ) {
+        const key = event.key.toLocaleLowerCase("pt-BR");
+        const action = key === "c" ? "collapse" : key === "e" ? "expand" : key === "j" ? "intermediate" : null;
+        if (action) {
+            event.preventDefault();
+            applyHierarchyAction(action);
+            return;
+        }
+    }
+    if (
         event.key.toLocaleLowerCase("pt-BR") === "l" &&
         event.ctrlKey &&
         event.shiftKey &&
@@ -1151,6 +1174,12 @@ function focusTaskSearchFromShortcut(event: KeyboardEvent) {
 function clearTaskFilters() {
     store.clearTaskFilters();
     filters.value = false;
+}
+function applyHierarchyAction(action: "collapse" | "expand" | "intermediate") {
+    if (action === "collapse") store.collapseAllGroups();
+    else if (action === "expand") store.expandAllGroups();
+    else store.expandIntermediateGroups();
+    hierarchyMenu.value = false;
 }
 function selectSearchText(event: FocusEvent) {
     (event.target as HTMLInputElement).select();
@@ -2800,6 +2829,39 @@ function statusLabel(s: string) {
                         >
                             Mês
                         </button>
+                    </div>
+                    <div class="hierarchy-control">
+                        <button
+                            ref="hierarchyButton"
+                            class="soft-btn hierarchy-trigger"
+                            :aria-expanded="hierarchyMenu"
+                            aria-haspopup="menu"
+                            aria-label="Opções de hierarquia"
+                            title="Opções de hierarquia"
+                            @click="hierarchyMenu = !hierarchyMenu"
+                        >
+                            <svg viewBox="0 0 24 24" aria-hidden="true">
+                                <path d="M12 5v5m0 0H6m6 0h6M6 10v5m12-5v5M4 15h4v4H4zm8 0h4v4h-4zm8 0h4v4h-4z" />
+                            </svg>
+                        </button>
+                        <div
+                            v-if="hierarchyMenu"
+                            ref="hierarchyMenuElement"
+                            class="hierarchy-menu"
+                            role="menu"
+                            aria-label="Opções de hierarquia"
+                            @keydown.esc="hierarchyMenu = false; hierarchyButton?.focus()"
+                        >
+                            <button type="button" role="menuitem" aria-keyshortcuts="Control+Shift+C" @click="applyHierarchyAction('collapse')">
+                                <span>Recolher tudo</span><kbd>Ctrl + Shift + C</kbd>
+                            </button>
+                            <button type="button" role="menuitem" aria-keyshortcuts="Control+Shift+E" @click="applyHierarchyAction('expand')">
+                                <span>Expandir tudo</span><kbd>Ctrl + Shift + E</kbd>
+                            </button>
+                            <button type="button" role="menuitem" aria-keyshortcuts="Control+Shift+J" @click="applyHierarchyAction('intermediate')">
+                                <span>Expandir nós intermediários</span><kbd>Ctrl + Shift + J</kbd>
+                            </button>
+                        </div>
                     </div>
                     <div class="filter-control">
                         <button

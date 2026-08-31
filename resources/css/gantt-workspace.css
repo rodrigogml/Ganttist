@@ -1717,6 +1717,79 @@ body.resizing-task-column * {
   display: flex;
 }
 
+.hierarchy-control {
+  position: relative;
+}
+
+.hierarchy-trigger {
+  display: grid;
+  width: 38px;
+  place-items: center;
+  padding: 0;
+}
+
+.hierarchy-trigger svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.hierarchy-trigger[aria-expanded="true"] {
+  border-color: #cfc8fa;
+  background: #f3f1ff;
+  color: #5548bf;
+}
+
+.hierarchy-menu {
+  position: absolute;
+  z-index: 45;
+  top: calc(100% + 7px);
+  right: 0;
+  width: 260px;
+  padding: 6px;
+  border: 1px solid #e1dff1;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 16px 36px #1d254026;
+}
+
+.hierarchy-menu button {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 0;
+  border-radius: 7px;
+  padding: 8px;
+  background: transparent;
+  color: #3f4658;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.hierarchy-menu button:hover,
+.hierarchy-menu button:focus-visible {
+  outline: 0;
+  background: #f3f1ff;
+  color: #5145b8;
+}
+
+.hierarchy-menu kbd {
+  flex: none;
+  color: #747c8e;
+  font-size: 9px;
+  white-space: nowrap;
+}
+
 .search-control {
   position: relative;
 }

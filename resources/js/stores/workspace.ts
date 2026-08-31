@@ -131,6 +131,33 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     hiddenGroups.value = next
   }
 
+  function expandableGroupIds(): Set<string> {
+    const source = workspace.value?.tasks ?? []
+    const ids = new Set(source.filter(task => task.has_children).map(task => task.id))
+    for (const task of source) if (task.parent_id) ids.add(task.parent_id)
+    return ids
+  }
+
+  function collapseAllGroups(): void {
+    hiddenGroups.value = expandableGroupIds()
+  }
+
+  function expandAllGroups(): void {
+    hiddenGroups.value = new Set()
+  }
+
+  function expandIntermediateGroups(): void {
+    const source = workspace.value?.tasks ?? []
+    const expandable = expandableGroupIds()
+    const intermediate = new Set(
+      source
+        .filter(task => expandable.has(task.id))
+        .filter(task => source.some(child => child.parent_id === task.id && child.kind === 'section'))
+        .map(task => task.id),
+    )
+    hiddenGroups.value = new Set([...expandable].filter(id => !intermediate.has(id)))
+  }
+
   function clearTaskFilters(): void {
     search.value = ''
     statusFilters.value = [...workspaceTaskStatuses]
@@ -237,7 +264,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeProjectStorage()?.removeItem(activeProjectStorageKey)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, filterExceptions, relationshipFocusTaskId, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, focusTaskRelations, revealFilterException, toggleSelect, toggleGroup, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
+  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, filterExceptions, relationshipFocusTaskId, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, focusTaskRelations, revealFilterException, toggleSelect, toggleGroup, collapseAllGroups, expandAllGroups, expandIntermediateGroups, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
 })
 
 function relationshipFocusIds(focusId: string, tasks: readonly Task[], dependencies: readonly Dependency[]): Set<string> {

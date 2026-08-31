@@ -101,6 +101,33 @@ describe('workspace visibility', () => {
     expect(store.periodEnd).toBe('')
   })
 
+  it('applies all hierarchy display modes without treating task-only groups as intermediate', () => {
+    const store = useWorkspaceStore()
+    const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'root', title: 'Raiz', kind: 'section' as const, level: 0 },
+        { ...base, id: 'tasks-only', title: 'Somente tarefas', kind: 'section' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'task-a', title: 'Tarefa A', kind: 'task' as const, level: 2, parent_id: 'tasks-only' },
+        { ...base, id: 'mixed', title: 'Misto', kind: 'section' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'nested', title: 'Nó interno', kind: 'section' as const, level: 2, parent_id: 'mixed' },
+        { ...base, id: 'task-b', title: 'Tarefa B', kind: 'task' as const, level: 2, parent_id: 'mixed' },
+        { ...base, id: 'task-c', title: 'Tarefa C', kind: 'task' as const, level: 3, parent_id: 'nested' },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 0, total: 3, critical: 0 },
+    }
+
+    store.collapseAllGroups()
+    expect(store.hiddenGroups).toEqual(new Set(['root', 'tasks-only', 'mixed', 'nested']))
+
+    store.expandAllGroups()
+    expect(store.hiddenGroups).toEqual(new Set())
+
+    store.expandIntermediateGroups()
+    expect(store.hiddenGroups).toEqual(new Set(['tasks-only', 'nested']))
+  })
+
   it('focuses a task, its complete dependency chain, and the required parent sections', () => {
     const store = useWorkspaceStore()
     const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
