@@ -22,7 +22,7 @@ import {
     useWorkspaceStore,
     workspaceTaskStatuses,
 } from "./stores/workspace";
-import type { Collaborator, Dependency, Task } from "./types";
+import type { ChecklistItem, Collaborator, Dependency, Task } from "./types";
 import {
     barWidth,
     civilDate,
@@ -242,6 +242,10 @@ const timelinePlane = ref<HTMLElement | null>(null),
     undoDependencyId = ref<string | null>(null);
 const taskDraft = ref<Task | null>(null);
 const sectionDraft = ref<Task | null>(null);
+const checklistItems = ref<ChecklistItem[]>([]);
+const editingChecklistItemId = ref<string | null>(null);
+const checklistDragItemId = ref<string | null>(null);
+const checklistDropTarget = ref<{ id: string; position: "before" | "after" } | null>(null);
 const taskDraftBaseline = ref(""),
     closeConfirmation = ref(false),
     pendingTaskToOpen = ref<Task | null>(null),
@@ -429,7 +433,8 @@ const taskDraftDirty = computed(
         Boolean(
             taskDraft.value &&
             taskDraftBaseline.value &&
-            editableTaskSnapshot(taskDraft.value) !== taskDraftBaseline.value,
+            (editableTaskSnapshot(taskDraft.value) !== taskDraftBaseline.value ||
+                (taskDraft.value.id === "__new-task__" && checklistItems.value.length)),
         ),
 );
 const isCreatingTask = computed(() => taskDraft.value?.id === "__new-task__");
@@ -591,6 +596,102 @@ function todayCivil() {
 function ensureCompletionDate() {
     if (activeTask.value?.completed && !activeTask.value.effective_completion)
         activeTask.value.effective_completion = todayCivil();
+}
+function draftChecklistId() {
+    return `__draft-checklist-${crypto.randomUUID()}`;
+}
+function setChecklistItems(items: ChecklistItem[]) {
+    checklistItems.value = items.map((item) => ({ ...item }));
+    if (taskDraft.value && !isCreatingTask.value) {
+        taskDraft.value.checklist = checklistItems.value.map((item) => ({ ...item }));
+        store.updateTask({ ...taskDraft.value });
+    }
+}
+function beginChecklistEdit(item: ChecklistItem) {
+    editingChecklistItemId.value = item.id;
+    void nextTick(() => {
+        const input = document.querySelector<HTMLInputElement>(`input[data-checklist-input-id="${item.id}"]`);
+        input?.focus();
+        input?.select();
+    });
+}
+async function addChecklistItem() {
+    const task = activeTask.value;
+    if (!task) return;
+    if (isCreatingTask.value) {
+        setChecklistItems([...checklistItems.value, { id: draftChecklistId(), text: "", completed: false, position: checklistItems.value.length + 1 }]);
+        const item = checklistItems.value.at(-1);
+        if (item) beginChecklistEdit(item);
+        return;
+    }
+    const projectId = store.workspace?.project.id;
+    if (!projectId) return;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: "" }) });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível adicionar o item."));
+        const item = (await response.json()).data as ChecklistItem;
+        setChecklistItems([...checklistItems.value, item]);
+        beginChecklistEdit(item);
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível adicionar o item.", "error"); }
+}
+async function saveChecklistItem(item: ChecklistItem) {
+    const normalized = item.text.trim() || "<Sem texto>";
+    item.text = normalized;
+    setChecklistItems([...checklistItems.value]);
+    if (isCreatingTask.value) return;
+    const projectId = store.workspace?.project.id, task = activeTask.value;
+    if (!projectId || !task) return;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist/${item.id}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: normalized, completed: item.completed }) });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível salvar o item."));
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível salvar o item.", "error"); }
+}
+async function toggleChecklistItem(item: ChecklistItem) { await saveChecklistItem(item); }
+async function finishChecklistEdit(item: ChecklistItem) { if (editingChecklistItemId.value !== item.id) return; editingChecklistItemId.value = null; await saveChecklistItem(item); }
+function cancelChecklistEdit(item: ChecklistItem) { item.text = item.text.trim() || "<Sem texto>"; editingChecklistItemId.value = null; }
+async function removeChecklistItem(item: ChecklistItem) {
+    if (isCreatingTask.value) { setChecklistItems(checklistItems.value.filter((current) => current.id !== item.id).map((current, index) => ({ ...current, position: index + 1 }))); return; }
+    const projectId = store.workspace?.project.id, task = activeTask.value;
+    if (!projectId || !task) return;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist/${item.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível excluir o item."));
+        setChecklistItems(checklistItems.value.filter((current) => current.id !== item.id).map((current, index) => ({ ...current, position: index + 1 })));
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível excluir o item.", "error"); }
+}
+async function reorderChecklist(sourceId: string, targetId: string, position: "before" | "after") {
+    if (sourceId === targetId) return;
+    const source = checklistItems.value.find((item) => item.id === sourceId);
+    if (!source) return;
+    const next = checklistItems.value.filter((item) => item.id !== sourceId);
+    const targetIndex = next.findIndex((item) => item.id === targetId);
+    if (targetIndex < 0) return;
+    next.splice(targetIndex + (position === "after" ? 1 : 0), 0, source);
+    setChecklistItems(next.map((item, index) => ({ ...item, position: index + 1 })));
+    if (isCreatingTask.value) return;
+    const projectId = store.workspace?.project.id, task = activeTask.value;
+    if (!projectId || !task) return;
+    try {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ itemIds: checklistItems.value.map((item) => item.id) }) });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível reorganizar o checklist."));
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível reorganizar o checklist.", "error"); }
+}
+function startChecklistDrag(item: ChecklistItem, event: DragEvent) { checklistDragItemId.value = item.id; checklistDropTarget.value = null; event.dataTransfer?.setData("text/plain", item.id); if (event.dataTransfer) event.dataTransfer.effectAllowed = "move"; }
+function previewChecklistDrop(target: ChecklistItem, event: DragEvent) {
+    if (!checklistDragItemId.value || checklistDragItemId.value === target.id) { checklistDropTarget.value = null; return; }
+    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    checklistDropTarget.value = { id: target.id, position: event.clientY < bounds.top + bounds.height / 2 ? "before" : "after" };
+}
+function clearChecklistDrag() { checklistDragItemId.value = null; checklistDropTarget.value = null; }
+function dropChecklistItem(target: ChecklistItem, event: DragEvent) { previewChecklistDrop(target, event); const sourceId = checklistDragItemId.value, drop = checklistDropTarget.value; clearChecklistDrag(); if (sourceId && drop) void reorderChecklist(sourceId, drop.id, drop.position); }
+function moveChecklistItem(item: ChecklistItem, direction: -1 | 1) { const target = checklistItems.value[checklistItems.value.indexOf(item) + direction]; if (target) void reorderChecklist(item.id, target.id, direction < 0 ? "before" : "after"); }
+async function persistDraftChecklist(taskId: string) {
+    const projectId = store.workspace?.project.id;
+    if (!projectId) return;
+    for (const item of checklistItems.value) {
+        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${taskId}/checklist`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: item.text.trim() || "<Sem texto>", completed: item.completed }) });
+        if (!response.ok) throw new Error(await responseError(response, "A tarefa foi criada, mas não foi possível salvar o checklist."));
+    }
 }
 const gestureDates = computed(() =>
     timeGesture.value && timeGesture.value.kind !== "connect"
@@ -1156,6 +1257,7 @@ function openCreationDialog(kind: "task" | "section", parentId: string | null = 
     if (kind === "task") {
         collaborators.value = store.workspace?.people ?? [];
         taskDraft.value = { id: "__new-task__", title: "", description: "", kind: "task", level: 0, parent_id: parentId, section_id: parentId, priority: 1, start: null, finish: null, completed: false, progress: 0, status: "opened", critical: false };
+        checklistItems.value = [];
         taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
         sectionDraft.value = null;
     } else {
@@ -1644,6 +1746,7 @@ async function loadEditorContext(_taskId: string) {
 function openTaskImmediately(task: Task) {
     const draft = { ...task };
     taskDraft.value = draft;
+    checklistItems.value = (task.checklist ?? []).map((item) => ({ ...item }));
     sectionDraft.value = null;
     taskDraftBaseline.value = editableTaskSnapshot(draft);
     editorReturnTaskId.value = task.id;
@@ -1696,6 +1799,10 @@ function finishTaskEditorClose(returnFocus = true) {
     const returnId = editorReturnTaskId.value;
     drawer.value = false;
     taskDraft.value = null;
+    checklistItems.value = [];
+    editingChecklistItemId.value = null;
+    checklistDragItemId.value = null;
+    checklistDropTarget.value = null;
     sectionDraft.value = null;
     taskDraftBaseline.value = "";
     closeConfirmation.value = false;
@@ -2689,6 +2796,7 @@ async function saveTask() {
                 body: JSON.stringify({ title: task.title, description: task.description || null, priority: task.priority ?? 1, sectionId: task.section_id ?? null, assigneePersonId: task.assignee_id ?? null, plannedStart: task.start, plannedFinish: task.finish, actualCompletionDate: task.completed ? task.effective_completion ?? todayCivil() : null }),
             });
             if (!response.ok) throw new Error(await responseError(response, "Não foi possível criar a tarefa."));
+            await persistDraftChecklist((await response.json()).data.id);
             await store.load();
             showToast("Tarefa criada", "success");
             finishTaskEditorClose();
@@ -4513,6 +4621,19 @@ function statusLabel(s: string) {
                 </header>
                 <div class="drawer-body">
                     <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
+                    <section class="task-checklist" aria-label="Checklist de orientação">
+                        <header><div><b>Checklist de orientação</b><small>{{ checklistItems.filter((item) => item.completed).length }}/{{ checklistItems.length }} concluído(s)</small></div><button type="button" class="checklist-add" aria-label="Adicionar item ao checklist" title="Adicionar item" @click="addChecklistItem">+</button></header>
+                        <p v-if="!checklistItems.length" class="checklist-empty">Inclua pontos de acompanhamento sem criar novas tarefas.</p>
+                        <ul v-else class="checklist-items">
+                            <li v-for="item in checklistItems" :key="item.id" :class="{ dragging: checklistDragItemId === item.id, 'drop-before': checklistDropTarget?.id === item.id && checklistDropTarget.position === 'before', 'drop-after': checklistDropTarget?.id === item.id && checklistDropTarget.position === 'after' }" @dragover.prevent="previewChecklistDrop(item, $event)" @drop="dropChecklistItem(item, $event)">
+                                <button type="button" class="checklist-drag" draggable="true" aria-label="Arrastar para reorganizar" title="Arrastar para reorganizar" @dragstart="startChecklistDrag(item, $event)" @dragend="clearChecklistDrag" @keydown.alt.arrow-up.prevent="moveChecklistItem(item, -1)" @keydown.alt.arrow-down.prevent="moveChecklistItem(item, 1)"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="7" cy="5" r="1.2"/><circle cx="13" cy="5" r="1.2"/><circle cx="7" cy="10" r="1.2"/><circle cx="13" cy="10" r="1.2"/><circle cx="7" cy="15" r="1.2"/><circle cx="13" cy="15" r="1.2"/></svg></button>
+                                <input v-model="item.completed" type="checkbox" :aria-label="`Concluir ${item.text || 'item'}`" @change="toggleChecklistItem(item)" />
+                                <input v-if="editingChecklistItemId === item.id" :data-checklist-input-id="item.id" v-model="item.text" class="checklist-text-input" aria-label="Texto do item" @keydown.enter.prevent="finishChecklistEdit(item)" @keydown.esc.prevent="cancelChecklistEdit(item)" @blur="finishChecklistEdit(item)" />
+                                <button v-else type="button" class="checklist-text" :class="{ completed: item.completed }" @click="beginChecklistEdit(item)">{{ item.text || '<Sem texto>' }}</button>
+                                <button type="button" class="checklist-delete" aria-label="Excluir item do checklist" title="Excluir item" @click="removeChecklistItem(item)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5m4-5v5"/></svg></button>
+                            </li>
+                        </ul>
+                    </section>
                     <label>Descrição<RichMarkdownEditor :model-value="activeTask?.description ?? ''" ariaLabel="Descrição da tarefa" placeholder="Descreva a tarefa…" @update:model-value="(value) => { if (activeTask) activeTask.description = value }" /></label>
                     <label>Posição na hierarquia<HierarchyCombobox v-model="activeTask.section_id" :items="store.workspace?.tasks ?? []" /></label>
                     <div class="form-grid" style="grid-template-columns: 1fr">

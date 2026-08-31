@@ -24,6 +24,10 @@ Route::prefix('v1')->group(function () {
             Route::post('/projects/{projectId}/tasks/{taskId}/duplicate', [ProjectController::class, 'duplicateTask']);
             Route::put('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'updateTask']);
             Route::patch('/projects/{projectId}/tasks/{taskId}/completion', [ProjectController::class, 'setTaskCompletion']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/checklist', [ProjectController::class, 'createChecklistItem']);
+            Route::put('/projects/{projectId}/tasks/{taskId}/checklist/{itemId}', [ProjectController::class, 'updateChecklistItem']);
+            Route::put('/projects/{projectId}/tasks/{taskId}/checklist', [ProjectController::class, 'reorderChecklist']);
+            Route::delete('/projects/{projectId}/tasks/{taskId}/checklist/{itemId}', [ProjectController::class, 'deleteChecklistItem']);
             Route::delete('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'deleteTask']);
             Route::get('/projects/{projectId}/tasks/{taskId}/context', [ProjectController::class, 'taskContext']);
             Route::post('/projects/{projectId}/tasks/{taskId}/comments', [ProjectController::class, 'createComment']);

@@ -67,6 +67,18 @@ final class ProjectController
             ->selectRaw('task_id, count(*) as comment_count')
             ->pluck('comment_count', 'task_id')
             ->all();
+        $checklistByTask = DB::table('projectTaskChecklistItem')
+            ->where('projectId', $projectId)
+            ->orderBy('position')
+            ->get()
+            ->groupBy('taskId')
+            ->map(fn ($items) => $items->map(fn (object $item): array => [
+                'id' => $item->id,
+                'text' => $item->text,
+                'completed' => (bool) $item->isCompleted,
+                'position' => (int) $item->position,
+            ])->values()->all())
+            ->all();
         $dependencyRows = DB::table('project_task_dependencies')->where('project_id', $projectId)->get();
         $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
         $calendar = new WorkCalendar;
@@ -134,7 +146,7 @@ final class ProjectController
         }
         $childrenByParent = $childrenByParent->groupBy(fn (object $child): string => $child->parent_id ?? '__root__')->map(fn ($children) => $children->sortBy('position')->values());
         $appendChildren = null;
-        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts): void {
+        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts, $checklistByTask): void {
             foreach ($childrenByParent->get($parentId ?? '__root__', collect()) as $child) {
                 if ($child->kind === 'section') {
                     $section = $child->item;
@@ -144,7 +156,7 @@ final class ProjectController
                 }
                 $task = $child->item;
                 $projection = $projections[$task->id];
-                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0)];
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? []];
             }
         };
         $appendChildren(null);
@@ -355,6 +367,69 @@ final class ProjectController
         return response()->json(['data' => ['id' => $taskId]]);
     }
 
+    public function createChecklistItem(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['text' => ['nullable', 'string', 'max:1000'], 'completed' => ['sometimes', 'boolean']]);
+        $this->checklistTask($projectId, $taskId);
+        $id = (string) Str::ulid();
+        $position = (int) DB::table('projectTaskChecklistItem')->where('taskId', $taskId)->max('position') + 1;
+        $text = $this->checklistText($data['text'] ?? null);
+        DB::table('projectTaskChecklistItem')->insert([
+            'id' => $id, 'projectId' => $projectId, 'taskId' => $taskId, 'text' => $text,
+            'isCompleted' => $data['completed'] ?? false, 'position' => $position,
+            'createdAt' => now(), 'updatedAt' => now(),
+        ]);
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => ['id' => $id, 'text' => $text, 'completed' => (bool) ($data['completed'] ?? false), 'position' => $position]], 201);
+    }
+
+    public function updateChecklistItem(Request $request, string $projectId, string $taskId, string $itemId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['text' => ['sometimes', 'nullable', 'string', 'max:1000'], 'completed' => ['sometimes', 'boolean']]);
+        abort_if($data === [], 422, 'Informe ao menos uma alteração.');
+        $changes = ['updatedAt' => now()];
+        if (array_key_exists('text', $data)) $changes['text'] = $this->checklistText($data['text']);
+        if (array_key_exists('completed', $data)) $changes['isCompleted'] = $data['completed'];
+        $updated = DB::table('projectTaskChecklistItem')->where('id', $itemId)->where('projectId', $projectId)->where('taskId', $taskId)->update($changes);
+        abort_unless($updated, 404, 'Item do checklist não encontrado.');
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => ['id' => $itemId, 'text' => $changes['text'] ?? null, 'completed' => $changes['isCompleted'] ?? null]]);
+    }
+
+    public function reorderChecklist(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['itemIds' => ['required', 'array'], 'itemIds.*' => ['required', 'string']]);
+        $this->checklistTask($projectId, $taskId);
+        $ids = $data['itemIds'];
+        abort_if(count($ids) !== count(array_unique($ids)), 422, 'A ordem possui itens repetidos.');
+        $existing = DB::table('projectTaskChecklistItem')->where('projectId', $projectId)->where('taskId', $taskId)->pluck('id')->all();
+        sort($ids);
+        $expected = $existing;
+        sort($expected);
+        abort_unless($ids === $expected, 422, 'A ordem deve conter todos os itens do checklist.');
+        foreach ($data['itemIds'] as $index => $itemId) {
+            DB::table('projectTaskChecklistItem')->where('id', $itemId)->update(['position' => $index + 1, 'updatedAt' => now()]);
+        }
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => ['itemIds' => $data['itemIds']]]);
+    }
+
+    public function deleteChecklistItem(Request $request, string $projectId, string $taskId, string $itemId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $deleted = DB::table('projectTaskChecklistItem')->where('id', $itemId)->where('projectId', $projectId)->where('taskId', $taskId)->delete();
+        abort_unless($deleted, 404, 'Item do checklist não encontrado.');
+        $this->touchProject($projectId);
+
+        return response()->json(null, 204);
+    }
+
     public function deleteTask(Request $request, string $projectId, string $taskId): JsonResponse
     {
         $this->editable($request, $projectId);
@@ -384,6 +459,9 @@ final class ProjectController
             ]);
             foreach (DB::table('project_task_comments')->where('task_id', $task->id)->get() as $comment) {
                 DB::table('project_task_comments')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'task_id' => $copyId, 'author_user_id' => $comment->author_user_id, 'content' => $comment->content, 'created_at' => now(), 'updated_at' => now()]);
+            }
+            foreach (DB::table('projectTaskChecklistItem')->where('projectId', $projectId)->where('taskId', $task->id)->orderBy('position')->get() as $item) {
+                DB::table('projectTaskChecklistItem')->insert(['id' => (string) Str::ulid(), 'projectId' => $projectId, 'taskId' => $copyId, 'text' => $item->text, 'isCompleted' => false, 'position' => $item->position, 'createdAt' => now(), 'updatedAt' => now()]);
             }
             foreach (DB::table('project_task_dependencies')->where('project_id', $projectId)->where(function ($query) use ($task): void { $query->where('predecessor_task_id', $task->id)->orWhere('successor_task_id', $task->id); })->get() as $dependency) {
                 DB::table('project_task_dependencies')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'predecessor_task_id' => $dependency->predecessor_task_id === $task->id ? $copyId : $dependency->predecessor_task_id, 'successor_task_id' => $dependency->successor_task_id === $task->id ? $copyId : $dependency->successor_task_id, 'type' => $dependency->type, 'created_at' => now(), 'updated_at' => now()]);
@@ -772,6 +850,23 @@ final class ProjectController
                 'updated_at' => now(),
             ]);
         }
+    }
+
+    private function checklistTask(string $projectId, string $taskId): void
+    {
+        abort_unless(DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->exists(), 404, 'Tarefa não encontrada.');
+    }
+
+    private function checklistText(?string $text): string
+    {
+        $text = trim((string) $text);
+
+        return $text === '' ? '<Sem texto>' : $text;
+    }
+
+    private function touchProject(string $projectId): void
+    {
+        DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
     }
 
     private function status(object $task, array $incompletePredecessors): string

@@ -48,6 +48,24 @@ final class LocalProjectsApiTest extends TestCase
             ->assertJsonPath('data.tasks.0.comment_count', 2);
     }
 
+    public function test_task_checklist_items_are_persisted_reordered_and_exposed_in_workspace(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'task-checklist'])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Com checklist'])->json('data.id');
+        $first = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$task}/checklist", ['text' => 'Definir escopo'])->assertCreated()->json('data.id');
+        $second = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$task}/checklist", ['text' => ''])->assertCreated()->assertJsonPath('data.text', '<Sem texto>')->json('data.id');
+
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$task}/checklist/{$first}", ['completed' => true])->assertOk();
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$task}/checklist", ['itemIds' => [$second, $first]])->assertOk();
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+            ->assertOk()
+            ->assertJsonPath('data.tasks.0.checklist.0.id', $second)
+            ->assertJsonPath('data.tasks.0.checklist.1.completed', true);
+        $this->assertDatabaseHas('projectTaskChecklistItem', ['id' => $first, 'isCompleted' => true, 'position' => 2]);
+    }
+
     public function test_reader_cannot_create_project_structure(): void
     {
         $owner = User::factory()->create();
