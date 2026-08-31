@@ -1470,13 +1470,6 @@ function scrollTimelineBy(left: number, top = 0) {
         timeline.scrollTop += top;
     }
 }
-const hiddenDependencies = computed(() => {
-    const visible = new Set(visibleTasks.value.map((task) => task.id));
-    return (store.workspace?.dependencies ?? []).filter(
-        (dependency) =>
-            !visible.has(dependency.from) || !visible.has(dependency.to),
-    );
-});
 const monthSegments = computed(() => {
     const out: { label: string; span: number }[] = [];
     days.value.forEach((d) => {
@@ -1929,12 +1922,6 @@ function rowKeydown(task: Task, event: KeyboardEvent) {
 }
 function taskTitle(id: string) {
     return store.workspace?.tasks.find((task) => task.id === id)?.title ?? id;
-}
-function revealDependency(dependency: Dependency) {
-    store.revealTask(dependency.from);
-    store.revealTask(dependency.to);
-    showToast(`Relação ${dependency.type} revelada`, "info");
-    setTimeout(() => (toast.value = ""), 3000);
 }
 async function toggleProjectMenu() {
     projectMenu.value = !projectMenu.value;
@@ -4443,34 +4430,6 @@ function statusLabel(s: string) {
             </section>
         </main>
 
-        <section
-            v-if="hiddenDependencies.length"
-            class="hidden-dependencies"
-            aria-live="polite"
-        >
-            <div>
-                <b>Relações ocultas pelos filtros ou recolhimento</b>
-                <p>
-                    Elas continuam ativas no planejamento e no cálculo do
-                    caminho crítico.
-                </p>
-            </div>
-            <ul>
-                <li
-                    v-for="dependency in hiddenDependencies"
-                    :key="dependency.id"
-                >
-                    <span :class="{ critical: dependency.critical }"
-                        >{{ taskTitle(dependency.from) }} →
-                        {{ taskTitle(dependency.to) }} ({{
-                            dependency.type
-                        }})</span
-                    ><button @click="revealDependency(dependency)">
-                        Revelar
-                    </button>
-                </li>
-            </ul>
-        </section>
         <aside
             class="drawer"
             :class="{ open: drawer && (activeTask || sectionDraft), pinned: editorPinned }"

@@ -1101,13 +1101,7 @@ body.resizing-task-column * {
   cursor: not-allowed;
 }
 
-.hidden-dependencies {
-  max-width: none;
-  margin-inline: 28px;
-}
-
-.app-shell > .main,
-.app-shell > .hidden-dependencies {
+.app-shell > .main {
   transition: width 220ms ease, margin-right 220ms ease;
 }
 
@@ -1115,10 +1109,6 @@ body.resizing-task-column * {
   width: calc(100% - var(--task-editor-width));
   margin-left: 0;
   margin-right: var(--task-editor-width);
-}
-
-.app-shell.editor-pinned > .hidden-dependencies {
-  margin-right: calc(var(--task-editor-width) + 28px);
 }
 
 .drawer {
@@ -1691,10 +1681,6 @@ body.resizing-task-column * {
     margin-right: 0;
   }
 
-  .app-shell.editor-pinned > .hidden-dependencies {
-    margin-right: 12px;
-  }
-
   .drawer,
   .drawer.pinned {
     top: 0;
@@ -1720,7 +1706,6 @@ body.resizing-task-column * {
   }
 
   .app-shell > .main,
-  .app-shell > .hidden-dependencies,
   .drawer-pin svg {
     transition: none;
   }
