@@ -105,6 +105,22 @@ final class LocalProjectsApiTest extends TestCase
             ->assertJsonPath('data.tasks.2.considered_start', '2026-09-10');
     }
 
+    public function test_editor_can_change_a_dependency_type_without_creating_a_duplicate(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'dependency-type'])->json('data.id');
+        $from = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Predecessora'])->json('data.id');
+        $to = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Sucessora'])->json('data.id');
+        $dependency = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $from, 'to' => $to, 'type' => 'FS'])->assertCreated()->json('data.id');
+
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/dependencies/{$dependency}", ['type' => 'FF'])
+            ->assertOk()
+            ->assertJsonPath('data.type', 'FF');
+
+        $this->assertDatabaseHas('project_task_dependencies', ['id' => $dependency, 'type' => 'FF']);
+        $this->assertDatabaseMissing('project_task_dependencies', ['id' => $dependency, 'type' => 'FS']);
+    }
+
     public function test_workspace_exposes_the_local_critical_path_for_tasks_sections_and_dependencies(): void
     {
         $user = User::factory()->create();

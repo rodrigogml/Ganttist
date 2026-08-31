@@ -284,6 +284,8 @@ const hierarchyButton = ref<HTMLElement | null>(null),
     searchInput = ref<HTMLInputElement | null>(null),
     quickAssigneeMenuElement = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
+    dependencyContextMenuElement = ref<HTMLElement | null>(null),
+    dependencyPickerMenuElement = ref<HTMLElement | null>(null),
     appearanceWrap = ref<HTMLElement | null>(null),
     settingsWrap = ref<HTMLElement | null>(null),
     projectSwitcher = ref<HTMLElement | null>(null),
@@ -296,6 +298,10 @@ const quickAssigneeMenu = ref<{
 const quickAssigneeBusy = ref(false);
 const taskContextMenu = ref<{ task: Task; x: number; y: number } | null>(null),
     taskContextBusy = ref(false),
+    dependencyContextMenu = ref<{ dependency: Dependency; x: number; y: number } | null>(null),
+    dependencyContextBusy = ref(false),
+    dependencyPickerMenu = ref<{ dependencies: Dependency[]; x: number; y: number } | null>(null),
+    dependencyPickerHoverId = ref<string | null>(null),
     editorPriorityMenu = ref(false);
 type StructureDrop = {
     targetId: string;
@@ -808,6 +814,14 @@ const hoveredDependencyHighlight = computed(() =>
         hoveredTaskId.value,
     ),
 );
+const pickerDependencyHighlight = computed(() => {
+    const dependency = (store.workspace?.dependencies ?? []).find(
+        (item) => item.id === dependencyPickerHoverId.value,
+    );
+    return dependency
+        ? { dependencyIds: new Set([dependency.id]), taskIds: new Set([dependency.from, dependency.to]) }
+        : { dependencyIds: new Set<string>(), taskIds: new Set<string>() };
+});
 type TreeSegment = "up" | "right" | "down";
 const activeTreeRoute = computed(() => {
     const route = new Map<string, Map<number, Set<TreeSegment>>>(),
@@ -948,6 +962,18 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         !taskContextMenuElement.value?.contains(target)
     )
         taskContextMenu.value = null;
+    if (
+        dependencyContextMenu.value &&
+        !dependencyContextMenuElement.value?.contains(target)
+    )
+        dependencyContextMenu.value = null;
+    if (
+        dependencyPickerMenu.value &&
+        !dependencyPickerMenuElement.value?.contains(target)
+    ) {
+        dependencyPickerMenu.value = null;
+        dependencyPickerHoverId.value = null;
+    }
     if (
         quickAssigneeMenu.value &&
         !quickAssigneeMenuElement.value?.contains(target) &&
@@ -1555,7 +1581,8 @@ function revealHiddenDependency(
 }
 function dependencyIsHighlighted(dependencies: readonly Dependency[]) {
     return dependencies.some((dependency) =>
-        hoveredDependencyHighlight.value.dependencyIds.has(dependency.id),
+        hoveredDependencyHighlight.value.dependencyIds.has(dependency.id) ||
+        pickerDependencyHighlight.value.dependencyIds.has(dependency.id),
     );
 }
 function dependencyMarker(dependencies: readonly Dependency[]) {
@@ -2008,6 +2035,95 @@ async function removeDependency(id: string) {
         );
     }
     setTimeout(() => (toast.value = ""), 4000);
+}
+function dependencyMenuPosition(event: MouseEvent, width: number, height: number) {
+    return {
+        x: Math.max(8, Math.min(event.clientX, globalThis.innerWidth - width)),
+        y: Math.max(8, Math.min(event.clientY, globalThis.innerHeight - height)),
+    };
+}
+function overlappingDependencies(event: MouseEvent, fallback: Dependency): Dependency[] {
+    const svg = (event.currentTarget as SVGPathElement).ownerSVGElement;
+    const matrix = svg?.getScreenCTM();
+    if (!svg || !matrix) return [fallback];
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const localPoint = point.matrixTransform(matrix.inverse());
+    const byId = new Map((store.workspace?.dependencies ?? []).map((dependency) => [dependency.id, dependency]));
+    const candidates: Dependency[] = [];
+    svg.querySelectorAll<SVGPathElement>(".dependency-hit-area").forEach((path) => {
+        const id = path.dataset.dependencyId;
+        if (id && path.isPointInStroke(localPoint) && byId.has(id))
+            candidates.push(byId.get(id)!);
+    });
+    return candidates.length ? candidates : [fallback];
+}
+function openDependencyContextMenu(dependency: Dependency, event: MouseEvent) {
+    taskContextMenu.value = null;
+    const candidates = overlappingDependencies(event, dependency);
+    if (candidates.length > 1) {
+        const position = dependencyMenuPosition(event, 500, 260);
+        dependencyPickerMenu.value = { dependencies: candidates, ...position };
+        dependencyContextMenu.value = null;
+        return;
+    }
+    const position = dependencyMenuPosition(event, 236, 188);
+    dependencyContextMenu.value = {
+        dependency,
+        ...position,
+    };
+}
+function selectDependencyFromPicker(dependency: Dependency) {
+    const picker = dependencyPickerMenu.value;
+    if (!picker) return;
+    dependencyPickerMenu.value = null;
+    dependencyPickerHoverId.value = null;
+    dependencyContextMenu.value = {
+        dependency,
+        x: Math.min(picker.x, globalThis.innerWidth - 236),
+        y: Math.min(picker.y, globalThis.innerHeight - 188),
+    };
+}
+async function setDependencyTypeFromContext(type: RelationType) {
+    const menu = dependencyContextMenu.value;
+    const projectId = store.workspace?.project.id;
+    if (!menu || !projectId || menu.dependency.type === type || dependencyContextBusy.value)
+        return;
+    dependencyContextBusy.value = true;
+    try {
+        const response = await fetch(
+            `/api/v1/projects/${projectId}/dependencies/${menu.dependency.id}`,
+            {
+                method: "PUT",
+                headers: {
+                    "Content-Type": "application/json",
+                    Accept: "application/json",
+                    ...csrfHeaders(),
+                },
+                body: JSON.stringify({ type }),
+            },
+        );
+        if (!response.ok)
+            throw new Error(await responseError(response, "Não foi possível atualizar a relação."));
+        await store.load();
+        dependencyContextMenu.value = null;
+        showToast(`Relação alterada para ${type}`, "success");
+    } catch (error) {
+        showToast(
+            error instanceof Error ? error.message : "Não foi possível atualizar a relação.",
+            "error",
+        );
+    } finally {
+        dependencyContextBusy.value = false;
+        setTimeout(() => (toast.value = ""), 4000);
+    }
+}
+function removeDependencyFromContext() {
+    const menu = dependencyContextMenu.value;
+    if (!menu) return;
+    dependencyContextMenu.value = null;
+    void removeDependency(menu.dependency.id);
 }
 function requestRemoveDependency(id: string) {
     dependencyConfirmation.value = { action: "remove", id };
@@ -3247,6 +3363,68 @@ function statusLabel(s: string) {
                     ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir seção</button>
                     </section
             ></Teleport>
+            <Teleport to="body"
+                ><section
+                    v-if="dependencyContextMenu"
+                    ref="dependencyContextMenuElement"
+                    class="task-context-menu dependency-context-menu"
+                    role="menu"
+                    aria-label="Ações da relação"
+                    :style="{
+                        left: dependencyContextMenu.x + 'px',
+                        top: dependencyContextMenu.y + 'px',
+                    }"
+                    @contextmenu.prevent
+                    @keydown.esc="dependencyContextMenu = null"
+                >
+                    <div class="dependency-context-types" role="group" aria-label="Tipo da relação">
+                        <button
+                            v-for="type in ['FS', 'FF', 'SF', 'SS'] as RelationType[]"
+                            :key="type"
+                            type="button"
+                            :class="{ active: dependencyContextMenu.dependency.type === type }"
+                            :disabled="dependencyContextBusy"
+                            :aria-pressed="dependencyContextMenu.dependency.type === type"
+                            :aria-label="`Alterar tipo para ${type}`"
+                            :title="`Alterar tipo para ${type}`"
+                            @click="setDependencyTypeFromContext(type)"
+                        >{{ type }}</button>
+                    </div>
+                    <button
+                        type="button"
+                        role="menuitem"
+                        class="context-danger"
+                        :disabled="dependencyContextBusy"
+                        @click="removeDependencyFromContext"
+                    ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir relação</button>
+                    </section
+            ></Teleport>
+            <Teleport to="body"
+                ><section
+                    v-if="dependencyPickerMenu"
+                    ref="dependencyPickerMenuElement"
+                    class="dependency-picker-menu"
+                    role="menu"
+                    aria-label="Selecionar relação"
+                    :style="{
+                        left: dependencyPickerMenu.x + 'px',
+                        top: dependencyPickerMenu.y + 'px',
+                    }"
+                    @mouseleave="dependencyPickerHoverId = null"
+                    @keydown.esc="dependencyPickerMenu = null; dependencyPickerHoverId = null"
+                >
+                    <header><b>Selecionar relação</b><small>Há mais de uma relação nesta linha.</small></header>
+                    <button
+                        v-for="dependency in dependencyPickerMenu.dependencies"
+                        :key="dependency.id"
+                        type="button"
+                        role="menuitem"
+                        @mouseenter="dependencyPickerHoverId = dependency.id"
+                        @focus="dependencyPickerHoverId = dependency.id"
+                        @click="selectDependencyFromPicker(dependency)"
+                    ><span :class="{ critical: dependency.critical }">{{ taskTitle(dependency.from) }}</span><b>{{ dependency.type }}</b><span :class="{ critical: dependency.critical }">{{ taskTitle(dependency.to) }}</span></button>
+                    </section
+            ></Teleport>
             <div v-if="sectionDeleteDialog" class="relation-modal-scrim" @click.self="sectionDeleteDialog = null"><section class="relation-modal section-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="section-delete-title"><header><div><b id="section-delete-title">Excluir seção</b><small>Escolha como tratar os subitens de “{{ sectionDeleteDialog.task.title }}”.</small></div></header><div class="relation-modal-body"><label><input v-model="sectionDeleteDialog.action" value="delete" type="radio" /> Excluir esta seção e todos os subitens</label><label><input v-model="sectionDeleteDialog.action" value="move" type="radio" /> Mover os subitens antes de excluir</label><label v-if="sectionDeleteDialog.action === 'move'">Destino<HierarchyCombobox v-model="sectionDeleteDialog.destinationId" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDeleteDialog.task.id" /></label></div><footer><button class="soft-btn" @click="sectionDeleteDialog = null">Cancelar</button><button class="danger-btn" @click="confirmSectionDeletion">Excluir seção</button></footer></section></div>
 
             <section
@@ -3453,11 +3631,18 @@ function statusLabel(s: string) {
                                 >
                                     <path
                                         v-if="!rendering.hiddenDirection"
+                                        class="dependency-hit-area"
+                                        :data-dependency-id="rendering.dependencies[0]?.id"
                                         :d="rendering.path"
-                                        :class="{
+                                        @contextmenu.prevent.stop="openDependencyContextMenu(rendering.dependencies[0], $event)"
+                                    />
+                                    <path
+                                        v-if="!rendering.hiddenDirection"
+                                        :d="rendering.path"
+                                        :class="['dependency-line', {
                                             critical: rendering.dependencies[0]?.critical,
                                             'dependency-highlighted': dependencyIsHighlighted(rendering.dependencies),
-                                        }"
+                                        }]"
                                         :marker-end="dependencyMarker(rendering.dependencies)"
                                     />
                                     <g
@@ -4033,7 +4218,7 @@ function statusLabel(s: string) {
                                             'dependency-highlighted':
                                                 hoveredDependencyHighlight.taskIds.has(
                                                     task.id,
-                                                ),
+                                                ) || pickerDependencyHighlight.taskIds.has(task.id),
                                         },
                                     ]"
                                     :style="{

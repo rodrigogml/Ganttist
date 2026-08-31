@@ -680,6 +680,18 @@ body.resizing-task-column * {
   marker-end: url(#arrow-highlight);
 }
 
+.dependencies path.dependency-line {
+  pointer-events: none;
+}
+
+.dependencies path.dependency-hit-area {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: context-menu;
+}
+
 .dependencies path.critical {
   stroke: #e46b68;
   stroke-width: 2.8;
@@ -737,6 +749,115 @@ body.resizing-task-column * {
   stroke: none;
   stroke-width: 0;
   marker-end: none;
+}
+
+.dependency-context-menu {
+  min-width: 224px;
+}
+
+.dependency-context-types {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 3px;
+  margin-bottom: 4px;
+  padding: 0 0 5px;
+  border-bottom: 1px solid #eceef3;
+}
+
+.task-context-menu .dependency-context-types button {
+  display: grid;
+  min-height: 34px;
+  place-items: center;
+  padding: 4px;
+  background: #fff;
+  color: #596375;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.task-context-menu .dependency-context-types button:hover:not(:disabled),
+.task-context-menu .dependency-context-types button:focus-visible,
+.task-context-menu .dependency-context-types button.active {
+  background: #f0edff;
+  color: #5548bf;
+}
+
+.task-context-menu .dependency-context-types button.active {
+  box-shadow: inset 0 0 0 1px #b9b2ec;
+}
+
+.dependency-picker-menu {
+  position: fixed;
+  z-index: 80;
+  width: min(490px, calc(100vw - 16px));
+  padding: 6px;
+  border: 1px solid #dfe3eb;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 34px #18203424;
+}
+
+.dependency-picker-menu header {
+  padding: 7px 9px 9px;
+  border-bottom: 1px solid #eceef3;
+}
+
+.dependency-picker-menu header b,
+.dependency-picker-menu header small {
+  display: block;
+}
+
+.dependency-picker-menu header b {
+  color: #30394a;
+  font-size: 11px;
+}
+
+.dependency-picker-menu header small {
+  margin-top: 2px;
+  color: #7b8394;
+  font-size: 9px;
+}
+
+.dependency-picker-menu button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  width: 100%;
+  min-height: 38px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 7px;
+  padding: 7px 9px;
+  background: transparent;
+  color: #3f4658;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.dependency-picker-menu button:hover,
+.dependency-picker-menu button:focus-visible {
+  outline: 0;
+  background: #f0edff;
+  color: #5145b8;
+}
+
+.dependency-picker-menu button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dependency-picker-menu button span:last-child { text-align: right; }
+
+.dependency-picker-menu button b {
+  border: 1px solid #d9d5f7;
+  border-radius: 4px;
+  padding: 2px 4px;
+  background: #f6f4ff;
+  color: #5a4fc0;
+  font-size: 9px;
 }
 
 #arrow-critical path {

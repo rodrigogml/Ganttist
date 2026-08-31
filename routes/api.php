@@ -31,6 +31,7 @@ Route::prefix('v1')->group(function () {
             Route::delete('/projects/{projectId}/tasks/{taskId}/comments/{commentId}', [ProjectController::class, 'deleteComment']);
             Route::delete('/projects/{projectId}/sections/{sectionId}', [ProjectController::class, 'deleteSection']);
             Route::post('/projects/{projectId}/dependencies', [ProjectController::class, 'createDependency']);
+            Route::put('/projects/{projectId}/dependencies/{dependencyId}', [ProjectController::class, 'updateDependency']);
             Route::delete('/projects/{projectId}/dependencies/{dependencyId}', [ProjectController::class, 'deleteDependency']);
             Route::post('/projects/{projectId}/people', [ProjectController::class, 'createPerson']);
             Route::put('/projects/{projectId}/people/{personId}', [ProjectController::class, 'updatePerson']);

@@ -487,6 +487,34 @@ final class ProjectController
         return response()->json(['data' => ['id' => $id]], 201);
     }
 
+    public function updateDependency(Request $request, string $projectId, string $dependencyId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['type' => ['required', 'in:FS,SS,FF,SF']]);
+        $dependency = DB::table('project_task_dependencies')
+            ->where('id', $dependencyId)
+            ->where('project_id', $projectId)
+            ->first();
+        abort_unless($dependency, 404, 'Dependência não encontrada.');
+        abort_if(
+            DB::table('project_task_dependencies')
+                ->where('project_id', $projectId)
+                ->where('predecessor_task_id', $dependency->predecessor_task_id)
+                ->where('successor_task_id', $dependency->successor_task_id)
+                ->where('type', $data['type'])
+                ->where('id', '!=', $dependencyId)
+                ->exists(),
+            422,
+            'Essa dependência já existe.',
+        );
+        DB::table('project_task_dependencies')
+            ->where('id', $dependencyId)
+            ->update(['type' => $data['type'], 'updated_at' => now()]);
+        DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+
+        return response()->json(['data' => ['id' => $dependencyId, 'type' => $data['type']]]);
+    }
+
     public function deleteDependency(Request $request, string $projectId, string $dependencyId): JsonResponse
     {
         $this->editable($request, $projectId);
