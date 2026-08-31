@@ -680,6 +680,37 @@ body.resizing-task-column * {
   marker-end: url(#arrow-highlight);
 }
 
+.project-dashboard-back {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: none;
+  place-items: center;
+  margin-left: -18px;
+  border: 1px solid #ffffff1f;
+  border-radius: 8px;
+  background: #151b2d;
+  color: #eef0f5;
+  cursor: pointer;
+}
+
+.project-dashboard-back:hover,
+.project-dashboard-back:focus-visible {
+  border-color: #a79afa;
+  background: #252040;
+  outline: none;
+}
+
+.project-dashboard-back svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.9;
+}
+
 .dependencies path.dependency-line {
   pointer-events: none;
 }

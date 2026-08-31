@@ -1712,6 +1712,16 @@ function requestTaskEditorClose() {
     if (taskDraftDirty.value) closeConfirmation.value = true;
     else finishTaskEditorClose();
 }
+function returnToProjectDashboard() {
+    if (taskDraftDirty.value) {
+        showToast("Salve ou descarte as alterações antes de trocar de projeto.", "info");
+        setTimeout(() => (toast.value = ""), 3500);
+        return;
+    }
+    finishTaskEditorClose(false);
+    projectMenu.value = false;
+    store.clearWorkspace();
+}
 function continueTaskEditing() {
     pendingTaskToOpen.value = null;
     closeConfirmation.value = false;
@@ -2776,6 +2786,17 @@ function statusLabel(s: string) {
                 <span class="brand-mark"><i></i><i></i><i></i></span
                 ><strong>Ganttist</strong>
             </div>
+            <button
+                type="button"
+                class="project-dashboard-back"
+                aria-label="Voltar para seus projetos"
+                title="Voltar para seus projetos"
+                @click="returnToProjectDashboard"
+            >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M19 12H5m6-6-6 6 6 6" />
+                </svg>
+            </button>
             <div ref="projectSwitcher" class="project-switcher">
                 <span class="eyebrow">PROJETO</span
                 ><button
