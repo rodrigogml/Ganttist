@@ -61,9 +61,15 @@ final readonly class TaskProjectionCalculator
         $result = [];
         foreach ($order as $id) {
             $input = $inputs[$id];
-            $baseStart = $this->date($input->start ?? $today);
+            $completionDate = $this->date($input->completionDate ?? $today);
+            $baseStart = $this->date($input->start ?? ($input->completed ? $completionDate : $today));
             $explicitDeadline = $input->deadline ? $this->date($input->deadline) : null;
-            $baseDeadline = $explicitDeadline !== null && $explicitDeadline >= $baseStart ? $explicitDeadline : $baseStart;
+            $baseDeadline = $input->completed
+                ? $completionDate
+                : ($explicitDeadline !== null && $explicitDeadline >= $baseStart ? $explicitDeadline : $baseStart);
+            if ($baseStart > $baseDeadline) {
+                $baseStart = $baseDeadline;
+            }
             $duration = $this->calendar->countWorkDays($baseStart, $baseDeadline);
             $consideredStart = $baseStart;
             $unlockDate = null;
@@ -71,6 +77,9 @@ final readonly class TaskProjectionCalculator
             $blocked = false;
 
             foreach ($incoming[$id] ?? [] as $dependency) {
+                if ($input->completed) {
+                    continue;
+                }
                 $predecessorInput = $inputs[$dependency->predecessorId];
                 $predecessor = $result[$dependency->predecessorId];
                 $candidate = match ($dependency->type) {
@@ -97,7 +106,6 @@ final readonly class TaskProjectionCalculator
                     : ($duration === 1 ? $consideredStart : $this->calendar->addWorkDays($consideredStart, $duration - 1)),
                 ProjectionPolicy::PreserveDeadline => $baseDeadline >= $consideredStart ? $baseDeadline : $consideredStart,
             };
-            $completionDate = $this->date($input->completionDate ?? $today);
             $hasExplicitSchedule = $input->start !== null || $input->deadline !== null;
             $status = match (true) {
                 $input->completed => ProjectedTaskStatus::Completed,

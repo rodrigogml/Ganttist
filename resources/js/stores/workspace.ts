@@ -53,8 +53,10 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     if (task.kind === 'task' && (periodStart.value || periodEnd.value)) {
       const today = new Date().toISOString().slice(0, 10)
-      const start = task.considered_start ?? task.start ?? today
-      const finish = task.considered_deadline ?? task.finish ?? start
+      const completed = task.completed ?? task.status === 'completed'
+      const completion = task.effective_completion ?? null
+      const start = task.considered_start ?? task.start ?? (completed ? completion : null) ?? today
+      const finish = task.considered_deadline ?? task.finish ?? (completed ? completion : null) ?? start
       if (periodStart.value && finish < periodStart.value) return false
       if (periodEnd.value && start > periodEnd.value) return false
     }

@@ -607,6 +607,7 @@ const timelineStart = computed(() => {
                 task.considered_deadline,
                 task.start,
                 task.finish,
+                task.effective_completion,
             ]
                 .map(civilDate)
                 .filter((date): date is string => date !== null),
@@ -665,6 +666,8 @@ const visualDates = (task: Task) =>
         task.considered_start ?? task.start,
         task.considered_deadline ?? task.finish,
         todayCivil(),
+        task.completed ?? task.status === "completed",
+        task.effective_completion,
     );
 const visualStart = (task: Task) => visualDates(task).start;
 const visualFinish = (task: Task) => visualDates(task).finish;

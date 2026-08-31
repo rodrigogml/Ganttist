@@ -10,4 +10,8 @@ describe('timeline civil-date geometry',()=>{
     expect(emptyRange).toEqual({start:'2026-08-20',finish:'2026-08-20'})
     expect(barWidth(emptyRange.start,emptyRange.finish,42)).toBe(42)
   })
+  it('uses the effective completion as the end of a completed task',()=>{
+    expect(visualTaskRange('2026-08-17','2026-08-28','2026-08-25',true,'2026-08-20')).toEqual({start:'2026-08-17',finish:'2026-08-20'})
+    expect(visualTaskRange(null,null,'2026-08-25',true,'2026-08-20')).toEqual({start:'2026-08-20',finish:'2026-08-20'})
+  })
 })

@@ -13,8 +13,10 @@ export function civilDate(value:string|null|undefined):string|null {
   return Number.isNaN(date.getTime())||date.getFullYear()!==Number(value.slice(0,4))||date.getMonth()+1!==Number(value.slice(5,7))||date.getDate()!==Number(value.slice(8,10))?null:value
 }
 
-export function visualTaskRange(start:string|null|undefined,finish:string|null|undefined,today:string):{start:string;finish:string} {
+export function visualTaskRange(start:string|null|undefined,finish:string|null|undefined,today:string,completed=false,effectiveCompletion?:string|null):{start:string;finish:string} {
   const normalizedStart=civilDate(start)
+  const completion=civilDate(effectiveCompletion)
+  if (completed&&completion) return !normalizedStart||civilDayOffset(normalizedStart,completion)<0?{start:completion,finish:completion}:{start:normalizedStart,finish:completion}
   if (!normalizedStart) return {start:today,finish:today}
   const normalizedFinish=civilDate(finish)
   return {start:normalizedStart,finish:normalizedFinish&&civilDayOffset(normalizedStart,normalizedFinish)>=0?normalizedFinish:normalizedStart}

@@ -61,6 +61,41 @@ final class TaskProjectionCalculatorTest extends TestCase
         self::assertSame('2026-08-20', $result['successor']->consideredStart->format('Y-m-d'));
     }
 
+    public function test_completed_task_uses_its_effective_completion_as_its_visual_finish(): void
+    {
+        $result = $this->calculator()->calculate([
+            $this->task('scheduled', '2026-08-17', '2026-08-28', true, '2026-08-20'),
+            $this->task('unscheduled', null, null, true, '2026-08-19'),
+        ], [], new DateTimeImmutable('2026-08-25'));
+
+        self::assertSame('2026-08-17', $result['scheduled']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-20', $result['scheduled']->consideredDeadline->format('Y-m-d'));
+        self::assertSame('2026-08-19', $result['unscheduled']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-19', $result['unscheduled']->consideredDeadline->format('Y-m-d'));
+    }
+
+    public function test_completed_task_is_not_rescheduled_by_an_incoming_dependency(): void
+    {
+        $result = $this->calculator()->calculate([
+            $this->task('predecessor', '2026-08-24', '2026-08-26'),
+            $this->task('completed', '2026-08-17', '2026-08-19', true, '2026-08-20'),
+        ], [new Dependency('predecessor', 'completed', 'FS')], new DateTimeImmutable('2026-08-20'));
+
+        self::assertSame('2026-08-17', $result['completed']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-20', $result['completed']->consideredDeadline->format('Y-m-d'));
+    }
+
+    public function test_ff_dependency_uses_the_effective_completion_of_a_completed_predecessor(): void
+    {
+        $result = $this->calculator()->calculate([
+            $this->task('predecessor', '2026-08-17', '2026-08-28', true, '2026-08-20'),
+            $this->task('successor', '2026-08-17', '2026-08-19'),
+        ], [new Dependency('predecessor', 'successor', 'FF')], new DateTimeImmutable('2026-08-20'));
+
+        self::assertSame('2026-08-18', $result['successor']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-20', $result['successor']->consideredDeadline->format('Y-m-d'));
+    }
+
     public function test_projection_policy_preserves_duration_or_clamps_the_deadline_without_mutating_source_dates(): void
     {
         $tasks = [
