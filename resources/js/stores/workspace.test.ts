@@ -83,6 +83,28 @@ describe('workspace visibility', () => {
     expect(store.tasks.map(task => task.id)).toEqual(['unrelated'])
   })
 
+  it('expands the ancestors of search results while keeping unrelated groups collapsed', () => {
+    const store = useWorkspaceStore()
+    const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
+      tasks: [
+        { ...base, id: 'root', title: 'Entrega', kind: 'section' as const, level: 0 },
+        { ...base, id: 'planning', title: 'Planejamento', kind: 'section' as const, level: 1, parent_id: 'root' },
+        { ...base, id: 'match', title: 'Preparar protótipo', kind: 'task' as const, level: 2, parent_id: 'planning' },
+        { ...base, id: 'unrelated', title: 'Financeiro', kind: 'section' as const, level: 0 },
+        { ...base, id: 'unrelated-task', title: 'Fechar orçamento', kind: 'task' as const, level: 1, parent_id: 'unrelated' },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 0, total: 2, critical: 0 },
+    }
+    store.hiddenGroups = new Set(['root', 'planning', 'unrelated'])
+
+    store.search = 'protótipo'
+
+    expect(store.hiddenGroups).toEqual(new Set(['unrelated']))
+    expect(store.tasks.map(task => task.id)).toEqual(['root', 'planning', 'match'])
+  })
+
   it('clears the task search and every task filter', () => {
     const store = useWorkspaceStore()
 

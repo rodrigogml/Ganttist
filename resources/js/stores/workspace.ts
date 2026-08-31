@@ -35,6 +35,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     if (query.valid) {
       activeTaskQuery.value = query
       searchError.value = ''
+      if (value.trim()) revealSearchResults()
     } else {
       searchError.value = query.error.message
     }
@@ -222,6 +223,23 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     }
     hiddenGroups.value = next
     clearTaskFilters()
+  }
+
+  function revealSearchResults(): void {
+    const source = workspace.value?.tasks ?? []
+    const taskById = new Map(source.map(task => [task.id, task]))
+    const next = new Set(hiddenGroups.value)
+    for (const task of source) {
+      if (!activeTaskQuery.value.matches(task.title)) continue
+      const visited = new Set<string>()
+      let parentId = task.parent_id
+      while (parentId && !visited.has(parentId)) {
+        visited.add(parentId)
+        next.delete(parentId)
+        parentId = taskById.get(parentId)?.parent_id
+      }
+    }
+    hiddenGroups.value = next
   }
 
   function setStatusFilters(statuses: readonly TaskStatus[]): void {
