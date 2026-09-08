@@ -7,11 +7,27 @@ const props = withDefaults(defineProps<{ modelValue: string | null | undefined; 
 const emit = defineEmits<{ 'update:modelValue': [value: string | null] }>()
 const value = computed<string | null>({ get: () => props.modelValue ?? null, set: (next) => emit('update:modelValue', next ?? null) })
 const displayValue = (id: string | null | undefined) => id === null || id === undefined ? (props.allowEmpty ? props.emptyLabel : '') : props.options.find((option) => option.id === id)?.label ?? ''
+const inputDisplayKey = computed(() => `${value.value ?? '__empty__'}:${displayValue(value.value)}`)
+const redirectedNavigationEvents = new WeakSet<KeyboardEvent>()
+
+function handleInputKeydown(event: KeyboardEvent) {
+  if (event.key === 'Home' || event.key === 'End') {
+    if (!redirectedNavigationEvents.has(event)) event.stopImmediatePropagation()
+    return
+  }
+
+  if (event.key !== 'PageUp' && event.key !== 'PageDown') return
+  event.preventDefault()
+  event.stopImmediatePropagation()
+  const redirected = new KeyboardEvent('keydown', { key: event.key === 'PageUp' ? 'Home' : 'End', bubbles: true, cancelable: true })
+  redirectedNavigationEvents.add(redirected)
+  ;(event.currentTarget as HTMLInputElement).dispatchEvent(redirected)
+}
 </script>
 
 <template>
   <ComboboxRoot v-model="value" :open-on-click="true" :open-on-focus="true">
-    <ComboboxAnchor class="app-combobox-anchor"><ComboboxInput class="app-combobox-input" :display-value="displayValue" :placeholder="placeholder" /><ComboboxTrigger class="app-combobox-trigger" :aria-label="`Abrir ${placeholder.toLocaleLowerCase('pt-BR')}`" title="Abrir opções"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5" /></svg></ComboboxTrigger></ComboboxAnchor>
+    <ComboboxAnchor class="app-combobox-anchor"><ComboboxInput :key="inputDisplayKey" class="app-combobox-input" :display-value="displayValue" :placeholder="placeholder" @keydown.capture="handleInputKeydown" /><ComboboxTrigger class="app-combobox-trigger" :aria-label="`Abrir ${placeholder.toLocaleLowerCase('pt-BR')}`" title="Abrir opções"><svg viewBox="0 0 20 20" aria-hidden="true"><path d="m5 7.5 5 5 5-5" /></svg></ComboboxTrigger></ComboboxAnchor>
     <ComboboxPortal><ComboboxContent class="app-combobox-content" position="popper" side="bottom" :side-offset="4" :collision-padding="12"><ComboboxViewport class="app-combobox-viewport">
       <ComboboxItem v-if="allowEmpty" :value="null" class="app-combobox-option app-combobox-empty-choice"><span>{{ emptyLabel }}</span><ComboboxItemIndicator class="app-combobox-check">✓</ComboboxItemIndicator></ComboboxItem>
       <ComboboxItem v-for="option in options" :key="option.id" :value="option.id" :disabled="option.disabled" :text-value="option.label" class="app-combobox-option" :style="{ '--app-combobox-depth': option.depth ?? 0 }"><span class="app-combobox-option-copy"><b>{{ option.label }}</b><small v-if="option.description">{{ option.description }}</small></span><ComboboxItemIndicator class="app-combobox-check">✓</ComboboxItemIndicator></ComboboxItem>
