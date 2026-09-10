@@ -12,7 +12,7 @@ const activeProjectStorage = () => typeof localStorage === 'undefined' ? null : 
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const workspace = ref<Workspace | null>(null)
-  const loading = ref(true)
+  const loading = ref(false)
   const refreshing = ref(false)
   const stale = ref(false)
   const error = ref('')
