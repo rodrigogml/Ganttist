@@ -4,6 +4,11 @@ namespace Tests\Feature;
 
 use App\Mail\ProjectInvitation;
 use App\Models\User;
+use App\Services\TaskTableDocument;
+use App\Services\TaskTableLock;
+use App\Services\TaskTableLockConflict;
+use App\Services\TaskTableLockRateLimited;
+use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Mail;
 use Tests\TestCase;
@@ -46,6 +51,128 @@ final class LocalProjectsApiTest extends TestCase
         $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
             ->assertOk()
             ->assertJsonPath('data.tasks.0.comment_count', 2);
+    }
+
+    public function test_task_table_document_limits_and_duplicate_copy_are_preserved(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'table-duplicate'])->json('data.id');
+        $task = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Tabela'])->json('data.id');
+        $document = (new TaskTableDocument)->normalize(['sheets' => [['rows' => [['cells' => ['A1' => 'Planejado']]], 'columns' => [['width' => 120]]]]]);
+        $univerDocument = (new TaskTableDocument)->normalize(['id' => 'table', 'name' => 'Tabela', 'appVersion' => '0.25.1', 'locale' => 'ptBR', 'styles' => [], 'sheetOrder' => ['sheet-1'], 'sheets' => ['sheet-1' => ['id' => 'sheet-1', 'name' => 'Tabela', 'rowCount' => 5, 'columnCount' => 5, 'cellData' => [0 => [0 => ['v' => 'Planejado']]]]]]);
+        $this->assertSame(5, $univerDocument['sheets']['sheet-1']['rowCount']);
+        \DB::table('project_taskTable')->insert([
+            'id' => (string) \Str::ulid(), 'idProject' => $project, 'idTask' => $task,
+            'idPublishedByUser' => $user->id, 'document' => json_encode($document), 'documentVersion' => 1,
+            'idEditLockUser' => $user->id, 'editLockTokenHash' => str_repeat('a', 64),
+            'editLockExpiresAt' => now()->addSeconds(10), 'createdAt' => now(), 'updatedAt' => now(),
+        ]);
+
+        $copy = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$task}/duplicate")->assertCreated()->json('data.id');
+
+        $this->assertDatabaseHas('project_taskTable', ['idTask' => $copy, 'idPublishedByUser' => $user->id, 'documentVersion' => 1, 'idEditLockUser' => null]);
+        $this->assertDatabaseMissing('project_taskTable', ['idTask' => $copy, 'editLockTokenHash' => str_repeat('a', 64)]);
+        try {
+            (new TaskTableDocument)->normalize(['id' => 'empty', 'name' => 'Tabela', 'appVersion' => '0.25.1', 'locale' => 'ptBR', 'styles' => [], 'sheetOrder' => ['sheet-1'], 'sheets' => ['sheet-1' => ['id' => 'sheet-1', 'name' => 'Tabela', 'rowCount' => 5, 'columnCount' => 5, 'cellData' => []]]]);
+            $this->fail('Uma tabela vazia não deve ser publicável.');
+        } catch (\InvalidArgumentException) {
+        }
+        $this->expectException(\InvalidArgumentException::class);
+        (new TaskTableDocument)->normalize(['sheets' => [['rows' => array_fill(0, 201, []), 'columns' => []]]]);
+    }
+
+    public function test_task_table_lock_can_be_recovered_taken_released_and_is_rate_limited(): void
+    {
+        Carbon::setTestNow('2026-09-08 12:00:00');
+
+        try {
+            $owner = User::factory()->create();
+            $other = User::factory()->create();
+            $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'table-lock'])->json('data.id');
+            $task = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Tabela'])->json('data.id');
+            $tableId = (string) \Str::ulid();
+            \DB::table('project_taskTable')->insert([
+                'id' => $tableId, 'idProject' => $project, 'idTask' => $task, 'idPublishedByUser' => $owner->id,
+                'document' => json_encode(['version' => 1, 'sheets' => [['rows' => [], 'columns' => []]]]), 'documentVersion' => 1,
+                'idEditLockUser' => null, 'editLockTokenHash' => null, 'editLockExpiresAt' => null,
+                'createdAt' => now(), 'updatedAt' => now(),
+            ]);
+            $locks = new TaskTableLock;
+            $first = $locks->acquire($project, $task, $tableId, $owner->id);
+            $this->assertSame(hash('sha256', $first['lock_token']), \DB::table('project_taskTable')->where('id', $tableId)->value('editLockTokenHash'));
+
+            try {
+                $locks->acquire($project, $task, $tableId, $other->id);
+                $this->fail('A reserva ativa deveria impedir outra aquisição.');
+            } catch (TaskTableLockConflict $exception) {
+                $this->assertSame('TABLE_LOCKED', $exception->getMessage());
+            }
+
+            Carbon::setTestNow(now()->addSeconds(11));
+            $recovered = $locks->renew($project, $task, $tableId, $owner->id, $first['lock_token']);
+            $this->assertSame($first['lock_token'], $recovered['lock_token']);
+
+            Carbon::setTestNow(now()->addSeconds(11));
+            $taken = $locks->acquire($project, $task, $tableId, $other->id);
+            try {
+                $locks->renew($project, $task, $tableId, $owner->id, $first['lock_token']);
+                $this->fail('O titular anterior deveria perder a reserva após a tomada.');
+            } catch (TaskTableLockConflict $exception) {
+                $this->assertSame('TABLE_LOCK_LOST', $exception->getMessage());
+            }
+            $locks->release($project, $task, $tableId, $other->id, $taken['lock_token']);
+            $this->assertDatabaseHas('project_taskTable', ['id' => $tableId, 'idEditLockUser' => null]);
+
+            $rateLimitedTable = (string) \Str::ulid();
+            \DB::table('project_taskTable')->insert([
+                'id' => $rateLimitedTable, 'idProject' => $project, 'idTask' => $task, 'idPublishedByUser' => $owner->id,
+                'document' => json_encode(['version' => 1, 'sheets' => [['rows' => [], 'columns' => []]]]), 'documentVersion' => 1,
+                'idEditLockUser' => null, 'editLockTokenHash' => null, 'editLockExpiresAt' => null,
+                'createdAt' => now(), 'updatedAt' => now(),
+            ]);
+            $locks->acquire($project, $task, $rateLimitedTable, $owner->id);
+            for ($attempt = 1; $attempt < 90; $attempt++) {
+                try {
+                    $locks->acquire($project, $task, $rateLimitedTable, $owner->id);
+                } catch (TaskTableLockConflict) {
+                }
+            }
+            $this->expectException(TaskTableLockRateLimited::class);
+            $locks->acquire($project, $task, $rateLimitedTable, $owner->id);
+        } finally {
+            Carbon::setTestNow();
+        }
+    }
+
+    public function test_editor_can_publish_read_update_and_delete_a_task_table_with_a_lock(): void
+    {
+        $owner = User::factory()->create(['name' => 'Responsável']);
+        $reader = User::factory()->create();
+        $editor = User::factory()->create();
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'table-api'])->json('data.id');
+        $task = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Tabela'])->json('data.id');
+        \DB::table('project_members')->insert(['id' => (string) \Str::ulid(), 'project_id' => $project, 'user_id' => $reader->id, 'role' => 'reader', 'created_at' => now(), 'updated_at' => now()]);
+        \DB::table('project_members')->insert(['id' => (string) \Str::ulid(), 'project_id' => $project, 'user_id' => $editor->id, 'role' => 'editor', 'created_at' => now(), 'updated_at' => now()]);
+        $document = ['sheets' => [['rows' => [['cells' => ['A1' => 'Planejado']]], 'columns' => [['width' => 120]]]]];
+
+        $tableId = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks/{$task}/tables", ['document' => $document])
+            ->assertCreated()->assertJsonPath('data.document_version', 1)->assertJsonPath('data.author_name', 'Responsável')->json('data.id');
+        $this->actingAs($reader)->getJson("/api/v1/projects/{$project}/tasks/{$task}/context")
+            ->assertOk()->assertJsonPath('data.tables.0.id', $tableId)->assertJsonPath('data.tables.0.editable', false);
+        $this->actingAs($owner)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->assertJsonPath('data.tasks.0.comment_count', 1);
+        $this->actingAs($reader)->postJson("/api/v1/projects/{$project}/tasks/{$task}/tables", ['document' => $document])->assertForbidden();
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks/{$task}/tables", [
+            'document' => ['sheets' => [['rows' => array_fill(0, 201, []), 'columns' => []]]],
+        ])->assertUnprocessable()->assertJsonPath('code', 'TABLE_DOCUMENT_INVALID');
+
+        $token = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks/{$task}/tables/{$tableId}/edit-lock")
+            ->assertOk()->assertJsonStructure(['data' => ['lock_token', 'expires_at']])->json('data.lock_token');
+        $this->actingAs($editor)->postJson("/api/v1/projects/{$project}/tasks/{$task}/tables/{$tableId}/edit-lock")->assertConflict()->assertJsonPath('code', 'TABLE_LOCKED');
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks/{$task}/tables/missing/edit-lock")->assertNotFound()->assertJsonPath('code', 'TABLE_NOT_FOUND');
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/tasks/{$task}/tables/{$tableId}", ['document' => $document, 'lock_token' => 'lost'])->assertConflict()->assertJsonPath('code', 'TABLE_LOCK_LOST');
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/tasks/{$task}/tables/{$tableId}", ['document' => ['sheets' => [['rows' => [['cells' => ['A1' => '=1+1']]], 'columns' => []]]], 'lock_token' => $token])
+            ->assertOk()->assertJsonPath('data.document_version', 2)->assertJsonPath('data.document.sheets.0.rows.0.cells.A1', '=1+1');
+        $this->actingAs($owner)->deleteJson("/api/v1/projects/{$project}/tasks/{$task}/tables/{$tableId}", ['lock_token' => $token])->assertNoContent();
     }
 
     public function test_task_checklist_items_are_persisted_reordered_and_exposed_in_workspace(): void
@@ -107,20 +234,26 @@ final class LocalProjectsApiTest extends TestCase
 
     public function test_workspace_projects_open_fs_predecessors_into_successive_unlock_dates(): void
     {
-        $user = User::factory()->create();
-        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'unlock-projection'])->json('data.id');
-        $first = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Primeira', 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-08'])->json('data.id');
-        $second = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Segunda'])->json('data.id');
-        $third = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Terceira'])->json('data.id');
-        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $first, 'to' => $second, 'type' => 'FS'])->assertCreated();
-        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $second, 'to' => $third, 'type' => 'FS'])->assertCreated();
+        Carbon::setTestNow('2026-09-08 12:00:00');
 
-        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
-            ->assertOk()
-            ->assertJsonPath('data.tasks.1.unlock_date', '2026-09-09')
-            ->assertJsonPath('data.tasks.1.considered_start', '2026-09-09')
-            ->assertJsonPath('data.tasks.2.unlock_date', '2026-09-10')
-            ->assertJsonPath('data.tasks.2.considered_start', '2026-09-10');
+        try {
+            $user = User::factory()->create();
+            $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'unlock-projection'])->json('data.id');
+            $first = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Primeira', 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-08'])->json('data.id');
+            $second = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Segunda'])->json('data.id');
+            $third = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Terceira'])->json('data.id');
+            $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $first, 'to' => $second, 'type' => 'FS'])->assertCreated();
+            $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $second, 'to' => $third, 'type' => 'FS'])->assertCreated();
+
+            $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
+                ->assertOk()
+                ->assertJsonPath('data.tasks.1.unlock_date', '2026-09-09')
+                ->assertJsonPath('data.tasks.1.considered_start', '2026-09-09')
+                ->assertJsonPath('data.tasks.2.unlock_date', '2026-09-10')
+                ->assertJsonPath('data.tasks.2.considered_start', '2026-09-10');
+        } finally {
+            Carbon::setTestNow();
+        }
     }
 
     public function test_editor_can_change_a_dependency_type_without_creating_a_duplicate(): void

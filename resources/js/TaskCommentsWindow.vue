@@ -8,16 +8,20 @@ import {
     ref,
 } from "vue";
 import MarkdownContent from "./MarkdownContent.vue";
-import type { Collaborator, Task, TaskComment } from "./types";
+import type { Collaborator, Task, TaskComment, TaskTable } from "./types";
+import { createEmptyTaskTableDocument, type TaskTableDocument } from "./task-table/univer-adapter";
+import { TaskTableApiError, taskTableClient } from "./task-table/client";
 
 const RichMarkdownEditor = defineAsyncComponent(
     () => import("./RichMarkdownEditor.vue"),
 );
+const TaskTableEditor = defineAsyncComponent(() => import("./TaskTableEditor.vue"));
 
 const props = defineProps<{
     task: Task;
     projectId: string;
     people: Collaborator[];
+    canEdit: boolean;
     windowIndex: number;
     zIndex: number;
 }>();
@@ -32,8 +36,22 @@ const windowElement = ref<HTMLElement | null>(null);
 const closeButton = ref<HTMLButtonElement | null>(null);
 const layoutMenuElement = ref<HTMLElement | null>(null);
 const comments = ref<TaskComment[]>([]);
+const tables = ref<TaskTable[]>([]);
 const loading = ref(false);
 const draft = ref("");
+const composerTab = ref<"comment" | "table">("comment");
+const tableDraft = ref<TaskTableDocument>(createEmptyTaskTableDocument());
+const tableEditor = ref<{ snapshot: () => TaskTableDocument } | null>(null);
+const tableEditorKey = ref(0);
+const viewingTable = ref<TaskTable | null>(null);
+const editingTable = ref<TaskTable | null>(null);
+const editingDocument = ref<TaskTableDocument | null>(null);
+const editingEditor = ref<{ snapshot: () => TaskTableDocument } | null>(null);
+const editingEditorKey = ref(0);
+const editLockToken = ref<string | null>(null);
+const lockLost = ref(false);
+const lockLostAlert = ref<HTMLElement | null>(null);
+const tableBusy = ref(false);
 const editingId = ref<string | null>(null);
 const editDraft = ref("");
 const editBaseline = ref("");
@@ -46,11 +64,13 @@ const layoutMenu = ref(false);
 const layoutPreset = ref<"left-half" | "right-half" | "right-third" | "maximized" | null>(null);
 let drag: { pointerId: number; offsetX: number; offsetY: number } | null = null;
 let resize: { pointerId: number; width: number; height: number; x: number; y: number } | null = null;
+let lockRenewal: ReturnType<typeof setInterval> | null = null;
 
 const isDirty = computed(
     () =>
         Boolean(draft.value.trim()) ||
-        Boolean(editingId.value && editDraft.value !== editBaseline.value),
+        Boolean(editingId.value && editDraft.value !== editBaseline.value) ||
+        Boolean(editingTable.value),
 );
 const windowStyle = computed(() => ({
     left: `${position.value.x}px`,
@@ -60,8 +80,13 @@ const windowStyle = computed(() => ({
     zIndex: props.zIndex,
 }));
 const countLabel = computed(
-    () => `${comments.value.length} comentário${comments.value.length === 1 ? "" : "s"}`,
+    () => `${comments.value.length + tables.value.length} item${comments.value.length + tables.value.length === 1 ? "" : "s"}`,
 );
+const conversationBlocks = computed(() => [
+    ...comments.value.map((item) => ({ kind: "comment" as const, item })),
+    ...tables.value.map((item) => ({ kind: "table" as const, item })),
+].sort((left, right) => (left.item.posted_at ?? "").localeCompare(right.item.posted_at ?? "")));
+const tablesApi = () => taskTableClient(props.projectId, props.task.id);
 
 const csrfHeaders = (): Record<string, string> => {
     const token = document.querySelector<HTMLMetaElement>(
@@ -83,17 +108,10 @@ function collaboratorName(comment: TaskComment) {
 async function loadComments() {
     loading.value = true;
     try {
-        const response = await fetch(
-            `/api/v1/projects/${props.projectId}/tasks/${props.task.id}/context`,
-            { headers: { Accept: "application/json" } },
-        );
-        if (!response.ok)
-            throw new Error(
-                await responseError(response, "Não foi possível carregar os comentários."),
-            );
-        const data = (await response.json()).data;
+        const data = await tablesApi().context();
         comments.value = data.comments ?? [];
-        emit("comment-count-change", comments.value.length);
+        tables.value = data.tables ?? [];
+        emit("comment-count-change", comments.value.length + tables.value.length);
     } catch (error) {
         emit(
             "notice",
@@ -145,6 +163,126 @@ async function publish() {
         );
     draft.value = "";
     await loadComments();
+}
+async function publishTable() {
+    const document = tableEditor.value?.snapshot() ?? tableDraft.value;
+    await tablesApi().publish(document);
+    tableDraft.value = createEmptyTaskTableDocument();
+    tableEditorKey.value++;
+    composerTab.value = "comment";
+    await loadComments();
+}
+function stopLockRenewal() {
+    if (lockRenewal) clearInterval(lockRenewal);
+    lockRenewal = null;
+}
+async function renewTableLock() {
+    const table = editingTable.value, token = editLockToken.value;
+    if (!table || !token || lockLost.value) return;
+    try {
+        editLockToken.value = (await tablesApi().renew(table.id, token)).lock_token;
+    } catch (error) {
+        if (error instanceof TaskTableApiError && (error.code === "TABLE_LOCK_LOST" || error.code === "TABLE_NOT_FOUND")) {
+            await markLockLost();
+            emit("notice", "Outra pessoa assumiu a edição enquanto esta tabela estava inativa. Seu rascunho foi preservado para cópia ou publicação como nova tabela.", "error");
+            return;
+        }
+        throw error;
+    }
+}
+async function beginTableEdit(table: TaskTable) {
+    if (!table.editable || tableBusy.value) return;
+    tableBusy.value = true;
+    try {
+        try {
+            editLockToken.value = (await tablesApi().acquire(table.id)).lock_token;
+        } catch (error) {
+            if (error instanceof TaskTableApiError && error.code === "TABLE_LOCKED") throw new Error("Esta tabela está sendo editada por outra pessoa.");
+            throw error;
+        }
+        editingTable.value = table;
+        editingDocument.value = structuredClone(table.document) as TaskTableDocument;
+        editingEditorKey.value++;
+        lockLost.value = false;
+        stopLockRenewal();
+        lockRenewal = setInterval(() => { void renewTableLock().catch(() => undefined); }, 2000);
+    } finally { tableBusy.value = false; }
+}
+async function markLockLost() {
+    lockLost.value = true;
+    stopLockRenewal();
+    await nextTick();
+    lockLostAlert.value?.focus({ preventScroll: true });
+}
+async function releaseTableLock() {
+    const table = editingTable.value, token = editLockToken.value;
+    stopLockRenewal();
+    if (table && token && !lockLost.value) await tablesApi().release(table.id, token).catch(() => undefined);
+    editLockToken.value = null;
+}
+async function cancelTableEdit() {
+    await releaseTableLock();
+    editingTable.value = null;
+    editingDocument.value = null;
+    lockLost.value = false;
+}
+async function saveTableEdit() {
+    const table = editingTable.value, token = editLockToken.value;
+    if (!table || !token || lockLost.value) return;
+    try {
+        await tablesApi().save(table.id, editingEditor.value?.snapshot() ?? editingDocument.value ?? createEmptyTaskTableDocument(), token);
+    } catch (error) {
+        if (error instanceof TaskTableApiError && (error.code === "TABLE_LOCK_LOST" || error.code === "TABLE_NOT_FOUND")) {
+            await markLockLost();
+            emit("notice", "A tabela não está mais disponível para salvar. Seu rascunho foi preservado para cópia ou publicação como nova tabela.", "error");
+            return;
+        }
+        throw error;
+    }
+    await cancelTableEdit();
+    await loadComments();
+}
+async function deleteTable() {
+    const table = editingTable.value, token = editLockToken.value;
+    if (!table || !token || lockLost.value) return;
+    try {
+        await tablesApi().remove(table.id, token);
+    } catch (error) {
+        if (error instanceof TaskTableApiError && (error.code === "TABLE_LOCK_LOST" || error.code === "TABLE_NOT_FOUND")) {
+            await markLockLost();
+            emit("notice", "A tabela não está mais disponível para excluir. Seu rascunho foi preservado para cópia ou publicação como nova tabela.", "error");
+            return;
+        }
+        throw error;
+    }
+    stopLockRenewal(); editLockToken.value = null; editingTable.value = null; editingDocument.value = null;
+    await loadComments();
+}
+async function publishLostTableAsCopy() {
+    const document = editingEditor.value?.snapshot() ?? editingDocument.value ?? createEmptyTaskTableDocument();
+    await tablesApi().publish(document);
+    editingTable.value = null;
+    editingDocument.value = null;
+    editLockToken.value = null;
+    lockLost.value = false;
+    await loadComments();
+}
+async function copyLostTable() {
+    const text = tableAsTsv(editingEditor.value?.snapshot() ?? editingDocument.value);
+    await navigator.clipboard.writeText(text);
+    emit("notice", "Conteúdo da tabela copiado.", "success");
+}
+function tableAsTsv(document: TaskTableDocument | null): string {
+    const sheets = document?.sheets as Record<string, { cellData?: Record<string, Record<string, { v?: unknown; f?: string }>> }> | undefined;
+    const sheet = sheets && Object.values(sheets)[0];
+    const rows = sheet?.cellData ?? {};
+    const rowIndexes = Object.keys(rows).map(Number).filter(Number.isInteger);
+    const maxRow = Math.max(0, ...rowIndexes);
+    const maxColumn = Math.max(0, ...rowIndexes.flatMap((row) => Object.keys(rows[String(row)] ?? {}).map(Number).filter(Number.isInteger)));
+    return Array.from({ length: maxRow + 1 }, (_, row) => Array.from({ length: maxColumn + 1 }, (_, column) => {
+        const cell = rows[String(row)]?.[String(column)];
+        return String(cell?.f ?? cell?.v ?? "").replaceAll("\t", " ").replaceAll("\n", " ");
+    }).join("\t")).join("\n");
 }
 async function saveEdit() {
     const commentId = editingId.value;
@@ -336,6 +474,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
     window.removeEventListener("resize", handleViewportResize);
     document.removeEventListener("pointerdown", closeLayoutMenuOnOutside);
+    void releaseTableLock();
 });
 </script>
 
@@ -373,14 +512,28 @@ onBeforeUnmount(() => {
         </header>
 
         <div class="comments-window-body">
+            <section v-if="editingTable && editingDocument" class="task-table-edit-panel" aria-label="Editar tabela">
+                <div v-if="lockLost" ref="lockLostAlert" role="alert" tabindex="-1" class="task-table-lock-lost">
+                    A edição foi assumida por outra pessoa. Seu rascunho não será salvo nesta tabela.
+                    <button type="button" class="soft-btn" @click="run(copyLostTable)">Copiar conteúdo</button>
+                    <button type="button" class="primary" @click="run(publishLostTableAsCopy, 'Tabela publicada como cópia')">Publicar como nova tabela</button>
+                </div>
+                <TaskTableEditor :key="editingEditorKey" ref="editingEditor" :document="editingDocument" :read-only="lockLost" />
+                <div class="comment-actions">
+                    <button type="button" class="soft-btn" @click="run(cancelTableEdit)">Cancelar</button>
+                    <button v-if="!lockLost" type="button" class="danger-btn" @click="run(deleteTable, 'Tabela excluída')">Excluir</button>
+                    <button v-if="!lockLost" type="button" class="primary" @click="run(saveTableEdit, 'Tabela salva')">Salvar tabela</button>
+                </div>
+            </section>
             <p v-if="loading" class="comments-window-empty">Carregando comentários…</p>
-            <p v-else-if="!comments.length" class="comments-window-empty">Ainda não há comentários nesta tarefa.</p>
-            <article v-for="comment in comments" :key="comment.id" class="task-comment">
+            <p v-else-if="!comments.length && !tables.length" class="comments-window-empty">Ainda não há comentários ou tabelas nesta tarefa.</p>
+            <template v-for="block in conversationBlocks" :key="`${block.kind}-${block.item.id}`">
+            <article v-if="block.kind === 'comment'" class="task-comment">
                 <header>
-                    <b>{{ collaboratorName(comment) }}</b>
-                    <time v-if="comment.posted_at">{{ new Date(comment.posted_at).toLocaleString("pt-BR") }}</time>
+                    <b>{{ collaboratorName(block.item) }}</b>
+                    <time v-if="block.item.posted_at">{{ new Date(block.item.posted_at).toLocaleString("pt-BR") }}</time>
                 </header>
-                <template v-if="editingId === comment.id">
+                <template v-if="editingId === block.item.id">
                     <RichMarkdownEditor v-model="editDraft" ariaLabel="Editar comentário" placeholder="Edite o comentário…" />
                     <div class="comment-actions">
                         <button type="button" class="soft-btn" @click="cancelEdit">Cancelar</button>
@@ -388,24 +541,48 @@ onBeforeUnmount(() => {
                     </div>
                 </template>
                 <template v-else>
-                    <MarkdownContent :content="comment.content" />
-                    <div v-if="comment.editable" class="comment-tools">
-                        <button type="button" class="comment-icon-action" aria-label="Editar comentário" title="Editar comentário" @click="beginEdit(comment)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5" /></svg></button>
-                        <button type="button" class="comment-icon-action danger" aria-label="Excluir comentário" title="Excluir comentário" @click="deleting = comment"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11h.01" /></svg></button>
+                    <MarkdownContent :content="block.item.content" />
+                    <div v-if="block.item.editable" class="comment-tools">
+                        <button type="button" class="comment-icon-action" aria-label="Editar comentário" title="Editar comentário" @click="beginEdit(block.item)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5" /></svg></button>
+                        <button type="button" class="comment-icon-action danger" aria-label="Excluir comentário" title="Excluir comentário" @click="deleting = block.item"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3m-8 0 1 13h8l1-13M10 11v5M14 11h.01" /></svg></button>
                     </div>
                 </template>
             </article>
+            <article v-else class="task-comment task-table-block">
+                <header>
+                    <b>{{ block.item.author_name || "Usuário" }}</b>
+                    <time v-if="block.item.posted_at">{{ new Date(block.item.posted_at).toLocaleString("pt-BR") }}</time>
+                </header>
+                <p><strong>Tabela</strong> · versão {{ block.item.document_version }}</p>
+                <div class="comment-actions">
+                    <button type="button" class="soft-btn" @click="viewingTable = viewingTable?.id === block.item.id ? null : block.item">{{ viewingTable?.id === block.item.id ? "Fechar visualização" : "Visualizar tabela" }}</button>
+                    <button v-if="block.item.editable" type="button" class="primary" :disabled="tableBusy" @click="run(() => beginTableEdit(block.item))">Editar tabela</button>
+                </div>
+                <TaskTableEditor v-if="viewingTable?.id === block.item.id" :key="`view-${block.item.id}`" :document="block.item.document" read-only />
+            </article>
+            </template>
         </div>
 
         <footer class="comments-window-composer">
-            <label>Novo comentário<RichMarkdownEditor v-model="draft" ariaLabel="Novo comentário" placeholder="Escreva um comentário…" /></label>
-            <button type="button" class="primary" :disabled="!draft.trim()" @click="run(publish, 'Comentário publicado')">Publicar comentário</button>
+            <div role="tablist" aria-label="Tipo de publicação" class="comments-composer-tabs">
+                <button id="new-comment-tab" type="button" role="tab" :aria-selected="composerTab === 'comment'" aria-controls="new-comment-panel" @click="composerTab = 'comment'">Novo Comentário</button>
+                <button v-if="canEdit" id="new-table-tab" type="button" role="tab" :aria-selected="composerTab === 'table'" aria-controls="new-table-panel" @click="composerTab = 'table'">Nova Tabela</button>
+            </div>
+            <div v-if="composerTab === 'comment' && canEdit" id="new-comment-panel" role="tabpanel" aria-labelledby="new-comment-tab">
+                <label>Novo comentário<RichMarkdownEditor v-model="draft" ariaLabel="Novo comentário" placeholder="Escreva um comentário…" /></label>
+                <button type="button" class="primary" :disabled="!draft.trim()" @click="run(publish, 'Comentário publicado')">Publicar comentário</button>
+            </div>
+            <div v-else-if="canEdit" id="new-table-panel" role="tabpanel" aria-labelledby="new-table-tab">
+                <TaskTableEditor :key="tableEditorKey" ref="tableEditor" :document="tableDraft" />
+                <button type="button" class="primary" @click="run(publishTable, 'Tabela publicada')">Publicar tabela</button>
+            </div>
+            <p v-else class="comments-window-empty">Você tem acesso somente para leitura nesta conversa.</p>
         </footer>
 
         <div v-if="closeConfirmation" class="comments-window-confirm">
             <section role="alertdialog" aria-modal="true" :aria-labelledby="`comments-close-title-${task.id}`">
-                <b :id="`comments-close-title-${task.id}`">Descartar comentário não salvo?</b>
-                <p>O texto em edição será perdido.</p>
+                <b :id="`comments-close-title-${task.id}`">Descartar conteúdo não salvo?</b>
+                <p>O comentário ou tabela em edição será perdido.</p>
                 <div>
                     <button type="button" class="soft-btn" @click="closeConfirmation = false">Continuar editando</button>
                     <button type="button" class="danger-btn" @click="emit('close')">Descartar</button>

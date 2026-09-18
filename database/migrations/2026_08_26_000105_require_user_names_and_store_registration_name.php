@@ -17,8 +17,11 @@ return new class extends Migration
             $table->string('registration_name')->nullable()->after('email');
         });
         DB::table('project_people')
-            ->join('users', 'users.id', '=', 'project_people.linked_user_id')
-            ->update(['project_people.name' => DB::raw('users.name'), 'project_people.updated_at' => now()]);
+            ->whereNotNull('linked_user_id')
+            ->update([
+                'name' => DB::raw('(select name from users where users.id = project_people.linked_user_id)'),
+                'updated_at' => now(),
+            ]);
     }
 
     public function down(): void

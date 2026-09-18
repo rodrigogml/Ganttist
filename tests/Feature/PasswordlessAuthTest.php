@@ -54,7 +54,9 @@ final class PasswordlessAuthTest extends TestCase
 
             return true;
         });
-        $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])->assertOk();
+        $this->postJson('/auth/verify', ['email' => 'person@example.com', 'pin' => $mail->pin])
+            ->assertOk()
+            ->assertJsonStructure(['csrfToken']);
         $this->assertAuthenticated();
     }
 

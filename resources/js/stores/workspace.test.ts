@@ -310,6 +310,18 @@ describe('workspace visibility', () => {
     expect(store.stale).toBe(false)
   })
 
+  it('keeps the authenticated session when a workspace request has a CSRF failure', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'u1', name: 'Pessoa', email: 'pessoa@example.test' }
+    const store = useWorkspaceStore()
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 419 }))
+
+    await store.load()
+
+    expect(auth.user?.id).toBe('u1')
+    expect(store.error).toBe('Não foi possível carregar o projeto.')
+  })
+
   it('persists the successfully loaded project for restoration after refresh', async () => {
     const store = useWorkspaceStore()
     const project = { id: 'persisted-project', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-26T00:00:00Z' }

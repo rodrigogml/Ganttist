@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 
 type User = { id: string; name: string | null; email: string }
+type VerifiedSession = { user: User; csrfToken?: string }
 const sessionMarker = 'ganttist.authenticated-session'
 
 function rememberActiveSession(): void {
@@ -19,6 +20,11 @@ function hadActiveSession(): boolean {
 function headers(): HeadersInit {
   const token = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content
   return { 'Content-Type': 'application/json', Accept: 'application/json', ...(token ? { 'X-CSRF-TOKEN': token } : {}) }
+}
+
+function updateCsrfToken(token?: string): void {
+  if (!token) return
+  document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.setAttribute('content', token)
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -39,7 +45,7 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function handleUnauthorized(response: Response): boolean {
-    if (response.status !== 401 && response.status !== 419) return false
+    if (response.status !== 401) return false
     expireSession()
     return true
   }
@@ -47,7 +53,7 @@ export const useAuthStore = defineStore('auth', () => {
   async function current(): Promise<boolean> {
     const response = await fetch('/api/v1/me', { headers: { Accept: 'application/json' } })
     if (!response.ok) {
-      if ((response.status === 401 || response.status === 419) && hadActiveSession()) expireSession()
+      if (response.status === 401 && hadActiveSession()) expireSession()
       return false
     }
     user.value = (await response.json()).user
@@ -61,7 +67,9 @@ export const useAuthStore = defineStore('auth', () => {
       if (token) {
         const response = await fetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ token }) })
         if (response.ok) {
-          user.value = (await response.json()).user
+          const verified = await response.json() as VerifiedSession
+          user.value = verified.user
+          updateCsrfToken(verified.csrfToken)
           rememberActiveSession()
           window.history.replaceState({}, document.title, window.location.pathname)
         } else error.value = 'Este link de acesso é inválido ou expirou.'
@@ -92,7 +100,8 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const response = await fetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ email: loginEmail.value, pin }) })
       if (!response.ok) throw new Error('Código inválido ou expirado.')
-      user.value = (await response.json()).user; sent.value = false; rememberActiveSession()
+      const verified = await response.json() as VerifiedSession
+      user.value = verified.user; updateCsrfToken(verified.csrfToken); sent.value = false; rememberActiveSession()
     } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível validar o código.' } finally { sending.value = false }
   }
 

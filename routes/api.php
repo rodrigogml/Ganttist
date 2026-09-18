@@ -30,6 +30,12 @@ Route::prefix('v1')->group(function () {
             Route::delete('/projects/{projectId}/tasks/{taskId}/checklist/{itemId}', [ProjectController::class, 'deleteChecklistItem']);
             Route::delete('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'deleteTask']);
             Route::get('/projects/{projectId}/tasks/{taskId}/context', [ProjectController::class, 'taskContext']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/tables', [ProjectController::class, 'createTable']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/tables/{tableId}/edit-lock', [ProjectController::class, 'acquireTableLock']);
+            Route::put('/projects/{projectId}/tasks/{taskId}/tables/{tableId}/edit-lock', [ProjectController::class, 'renewTableLock']);
+            Route::delete('/projects/{projectId}/tasks/{taskId}/tables/{tableId}/edit-lock', [ProjectController::class, 'releaseTableLock']);
+            Route::put('/projects/{projectId}/tasks/{taskId}/tables/{tableId}', [ProjectController::class, 'updateTable']);
+            Route::delete('/projects/{projectId}/tasks/{taskId}/tables/{tableId}', [ProjectController::class, 'deleteTable']);
             Route::post('/projects/{projectId}/tasks/{taskId}/comments', [ProjectController::class, 'createComment']);
             Route::put('/projects/{projectId}/tasks/{taskId}/comments/{commentId}', [ProjectController::class, 'updateComment']);
             Route::delete('/projects/{projectId}/tasks/{taskId}/comments/{commentId}', [ProjectController::class, 'deleteComment']);

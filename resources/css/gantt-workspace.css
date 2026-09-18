@@ -453,6 +453,8 @@ body.resizing-task-column * {
   line-height: 1;
   cursor: grab;
   touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .structure-drag-handle:hover,
@@ -1488,9 +1490,16 @@ body.resizing-task-column * {
 .comments-window-body .task-comment { padding: 13px; border-color: #e8e5f2; box-shadow: 0 1px 2px #17132a06; }
 .comments-window-empty { margin: 0; padding: 34px 16px; color: #858c9b; text-align: center; }
 .comments-window-composer { padding: 12px 14px 14px; border-top: 1px solid #ebe9f4; background: #fff; }
+.comments-composer-tabs { display: flex; gap: 4px; margin: -2px 0 10px; border-bottom: 1px solid #e6e2f1; }
+.comments-composer-tabs button { min-height: 34px; padding: 0 10px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #706a80; font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
+.comments-composer-tabs button[aria-selected="true"] { border-bottom-color: #6255ca; color: #5043ae; }
+.comments-composer-tabs button:focus-visible { outline: 2px solid #6c5ce7; outline-offset: -2px; }
 .comments-window-composer label { display: block; color: #5b566c; font-size: var(--editor-label-font-size); font-weight: 750; }
 .comments-window-composer .rich-markdown { margin-top: 6px; }
-.comments-window-composer > .primary { min-height: 33px; margin-top: 9px; margin-left: auto; display: block; }
+.comments-window-composer .primary { min-height: 33px; margin-top: 9px; margin-left: auto; display: block; }
+.task-table-edit-panel { margin-bottom: 12px; }
+.task-table-lock-lost { margin-bottom: 10px; padding: 10px; border: 1px solid #edc9cd; border-radius: 8px; background: #fff5f5; color: #813b48; font-size: 12px; }
+.task-table-lock-lost button { display: inline-flex; margin: 7px 5px 0 0; }
 .comments-window-confirm { position: absolute; z-index: 2; inset: 0; display: grid; place-items: center; padding: 20px; background: #1713262e; backdrop-filter: blur(2px); }
 .comments-window-confirm section { width: min(340px, 100%); padding: 16px; border: 1px solid #e0ddef; border-radius: 11px; background: #fff; box-shadow: 0 14px 32px #1713262b; }
 .comments-window-confirm b { display: block; color: #333044; font-size: 13px; }
@@ -2549,4 +2558,8 @@ body.resizing-task-column * {
   .comments-window-header { cursor: default; touch-action: auto; }
   .comments-window-heading h2 { max-width: calc(100vw - 150px); }
   .comments-window-layout-trigger, .comments-window-resizer { display: none; }
+  .comments-window-body { padding: 10px; }
+  .comments-window-composer { max-height: 55dvh; overflow: auto; padding: 10px; }
+  .comments-composer-tabs { position: sticky; top: -10px; z-index: 1; padding-top: 2px; background: #fff; }
+  .comment-actions { flex-wrap: wrap; }
 }

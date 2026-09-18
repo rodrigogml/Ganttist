@@ -64,7 +64,7 @@ const sessionGuardedFetch = async (
     init?: RequestInit,
 ): Promise<Response> => {
     const response = await fetchWithSessionGuard(input, init);
-    if ((response.status === 401 || response.status === 419) && auth.user)
+    if (response.status === 401 && auth.user)
         auth.expireSession();
     return response;
 };
@@ -315,7 +315,15 @@ type StructureDrop = {
     valid: boolean;
     message: string;
 };
-type StructureDrag = { task: Task; x: number; y: number; drop: StructureDrop | null };
+type StructureDrag = {
+    task: Task;
+    x: number;
+    y: number;
+    pointerId: number;
+    pointerType: string;
+    handle: HTMLElement | null;
+    drop: StructureDrop | null;
+};
 const structureDrag = ref<StructureDrag | null>(null);
 const structureMoveBusy = ref(false);
 const canMoveStructure = computed(
@@ -1182,15 +1190,41 @@ function describeStructureDestination(parentId: string | null, beforeId: string 
     if (before) return `Antes de “${before.title}”`;
     return parent ? `No fim de “${parent.title}”` : "No fim da raiz";
 }
+function structureDropZone(
+    ratio: number,
+    previous: StructureDrop["zone"] | undefined,
+): StructureDrop["zone"] {
+    // Touch coordinates naturally jitter by a few pixels. Keep a chosen zone
+    // until the finger has crossed a wider boundary, avoiding visual flicker.
+    if (previous === "before")
+        return ratio < .34 ? "before" : ratio > .75 ? "after" : "inside";
+    if (previous === "after")
+        return ratio > .66 ? "after" : ratio < .25 ? "before" : "inside";
+    if (previous === "inside")
+        return ratio < .16 ? "before" : ratio > .84 ? "after" : "inside";
+    return ratio < .25 ? "before" : ratio > .75 ? "after" : "inside";
+}
 function projectStructureDrop(event: PointerEvent): StructureDrop | null {
-    const source = structureDrag.value?.task;
+    const drag = structureDrag.value;
+    const source = drag?.task;
     const row = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>(".task-row[data-task-id]");
     const targetId = row?.dataset.taskId;
     const target = hierarchyTasks.value.find((item) => item.id === targetId);
     if (!source || !row || !target) return null;
     const rect = row.getBoundingClientRect();
     const ratio = (event.clientY - rect.top) / rect.height;
-    const zone: StructureDrop["zone"] = ratio < .25 ? "before" : ratio > .75 ? "after" : "inside";
+    const previous = drag?.drop;
+    if (drag.pointerType === "touch" && previous && previous.targetId !== target.id) {
+        const edgeInset = Math.min(8, rect.height / 3);
+        if (event.clientY <= rect.top + edgeInset || event.clientY >= rect.bottom - edgeInset)
+            return previous;
+    }
+    const zone = structureDropZone(
+        ratio,
+        drag?.pointerType === "touch" && previous?.targetId === target.id
+            ? previous.zone
+            : undefined,
+    );
     if (structureDescendsFrom(target, source.id)) {
         return { targetId: target.id, parentId: null, beforeId: null, zone, valid: false, message: "Não é permitido mover um item para dentro dele mesmo ou de sua descendência." };
     }
@@ -1209,11 +1243,12 @@ function projectStructureDrop(event: PointerEvent): StructureDrop | null {
     return { targetId: target.id, parentId, beforeId, zone, valid: true, message: describeStructureDestination(parentId, beforeId, zone) };
 }
 function moveStructureDrag(event: PointerEvent) {
-    if (!structureDrag.value) return;
+    if (!structureDrag.value || event.pointerId !== structureDrag.value.pointerId) return;
     structureDrag.value = { ...structureDrag.value, x: event.clientX, y: event.clientY, drop: projectStructureDrop(event) };
 }
 async function finishStructureDrag(event: PointerEvent) {
     const drag = structureDrag.value;
+    if (drag && event.pointerId !== drag.pointerId) return;
     const drop = drag?.drop;
     stopStructureDrag();
     if (!drag || !drop?.valid || structureMoveBusy.value) return;
@@ -1237,6 +1272,10 @@ async function finishStructureDrag(event: PointerEvent) {
     }
 }
 function stopStructureDrag() {
+    const handle = structureDrag.value?.handle;
+    const pointerId = structureDrag.value?.pointerId;
+    if (handle && pointerId !== undefined && handle.hasPointerCapture(pointerId))
+        handle.releasePointerCapture(pointerId);
     document.removeEventListener("pointermove", moveStructureDrag);
     document.removeEventListener("pointerup", finishStructureDrag);
     document.removeEventListener("pointercancel", stopStructureDrag);
@@ -1247,7 +1286,17 @@ function startStructureDrag(task: Task, event: PointerEvent) {
     event.preventDefault();
     event.stopPropagation();
     cancelTaskContextLongPress();
-    structureDrag.value = { task, x: event.clientX, y: event.clientY, drop: null };
+    const handle = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    handle?.setPointerCapture(event.pointerId);
+    structureDrag.value = {
+        task,
+        x: event.clientX,
+        y: event.clientY,
+        pointerId: event.pointerId,
+        pointerType: event.pointerType,
+        handle,
+        drop: null,
+    };
     document.addEventListener("pointermove", moveStructureDrag);
     document.addEventListener("pointerup", finishStructureDrag, { once: true });
     document.addEventListener("pointercancel", stopStructureDrag, { once: true });
@@ -4620,7 +4669,7 @@ function statusLabel(s: string) {
                     </div>
                 </header>
                 <div class="drawer-body">
-                    <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
+                    <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask?.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask?.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
                     <section class="task-checklist" aria-label="Checklist de orientação">
                         <header><div><b>Checklist de orientação</b><small>{{ checklistItems.filter((item) => item.completed).length }}/{{ checklistItems.length }} concluído(s)</small></div><button type="button" class="checklist-add" aria-label="Adicionar item ao checklist" title="Adicionar item" @click="addChecklistItem">+</button></header>
                         <p v-if="!checklistItems.length" class="checklist-empty">Inclua pontos de acompanhamento sem criar novas tarefas.</p>
@@ -4651,7 +4700,7 @@ function statusLabel(s: string) {
                                 v-model="activeTask.finish"
                         /></label>
                     </div>
-                    <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<DateInput v-model="activeTask.effective_completion" required /></label></div>
+                    <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<DateInput :model-value="activeTask.effective_completion ?? null" required @update:model-value="(value) => { if (activeTask) activeTask.effective_completion = value }" /></label></div>
                     <section
                         class="projection-summary"
                         aria-label="Projeção calculada"
@@ -4967,6 +5016,7 @@ function statusLabel(s: string) {
             :task="task"
             :project-id="store.workspace!.project.id"
             :people="store.workspace?.people ?? []"
+            :can-edit="store.workspace?.project.role !== 'reader'"
             :window-index="index"
             :z-index="140 + index"
             @close="closeComments(task.id)"

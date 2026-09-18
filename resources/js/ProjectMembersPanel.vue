@@ -14,7 +14,7 @@ let clockTimer: ReturnType<typeof setInterval> | null = null
 const isOwner = computed(() => props.role === 'owner')
 const canEditPeople = computed(() => ['owner', 'editor'].includes(props.role))
 const visiblePeople = computed(() => { const term = query.value.trim().toLocaleLowerCase('pt-BR'); return term ? people.value.filter(person => `${person.name} ${person.email ?? ''}`.toLocaleLowerCase('pt-BR').includes(term)) : people.value })
-const csrfHeaders = () => { const token = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content; return token ? { 'X-CSRF-TOKEN': token } : {} }
+const csrfHeaders = (): Record<string, string> => { const token = document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content; return token ? { 'X-CSRF-TOKEN': token } : {} }
 const memberFor = (person: Person) => person.email ? members.value.find(member => member.email.toLocaleLowerCase() === person.email!.toLocaleLowerCase()) : undefined
 const invitationFor = (person: Person) => person.email ? invitations.value.find(invitation => invitation.email.toLocaleLowerCase() === person.email!.toLocaleLowerCase()) : undefined
 const editingPerson = computed(() => people.value.find(person => person.id === editingPersonId.value))

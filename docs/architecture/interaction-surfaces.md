@@ -1,7 +1,7 @@
 ﻿# Interaction Surface Architecture
 
 **Created**: 2026-08-17
-**Last Updated**: 2026-08-25
+**Last Updated**: 2026-09-10
 **Status**: Approved
 **Sources**: briefing, constitution, specification v1.0 and feature plans.
 
@@ -42,3 +42,4 @@ Idioma inicial `pt-BR`; conteÃºdo e formataÃ§Ã£o nÃ£o devem ser espalhad
 | 2026-08-17 | SURF-WEB-OPERATIONS | Uma SPA responsiva para a operaÃ§Ã£o | O cliente aprovou uma aplicaÃ§Ã£o Ãºnica com comportamento adaptado | EspecificaÃ§Ã£o Â§33A.5 e Â§18H |
 | 2026-08-17 | SURF-TODOIST | Adapter dedicado | Protege a autoridade do domÃ­nio e centraliza falhas externas | ConstituiÃ§Ã£o I e EspecificaÃ§Ã£o Â§33A.22 |
 | 2026-08-25 | SURF-WEB-OPERATIONS | Dashboard local de projetos substitui o gate Todoist | Projetos e tarefas são locais e não dependem de conexão externa | Briefing e Constituição v2.0.0 |
+| 2026-09-10 | SURF-WEB-OPERATIONS | Conversa de tarefa recebe blocos de tabela com editor de planilha carregado sob demanda | Entrega formatação e fórmulas sem aumentar o custo da conversa de texto; mantém leitura e escrita conforme os papéis existentes | `task-conversation-tables` briefing e plano |

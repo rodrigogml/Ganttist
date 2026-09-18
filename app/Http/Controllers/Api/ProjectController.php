@@ -9,6 +9,11 @@ use App\Domain\Scheduling\TaskProjectionCalculator;
 use App\Domain\Scheduling\TaskProjectionInput;
 use App\Domain\Scheduling\WorkCalendar;
 use App\Mail\ProjectInvitation;
+use App\Services\TaskTableDocument;
+use App\Services\TaskTableLock;
+use App\Services\TaskTableLockConflict;
+use App\Services\TaskTableLockRateLimited;
+use App\Services\TaskTableNotFound;
 use DateTimeImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -66,6 +71,12 @@ final class ProjectController
             ->groupBy('task_id')
             ->selectRaw('task_id, count(*) as comment_count')
             ->pluck('comment_count', 'task_id')
+            ->all();
+        $tableCounts = DB::table('project_taskTable')
+            ->where('idProject', $projectId)
+            ->groupBy('idTask')
+            ->selectRaw('idTask, count(*) as table_count')
+            ->pluck('table_count', 'idTask')
             ->all();
         $checklistByTask = DB::table('projectTaskChecklistItem')
             ->where('projectId', $projectId)
@@ -146,7 +157,7 @@ final class ProjectController
         }
         $childrenByParent = $childrenByParent->groupBy(fn (object $child): string => $child->parent_id ?? '__root__')->map(fn ($children) => $children->sortBy('position')->values());
         $appendChildren = null;
-        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts, $checklistByTask): void {
+        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts, $tableCounts, $checklistByTask): void {
             foreach ($childrenByParent->get($parentId ?? '__root__', collect()) as $child) {
                 if ($child->kind === 'section') {
                     $section = $child->item;
@@ -156,7 +167,7 @@ final class ProjectController
                 }
                 $task = $child->item;
                 $projection = $projections[$task->id];
-                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? []];
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0) + (int) ($tableCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? []];
             }
         };
         $appendChildren(null);
@@ -460,6 +471,15 @@ final class ProjectController
             foreach (DB::table('project_task_comments')->where('task_id', $task->id)->get() as $comment) {
                 DB::table('project_task_comments')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'task_id' => $copyId, 'author_user_id' => $comment->author_user_id, 'content' => $comment->content, 'created_at' => now(), 'updated_at' => now()]);
             }
+            foreach (DB::table('project_taskTable')->where('idTask', $task->id)->get() as $table) {
+                DB::table('project_taskTable')->insert([
+                    'id' => (string) Str::ulid(), 'idProject' => $projectId, 'idTask' => $copyId,
+                    'idPublishedByUser' => $table->idPublishedByUser, 'document' => $table->document,
+                    'documentVersion' => $table->documentVersion, 'idEditLockUser' => null,
+                    'editLockTokenHash' => null, 'editLockExpiresAt' => null,
+                    'createdAt' => now(), 'updatedAt' => now(),
+                ]);
+            }
             foreach (DB::table('projectTaskChecklistItem')->where('projectId', $projectId)->where('taskId', $task->id)->orderBy('position')->get() as $item) {
                 DB::table('projectTaskChecklistItem')->insert(['id' => (string) Str::ulid(), 'projectId' => $projectId, 'taskId' => $copyId, 'text' => $item->text, 'isCompleted' => false, 'position' => $item->position, 'createdAt' => now(), 'updatedAt' => now()]);
             }
@@ -475,7 +495,7 @@ final class ProjectController
 
     public function taskContext(Request $request, string $projectId, string $taskId): JsonResponse
     {
-        $this->member($request, $projectId);
+        $member = $this->member($request, $projectId);
         abort_unless(DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->exists(), 404, 'Tarefa não encontrada.');
         $comments = DB::table('project_task_comments')
             ->leftJoin('users', 'users.id', '=', 'project_task_comments.author_user_id')
@@ -490,8 +510,121 @@ final class ProjectController
                 'posted_at' => $comment->created_at,
                 'editable' => $comment->author_user_id === $request->user()->id,
             ]);
+        $tables = DB::table('project_taskTable')
+            ->leftJoin('users', 'users.id', '=', 'project_taskTable.idPublishedByUser')
+            ->where('project_taskTable.idProject', $projectId)
+            ->where('project_taskTable.idTask', $taskId)
+            ->orderBy('project_taskTable.createdAt')
+            ->get(['project_taskTable.*', 'users.name as author_name', 'users.email as author_email'])
+            ->map(fn (object $table): array => $this->tableBlock($table, $member->role !== 'reader'));
 
-        return response()->json(['data' => ['collaborators' => DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']), 'comments' => $comments]]);
+        return response()->json(['data' => ['collaborators' => DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']), 'comments' => $comments, 'tables' => $tables]]);
+    }
+
+    public function createTable(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['document' => ['required', 'array']]);
+        abort_unless(DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->exists(), 404, 'Tarefa não encontrada.');
+        try {
+            $document = (new TaskTableDocument)->normalize($data['document']);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->tableError(422, 'TABLE_DOCUMENT_INVALID', $exception->getMessage());
+        }
+        $id = (string) Str::ulid();
+        DB::table('project_taskTable')->insert([
+            'id' => $id, 'idProject' => $projectId, 'idTask' => $taskId, 'idPublishedByUser' => $request->user()->id,
+            'document' => json_encode($document, JSON_THROW_ON_ERROR), 'documentVersion' => 1, 'idEditLockUser' => null,
+            'editLockTokenHash' => null, 'editLockExpiresAt' => null, 'createdAt' => now(), 'updatedAt' => now(),
+        ]);
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => $this->tableById($projectId, $taskId, $id, true)], 201);
+    }
+
+    public function acquireTableLock(Request $request, string $projectId, string $taskId, string $tableId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        try {
+            return response()->json(['data' => (new TaskTableLock)->acquire($projectId, $taskId, $tableId, $request->user()->id)]);
+        } catch (TaskTableNotFound) {
+            return $this->tableError(404, 'TABLE_NOT_FOUND');
+        } catch (TaskTableLockConflict $exception) {
+            return $this->tableError(409, $exception->getMessage());
+        } catch (TaskTableLockRateLimited) {
+            return $this->tableError(429, 'TABLE_LOCK_RATE_LIMITED');
+        }
+    }
+
+    public function renewTableLock(Request $request, string $projectId, string $taskId, string $tableId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['lock_token' => ['required', 'string', 'max:128']]);
+        try {
+            return response()->json(['data' => (new TaskTableLock)->renew($projectId, $taskId, $tableId, $request->user()->id, $data['lock_token'])]);
+        } catch (TaskTableNotFound) {
+            return $this->tableError(404, 'TABLE_NOT_FOUND');
+        } catch (TaskTableLockConflict $exception) {
+            return $this->tableError(409, $exception->getMessage());
+        } catch (TaskTableLockRateLimited) {
+            return $this->tableError(429, 'TABLE_LOCK_RATE_LIMITED');
+        }
+    }
+
+    public function releaseTableLock(Request $request, string $projectId, string $taskId, string $tableId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['lock_token' => ['required', 'string', 'max:128']]);
+        try {
+            (new TaskTableLock)->release($projectId, $taskId, $tableId, $request->user()->id, $data['lock_token']);
+        } catch (TaskTableNotFound) {
+            return $this->tableError(404, 'TABLE_NOT_FOUND');
+        } catch (TaskTableLockConflict $exception) {
+            return $this->tableError(409, $exception->getMessage());
+        }
+
+        return response()->json(null, 204);
+    }
+
+    public function updateTable(Request $request, string $projectId, string $taskId, string $tableId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['document' => ['required', 'array'], 'lock_token' => ['required', 'string', 'max:128']]);
+        try {
+            $document = (new TaskTableDocument)->normalize($data['document']);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->tableError(422, 'TABLE_DOCUMENT_INVALID', $exception->getMessage());
+        }
+        try {
+            (new TaskTableLock)->withActive($projectId, $taskId, $tableId, $request->user()->id, $data['lock_token'], function () use ($tableId, $document): void {
+                DB::table('project_taskTable')->where('id', $tableId)->update(['document' => json_encode($document, JSON_THROW_ON_ERROR), 'documentVersion' => DB::raw('documentVersion + 1'), 'updatedAt' => now()]);
+            });
+        } catch (TaskTableNotFound) {
+            return $this->tableError(404, 'TABLE_NOT_FOUND');
+        } catch (TaskTableLockConflict $exception) {
+            return $this->tableError(409, $exception->getMessage());
+        }
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => $this->tableById($projectId, $taskId, $tableId, true)]);
+    }
+
+    public function deleteTable(Request $request, string $projectId, string $taskId, string $tableId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['lock_token' => ['required', 'string', 'max:128']]);
+        try {
+            (new TaskTableLock)->withActive($projectId, $taskId, $tableId, $request->user()->id, $data['lock_token'], function () use ($tableId): void {
+                DB::table('project_taskTable')->where('id', $tableId)->delete();
+            });
+        } catch (TaskTableNotFound) {
+            return $this->tableError(404, 'TABLE_NOT_FOUND');
+        } catch (TaskTableLockConflict $exception) {
+            return $this->tableError(409, $exception->getMessage());
+        }
+        $this->touchProject($projectId);
+
+        return response()->json(null, 204);
     }
 
     public function createComment(Request $request, string $projectId, string $taskId): JsonResponse
@@ -867,6 +1000,39 @@ final class ProjectController
     private function touchProject(string $projectId): void
     {
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+    }
+
+    private function tableById(string $projectId, string $taskId, string $tableId, bool $editable): array
+    {
+        $table = DB::table('project_taskTable')
+            ->leftJoin('users', 'users.id', '=', 'project_taskTable.idPublishedByUser')
+            ->where('project_taskTable.id', $tableId)
+            ->where('project_taskTable.idProject', $projectId)
+            ->where('project_taskTable.idTask', $taskId)
+            ->first(['project_taskTable.*', 'users.name as author_name', 'users.email as author_email']);
+        if ($table === null) {
+            abort(404, 'Tabela não encontrada.');
+        }
+
+        return $this->tableBlock($table, $editable);
+    }
+
+    private function tableBlock(object $table, bool $editable): array
+    {
+        return [
+            'id' => $table->id,
+            'document' => is_string($table->document) ? json_decode($table->document, true, 512, JSON_THROW_ON_ERROR) : $table->document,
+            'document_version' => (int) $table->documentVersion,
+            'author_id' => $table->idPublishedByUser,
+            'author_name' => $table->author_name ?: $table->author_email,
+            'posted_at' => $table->createdAt,
+            'editable' => $editable,
+        ];
+    }
+
+    private function tableError(int $status, string $code, ?string $message = null): JsonResponse
+    {
+        return response()->json(['code' => $code, ...($message === null ? [] : ['message' => $message])], $status);
     }
 
     private function status(object $task, array $incompletePredecessors): string

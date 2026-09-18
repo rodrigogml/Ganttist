@@ -81,10 +81,15 @@ final class AuthController extends Controller
         }
         Auth::login($user, $remember);
         $request->session()->regenerate();
+        $request->session()->regenerateToken();
         $request->session()->put('login_remember', $remember);
         Log::info('auth.magic_link.verified', ['user_id' => $user->id, 'remember' => $remember]);
 
-        return response()->json(['message' => 'Acesso confirmado.', 'user' => $user]);
+        return response()->json([
+            'message' => 'Acesso confirmado.',
+            'user' => $user,
+            'csrfToken' => $request->session()->token(),
+        ]);
     }
 
     public function logout(Request $request): JsonResponse
