@@ -1,6 +1,6 @@
-const CACHE_NAME = 'ganttist-static-v2';
+const CACHE_NAME = 'ganttist-static-v3';
 const OFFLINE_URL = '/offline.html';
-const STATIC_PATHS = [OFFLINE_URL, '/manifest.webmanifest?v=2', '/icon-192.png', '/icon-512.png', '/icon-maskable-512.png'];
+const STATIC_PATHS = [OFFLINE_URL, '/manifest.webmanifest?v=3', '/brand/logo-square.png', '/brand/logo-square-300.png', '/brand/icon-192.png', '/brand/icon-512.png'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_PATHS)));

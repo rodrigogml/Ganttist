@@ -16,7 +16,7 @@ async function submit() {
 <template>
   <main class="auth-page">
     <section class="auth-card">
-      <div class="auth-mark">G</div>
+      <div class="auth-mark"><img :src="'/brand/logo-square.png'" alt="Ganttist"></div>
       <p class="eyebrow">PLANEJAMENTO COM CLAREZA</p>
       <h1>Entre no Ganttist</h1>
       <p v-if="!auth.sent" class="auth-copy">Informe seu e-mail e enviaremos um link seguro para acessar seu espaço de trabalho.</p>

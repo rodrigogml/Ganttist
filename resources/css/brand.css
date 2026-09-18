@@ -1,0 +1,40 @@
+.brand-mark,
+.auth-mark,
+.loader-logo {
+  overflow: hidden;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transform: none;
+}
+
+.brand-mark img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.auth-mark {
+  width: 56px;
+  height: 56px;
+  margin-bottom: 20px;
+  background: transparent;
+  border-radius: 0;
+}
+
+.auth-mark img,
+.loader-logo img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.loader-logo {
+  background: transparent;
+  border-radius: 0;
+}

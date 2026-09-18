@@ -2921,7 +2921,7 @@ function statusLabel(s: string) {
 
 <template>
     <main v-if="auth.loading" class="loading">
-        <div class="loader-logo">G</div>
+        <div class="loader-logo"><img :src="'/brand/logo-square.png'" alt="" /></div>
         <p>Verificando seu acesso…</p>
     </main>
     <AuthGate v-else-if="!auth.user" :auth="auth" />
@@ -2943,7 +2943,7 @@ function statusLabel(s: string) {
     >
         <header class="topbar">
             <div class="brand">
-                <span class="brand-mark"><i></i><i></i><i></i></span
+                <span class="brand-mark"><img :src="'/brand/logo-square.png'" alt="" /></span
                 ><strong>Ganttist</strong>
             </div>
             <button
@@ -3050,7 +3050,7 @@ function statusLabel(s: string) {
         </header>
 
         <main v-if="store.loading" class="loading">
-            <div class="loader-logo">G</div>
+            <div class="loader-logo"><img :src="'/brand/logo-square.png'" alt="" /></div>
             <p>Organizando seu planejamento…</p>
         </main>
         <main v-else-if="store.error" class="loading">
