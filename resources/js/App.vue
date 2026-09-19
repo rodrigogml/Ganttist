@@ -3146,12 +3146,12 @@ function statusLabel(s: string) {
                                 ref="searchInput"
                                 v-model="store.search"
                                 placeholder="Buscar tarefa…"
-                                aria-keyshortcuts="Meta+K Control+K"
+                                aria-keyshortcuts="/"
                                 :aria-invalid="Boolean(store.searchError)"
                                 :aria-describedby="store.searchError ? 'task-search-error' : undefined"
                                 title="Use &, |, !, (), * e \\ para buscas avançadas"
                                 @focus="selectSearchText"
-                            /><kbd>⌘ K</kbd></label
+                            /><kbd>/</kbd></label
                         >
                         <small v-if="store.searchError" id="task-search-error" class="search-query-error" role="alert">
                             {{ store.searchError }} A busca anterior continua aplicada.
