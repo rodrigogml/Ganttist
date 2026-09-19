@@ -127,11 +127,7 @@ onMounted(async () => {
     await initializeWorkspace();
     await nextTick();
     measureGantt();
-    if (typeof ResizeObserver !== "undefined" && timelineElement.value) {
-        resizeObserver = new ResizeObserver(measureGantt);
-        resizeObserver.observe(timelineElement.value);
-        if (ganttHeadLeft.value) resizeObserver.observe(ganttHeadLeft.value);
-    }
+    observeGanttSize();
 });
 onUnmounted(() => {
     resizeObserver?.disconnect();
@@ -157,6 +153,7 @@ type AppNotification = { message: string; kind: ToastKind };
 const drawer = ref(false),
     notices = ref(false),
     filters = ref(false),
+    activeView = ref<"tasks" | "gantt">("tasks"),
     hierarchyMenu = ref(false),
     account = ref(false),
     responsiblePanel = ref(false),
@@ -864,6 +861,19 @@ const expandableTaskIds = computed(() => {
     return ids;
 });
 const isExpandable = (task: Task) => expandableTaskIds.value.has(task.id);
+const taskListTasks = computed(() =>
+    store.tasks.filter((task) => task.kind === "task"),
+);
+function taskListPriorityLevel(task: Task): 1 | 2 | 3 | null {
+    if (task.kind !== "task") return null;
+    return task.priority === 4
+        ? 1
+        : task.priority === 3
+            ? 2
+            : task.priority === 2
+              ? 3
+              : null;
+}
 function taskPriorityLevel(task: Task): 1 | 2 | 3 | null {
     if (task.kind !== "task" || isExpandable(task)) return null;
     return task.priority === 4
@@ -873,6 +883,15 @@ function taskPriorityLevel(task: Task): 1 | 2 | 3 | null {
             : task.priority === 2
               ? 3
               : null;
+}
+function assigneeInitials(name: string | null | undefined) {
+    const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return "";
+    if (words.length === 1) {
+        const letters = Array.from(words[0]);
+        return `${letters[0]?.toLocaleUpperCase("pt-BR") ?? ""}${letters[1]?.toLocaleLowerCase("pt-BR") ?? ""}`;
+    }
+    return `${Array.from(words[0])[0]?.toLocaleUpperCase("pt-BR") ?? ""}${Array.from(words.at(-1) ?? "")[0]?.toLocaleUpperCase("pt-BR") ?? ""}`;
 }
 const taskAncestors = computed(() => {
     const byId = new Map(hierarchyTasks.value.map((task) => [task.id, task]));
@@ -1318,6 +1337,16 @@ function openCreationDialog(kind: "task" | "section", parentId: string | null = 
 }
 function focusTaskSearchFromShortcut(event: KeyboardEvent) {
     if (
+        event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        (event.key === "1" || event.key === "2")
+    ) {
+        event.preventDefault();
+        selectWorkspaceView(event.key === "1" ? "tasks" : "gantt");
+        return;
+    }
+    if (
         event.ctrlKey &&
         event.shiftKey &&
         !event.altKey &&
@@ -1342,10 +1371,21 @@ function focusTaskSearchFromShortcut(event: KeyboardEvent) {
         clearTaskFilters();
         return;
     }
+    const target = event.target as HTMLElement | null;
+    const isEditableTarget =
+        target?.isContentEditable ||
+        Boolean(
+            target?.closest(
+                'input, textarea, select, [contenteditable="true"], [contenteditable="plaintext-only"], [role="textbox"]',
+            ),
+        );
     if (
-        event.key.toLocaleLowerCase("pt-BR") !== "k" ||
-        (!event.metaKey && !event.ctrlKey) ||
-        event.altKey
+        event.key !== "/" ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.metaKey ||
+        event.shiftKey ||
+        isEditableTarget
     )
         return;
     event.preventDefault();
@@ -1591,6 +1631,9 @@ function formatTaskDate(value: string | null) {
     const [year, month, day] = value.slice(0, 10).split("-");
     return `${day}/${month}/${year}`;
 }
+function consideredStart(task: Task) {
+    return task.considered_start ?? task.start;
+}
 function measureGantt() {
     const timeline = timelineElement.value;
     if (!timeline) return;
@@ -1599,6 +1642,24 @@ function measureGantt() {
         1,
         timeline.clientWidth - taskPaneWidth.value,
     );
+}
+function observeGanttSize() {
+    resizeObserver?.disconnect();
+    if (typeof ResizeObserver === "undefined" || !timelineElement.value) return;
+    resizeObserver = new ResizeObserver(measureGantt);
+    resizeObserver.observe(timelineElement.value);
+    if (ganttHeadLeft.value) resizeObserver.observe(ganttHeadLeft.value);
+}
+function selectWorkspaceView(view: "tasks" | "gantt") {
+    activeView.value = view;
+    if (view !== "gantt") {
+        resizeObserver?.disconnect();
+        return;
+    }
+    void nextTick(() => {
+        measureGantt();
+        observeGanttSize();
+    });
 }
 const onTimelineScroll = (event: Event) => {
     const target = event.target as HTMLElement;
@@ -3061,11 +3122,11 @@ function statusLabel(s: string) {
         </main>
         <main v-else class="main">
             <section class="commandbar">
-                <div class="title-block">
-                    <div>
-                        <span class="eyebrow">VISÃO DE PLANEJAMENTO</span>
-                        <h1>{{ store.workspace?.project.name }}</h1>
-                    </div>
+                <div class="workspace-view-control">
+                    <nav class="workspace-view-tabs" role="tablist" aria-label="Visualização do projeto">
+                        <button id="tasks-view-tab" type="button" role="tab" :aria-selected="activeView === 'tasks'" aria-controls="tasks-view-panel" :tabindex="activeView === 'tasks' ? 0 : -1" :class="{ active: activeView === 'tasks' }" @click="selectWorkspaceView('tasks')">Tarefas</button>
+                        <button id="gantt-view-tab" type="button" role="tab" :aria-selected="activeView === 'gantt'" aria-controls="gantt-view-panel" :tabindex="activeView === 'gantt' ? 0 : -1" :class="{ active: activeView === 'gantt' }" @click="selectWorkspaceView('gantt')">Gantt</button>
+                    </nav>
                     <span
                         v-if="
                             store.workspace?.project.id ===
@@ -3096,7 +3157,7 @@ function statusLabel(s: string) {
                             {{ store.searchError }} A busca anterior continua aplicada.
                         </small>
                     </div>
-                    <div class="segmented">
+                    <div v-if="activeView === 'gantt'" class="segmented">
                         <button
                             :class="{ active: store.zoom === 'day' }"
                             @click="store.zoom = 'day'"
@@ -3114,7 +3175,7 @@ function statusLabel(s: string) {
                             Mês
                         </button>
                     </div>
-                    <div class="hierarchy-control">
+                    <div v-if="activeView === 'gantt'" class="hierarchy-control">
                         <button
                             ref="hierarchyButton"
                             class="soft-btn hierarchy-trigger"
@@ -3596,8 +3657,67 @@ function statusLabel(s: string) {
             <div v-if="sectionDeleteDialog" class="relation-modal-scrim" @click.self="sectionDeleteDialog = null"><section class="relation-modal section-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="section-delete-title"><header><div><b id="section-delete-title">Excluir seção</b><small>Escolha como tratar os subitens de “{{ sectionDeleteDialog.task.title }}”.</small></div></header><div class="relation-modal-body"><label><input v-model="sectionDeleteDialog.action" value="delete" type="radio" /> Excluir esta seção e todos os subitens</label><label><input v-model="sectionDeleteDialog.action" value="move" type="radio" /> Mover os subitens antes de excluir</label><label v-if="sectionDeleteDialog.action === 'move'">Destino<HierarchyCombobox v-model="sectionDeleteDialog.destinationId" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDeleteDialog.task.id" /></label></div><footer><button class="soft-btn" @click="sectionDeleteDialog = null">Cancelar</button><button class="danger-btn" @click="confirmSectionDeletion">Excluir seção</button></footer></section></div>
 
             <section
+                v-if="activeView === 'tasks'"
+                id="tasks-view-panel"
+                class="task-list-view"
+                role="tabpanel"
+                aria-labelledby="tasks-view-tab"
+            >
+                <header class="task-list-header">
+                    <p>{{ taskListTasks.length }} tarefa(s) encontrada(s)</p>
+                </header>
+                <p v-if="!taskListTasks.length" class="task-list-empty">Nenhuma tarefa corresponde aos filtros atuais.</p>
+                <div v-else class="task-list-cards">
+                    <article
+                        v-for="task in taskListTasks"
+                        :key="task.id"
+                        :class="['task-list-card', task.status]"
+                        tabindex="0"
+                        @click="openTask(task)"
+                        @keydown.enter.prevent="openTask(task)"
+                    >
+                        <svg
+                            v-if="taskListPriorityLevel(task)"
+                            class="task-list-priority priority-flag-icon"
+                            :class="`p${taskListPriorityLevel(task)}`"
+                            viewBox="0 0 18 28"
+                            role="img"
+                            :aria-label="`Prioridade P${taskListPriorityLevel(task)}`"
+                        >
+                            <title>Prioridade P{{ taskListPriorityLevel(task) }}</title>
+                            <path class="flag-pole" d="M4 2.5 V25.5" />
+                            <path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z" />
+                        </svg>
+                        <div :class="['task-list-copy', { 'without-priority': !taskListPriorityLevel(task) }]">
+                            <b :title="task.title">{{ task.title }}</b>
+                            <p v-if="task.description" :title="task.description">{{ task.description }}</p>
+                            <p v-else class="task-list-description-empty" aria-hidden="true"></p>
+                        </div>
+                        <footer class="task-list-meta">
+                            <div class="task-list-meta-left">
+                                <span class="status-label"><i></i>{{ statusLabel(task.status) }}</span>
+                                <span class="task-list-date" :title="consideredStart(task) ? `Início considerado: ${formatTaskDate(consideredStart(task))}` : 'Sem início considerado'">
+                                    <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M7.5 3v4M16.5 3v4M3.5 9h17" /></svg>
+                                    <span>{{ formatTaskDate(consideredStart(task)) }}</span>
+                                </span>
+                            </div>
+                            <div class="task-list-meta-right">
+                                <span v-if="task.assignee" class="task-list-assignee" :title="`Responsável: ${task.assignee}`" :aria-label="`Responsável: ${task.assignee}`"><span class="mini-avatar">{{ assigneeInitials(task.assignee) }}</span></span>
+                                <span v-else class="task-list-assignee task-list-assignee--empty" title="Sem responsável" aria-label="Sem responsável"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg></span>
+                                <button v-if="(task.comment_count ?? 0) > 0" type="button" class="task-list-comments task-list-comments--count" :aria-label="`Abrir ${task.comment_count} comentário(s)`" :title="`${task.comment_count} comentário(s)`" @click.stop="openComments(task)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg>{{ task.comment_count }}</button>
+                                <button v-else type="button" class="task-list-comments" aria-label="Abrir comentários: nenhum comentário" title="Sem comentários" @click.stop="openComments(task)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg></button>
+                            </div>
+                        </footer>
+                    </article>
+                </div>
+            </section>
+            <section
+                v-if="activeView === 'gantt'"
+                id="gantt-view-panel"
                 ref="ganttCard"
                 class="gantt-card"
+                role="tabpanel"
+                aria-labelledby="gantt-view-tab"
                 :class="{ 'has-selection': store.selected.length > 0 }"
                 :style="{
                     gridTemplateColumns: taskPaneWidth + 'px minmax(0,1fr)',
@@ -4215,7 +4335,7 @@ function statusLabel(s: string) {
                                             ><span
                                                 v-if="task.assignee"
                                                 class="mini-avatar"
-                                                >{{ task.assignee }}</span
+                                                >{{ assigneeInitials(task.assignee) }}</span
                                             ><svg v-else viewBox="0 0 24 24" aria-hidden="true">
                                                 <path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" />
                                             </svg></button
