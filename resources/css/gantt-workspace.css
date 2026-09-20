@@ -324,7 +324,8 @@ body.resizing-task-column * {
 .gantt-row .bar-lane {
   top: 0;
   right: 0;
-  z-index: 2;
+  /* Do not trap block controls below the global dependency layer. */
+  z-index: auto;
 }
 
 .task-row,
@@ -667,13 +668,13 @@ body.resizing-task-column * {
 }
 
 .dependencies {
-  /* Edges stay beneath every timeblock so their hit areas cannot cover a port. */
-  z-index: 1;
+  /* Existing relation paths stay above blocks, below their interactive controls. */
+  z-index: 4;
 }
 
 .task-bar {
-  /* This applies to tasks and summary sections alike. */
-  z-index: 5;
+  /* Bars remain below edges without creating a stacking context for their controls. */
+  z-index: auto;
 }
 
 .task-bar:not(.summary) {
@@ -950,7 +951,8 @@ body.resizing-task-column * {
 .timeblock-grip,
 .dependency-port {
   position: absolute;
-  z-index: 3;
+  /* Controls are promoted to the global layer above all dependency paths. */
+  z-index: 6;
   border: 0;
   padding: 0;
   opacity: 0;
@@ -988,8 +990,6 @@ body.resizing-task-column * {
 
 .dependency-port {
   top: 50%;
-  /* Keep the drag/drop target above SVG arrows and their hit areas. */
-  z-index: 6;
   width: 10px;
   height: 12px;
   margin-top: -6px;
