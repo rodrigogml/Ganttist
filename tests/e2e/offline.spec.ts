@@ -208,8 +208,10 @@ test('detects an available offline update only after reconnecting', async ({ pag
   await page.goto(`/projects/${projectId}/documents`)
   await expect(page.getByRole('button', { name: 'Atualizar offline' })).toBeDisabled()
   await page.route('**/offline-manifest', route => route.fulfill({ json: { data: manifest('snapshot-2') } }))
+  const manifestResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/offline-manifest'))
   await setOffline(context, false)
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await manifestResponse
   await expect(page.getByRole('button', { name: 'Atualização offline disponível' })).toBeVisible()
   expect(await offlineState(page)).toMatchObject({ records: 1, versions: ['snapshot-1'] })
 })
@@ -232,8 +234,10 @@ test('atomically replaces the old document cache only after a verified update', 
     body: Buffer.from(pdfBase64, 'base64'),
     headers: { 'Content-Type': 'application/pdf', 'Content-Length': '431', ETag: `"${pdfSha256}"` },
   }))
+  const manifestResponse = page.waitForResponse(response => new URL(response.url()).pathname.endsWith('/offline-manifest'))
   await setOffline(context, false)
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await manifestResponse
   const update = page.getByRole('button', { name: 'Atualização offline disponível' })
   await expect(update).toBeVisible()
   page.once('dialog', dialog => dialog.accept())
