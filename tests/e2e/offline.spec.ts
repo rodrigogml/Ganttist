@@ -221,6 +221,8 @@ test('atomically replaces the old document cache only after a verified update', 
   await seedPreparedProject(page, true)
   await setOffline(context, true)
   await page.goto(`/projects/${projectId}/documents`)
+  await expect(page.getByText('Plano offline')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Atualizar offline' })).toBeDisabled()
   const nextRevision = { ...revision, id: 'offline-revision-2', label: 'R02', sequence: 2, contentUrl: `${contentUrl}-2` }
   const nextManifest = {
     ...manifest('snapshot-2', true),
