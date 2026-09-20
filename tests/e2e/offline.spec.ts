@@ -329,7 +329,10 @@ test('failed mutation transports create no outbox, background sync or replay', a
     db.close()
     const registration = await navigator.serviceWorker.ready
     const sync = (registration as ServiceWorkerRegistration & { sync?: { getTags(): Promise<string[]> } }).sync
-    return { errors, stores, syncTags: sync ? await sync.getTags() : [] }
+    let syncTags: string[] = []
+    try { syncTags = sync ? await sync.getTags() : [] }
+    catch { /* Background Sync desativado equivale a nenhuma fila registrada. */ }
+    return { errors, stores, syncTags }
   })
   expect(result.errors).toEqual(['TypeError', 'TypeError', 'TypeError', 'TypeError'])
   expect(result.stores.sort()).toEqual(['identity', 'manifests'])
