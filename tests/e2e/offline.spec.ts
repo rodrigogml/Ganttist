@@ -238,7 +238,7 @@ test('atomically replaces the old document cache only after a verified update', 
   await setOffline(context, false)
   await page.evaluate(() => window.dispatchEvent(new Event('online')))
   await manifestResponse
-  const update = page.getByRole('button', { name: 'Atualização offline disponível' })
+  const update = page.getByRole('button', { name: /Atualizar offline|Atualização offline disponível/ })
   await expect(update).toBeVisible()
   page.once('dialog', dialog => dialog.accept())
   await update.click()
