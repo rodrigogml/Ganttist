@@ -4,5 +4,5 @@ export interface Task { id:string; title:string; description?:string|null; kind:
 export interface Collaborator { id:string; name:string; email?:string|null }
 export interface TaskComment { id:string; content:string; author_id:string; author_name?:string|null; posted_at?:string|null; editable:boolean }
 export interface TaskTable { id:string; document:Record<string, unknown>; document_version:number; author_id:string; author_name?:string|null; posted_at?:string|null; editable:boolean }
-export interface Dependency { id:string; from:string; to:string; type:'FS'|'SS'|'FF'|'SF'; critical:boolean }
+export interface Dependency { id:string; from:string; from_kind?:'task'|'section'; to:string; to_kind?:'task'|'section'; type:'FS'|'SS'|'FF'|'SF'; critical:boolean; constraint_state?:'active'|'violated' }
 export interface Workspace { project:{id:string;name:string;source:string;sync_status:string;updated_at:string;role?:'owner'|'editor'|'reader'}; calendar?:{timezone:string;working_days:number[];rescheduling_mode?:'MANUAL'|'AUTOMATIC';projection_policy?:'PRESERVE_DURATION'|'PRESERVE_DEADLINE'}; people?:Collaborator[]; tasks:Task[]; dependencies:Dependency[]; stats:{progress:number;completed:number;total:number;critical:number;opened?:number;blocked?:number;scheduled?:number;late?:number;in_progress?:number;without_dates?:number} }

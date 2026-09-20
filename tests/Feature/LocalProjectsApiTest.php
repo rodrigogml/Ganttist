@@ -268,8 +268,8 @@ final class LocalProjectsApiTest extends TestCase
             ->assertOk()
             ->assertJsonPath('data.type', 'FF');
 
-        $this->assertDatabaseHas('project_task_dependencies', ['id' => $dependency, 'type' => 'FF']);
-        $this->assertDatabaseMissing('project_task_dependencies', ['id' => $dependency, 'type' => 'FS']);
+        $this->assertDatabaseHas('project_schedule_dependencies', ['id' => $dependency, 'type' => 'FF', 'predecessor_kind' => 'task', 'successor_kind' => 'task']);
+        $this->assertDatabaseMissing('project_schedule_dependencies', ['id' => $dependency, 'type' => 'FS']);
     }
 
     public function test_workspace_exposes_the_local_critical_path_for_tasks_sections_and_dependencies(): void
@@ -315,6 +315,23 @@ final class LocalProjectsApiTest extends TestCase
         $this->assertSame('2026-09-16', $byId[$child]['considered_deadline']);
         $this->assertArrayNotHasKey('considered_start', $byId[$empty]);
         $this->assertArrayNotHasKey('considered_deadline', $byId[$empty]);
+    }
+
+    public function test_section_dependencies_project_descendants_without_overriding_later_planned_dates(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'section-dependencies'])->json('data.id');
+        $section = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/sections", ['name' => 'Execução'])->json('data.id');
+        $source = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Liberar', 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-08'])->json('data.id');
+        $early = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Interna cedo', 'sectionId' => $section, 'plannedStart' => '2026-09-07', 'plannedFinish' => '2026-09-07'])->json('data.id');
+        $late = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Interna tarde', 'sectionId' => $section, 'plannedStart' => '2026-09-14', 'plannedFinish' => '2026-09-14'])->json('data.id');
+
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $source, 'fromKind' => 'task', 'to' => $section, 'toKind' => 'section', 'type' => 'FS'])
+            ->assertCreated()->assertJsonPath('data.to_kind', 'section');
+
+        $rows = collect($this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->json('data.tasks'))->keyBy('id');
+        $this->assertSame('2026-09-09', $rows[$early]['considered_start']);
+        $this->assertSame('2026-09-14', $rows[$late]['considered_start']);
     }
 
     public function test_section_can_be_moved_to_root_and_workspace_keeps_groups_together(): void
@@ -368,7 +385,7 @@ final class LocalProjectsApiTest extends TestCase
 
         $this->assertDatabaseHas('project_tasks', ['id' => $copy, 'title' => 'Original - Copia', 'priority' => 3, 'completed_at' => '2026-08-26']);
         $this->assertDatabaseHas('project_task_comments', ['task_id' => $copy, 'content' => 'Comentário']);
-        $this->assertDatabaseHas('project_task_dependencies', ['predecessor_task_id' => $copy, 'successor_task_id' => $other, 'type' => 'FS']);
+        $this->assertDatabaseHas('project_schedule_dependencies', ['predecessor_kind' => 'task', 'predecessor_id' => $copy, 'successor_kind' => 'task', 'successor_id' => $other, 'type' => 'FS']);
     }
 
     public function test_section_deletion_can_move_direct_children_to_root(): void

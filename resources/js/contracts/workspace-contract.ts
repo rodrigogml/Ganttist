@@ -44,6 +44,8 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
     const item = record(dependency, 'dependency')
     for (const field of ['id', 'from', 'to', 'type']) string(item[field], `dependency.${field}`)
     if (!['FS', 'SS', 'FF', 'SF'].includes(item.type as string) || typeof item.critical !== 'boolean') throw new Error('Contrato de workspace inválido: dependency.')
+    for (const field of ['from_kind', 'to_kind']) if (item[field] !== undefined && !['task', 'section'].includes(item[field] as string)) throw new Error('Contrato de workspace inválido: dependency endpoint kind.')
+    if (item.constraint_state !== undefined && !['active', 'violated'].includes(item.constraint_state as string)) throw new Error('Contrato de workspace inválido: dependency state.')
   }
 
   return data as unknown as Workspace

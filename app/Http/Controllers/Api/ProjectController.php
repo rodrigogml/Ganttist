@@ -3,7 +3,9 @@
 namespace App\Http\Controllers\Api;
 
 use App\Domain\Scheduling\Dependency;
+use App\Domain\Scheduling\ScheduleDependency;
 use App\Domain\Scheduling\SchedulingEngine;
+use App\Domain\Scheduling\SectionDependencyNormalizer;
 use App\Domain\Scheduling\TaskPlan;
 use App\Domain\Scheduling\TaskProjectionCalculator;
 use App\Domain\Scheduling\TaskProjectionInput;
@@ -93,14 +95,23 @@ final class ProjectController
                 'position' => (int) $item->position,
             ])->values()->all())
             ->all();
-        $dependencyRows = DB::table('project_task_dependencies')->where('project_id', $projectId)->get();
+        $dependencyRows = DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get();
         $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
         $calendar = new WorkCalendar;
-        $domainDependencies = $dependencyRows->map(fn (object $edge): Dependency => new Dependency(
-            $edge->predecessor_task_id,
-            $edge->successor_task_id,
-            $edge->type,
+        $sectionParents = $sections->pluck('parent_section_id', 'id')->all();
+        $taskSections = $tasks->pluck('section_id', 'id')->all();
+        $scheduleDependencies = $dependencyRows->map(fn (object $edge): ScheduleDependency => new ScheduleDependency(
+            $edge->predecessor_kind, $edge->predecessor_id, $edge->successor_kind, $edge->successor_id, $edge->type,
         ))->all();
+        $projectionInputs = $tasks->map(fn (object $task): TaskProjectionInput => new TaskProjectionInput(
+            $task->id,
+            $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
+            $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
+            $task->completed_at !== null,
+            $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
+        ))->all();
+        $sectionCalculation = (new SectionDependencyNormalizer($calendar))->calculate($projectionInputs, $taskSections, $sectionParents, $scheduleDependencies, $today);
+        $domainDependencies = $sectionCalculation['dependencies'];
         $calculation = (new SchedulingEngine($calendar))->schedule(
             $tasks->map(fn (object $task): TaskPlan => TaskPlan::fromDates(
                 $task->id,
@@ -115,18 +126,7 @@ final class ProjectController
             $today,
         );
         $criticalIds = array_fill_keys($calculation->criticalTaskIds, true);
-        $projections = (new TaskProjectionCalculator($calendar))->calculate(
-            $tasks->map(fn (object $task): TaskProjectionInput => new TaskProjectionInput(
-                $task->id,
-                $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
-                $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
-                $task->completed_at !== null,
-                $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
-            ))->all(),
-            $domainDependencies,
-            $today,
-        );
-        $sectionParents = $sections->pluck('parent_section_id', 'id')->all();
+        $projections = $sectionCalculation['projections'];
         $criticalSections = [];
         foreach ($tasks as $task) {
             if (! isset($criticalIds[$task->id])) {
@@ -200,7 +200,7 @@ final class ProjectController
             }
         }
         unset($row);
-        $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_task_id, 'to' => $edge->successor_task_id, 'type' => $edge->type, 'critical' => isset($criticalIds[$edge->predecessor_task_id], $criticalIds[$edge->successor_task_id])]);
+        $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_id, 'from_kind' => $edge->predecessor_kind, 'to' => $edge->successor_id, 'to_kind' => $edge->successor_kind, 'type' => $edge->type, 'critical' => isset($criticalIds[$edge->predecessor_id], $criticalIds[$edge->successor_id]), 'constraint_state' => 'active']);
         $people = DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']);
         $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
         $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['completed']));
@@ -273,7 +273,10 @@ final class ProjectController
                 }
             }
         }
-        DB::table('project_sections')->where('id', $sectionId)->update(['name' => trim($data['name']), 'parent_section_id' => $data['parentSectionId'] ?? null, 'updated_at' => now()]);
+        DB::transaction(function () use ($projectId, $sectionId, $data): void {
+            DB::table('project_sections')->where('id', $sectionId)->update(['name' => trim($data['name']), 'parent_section_id' => $data['parentSectionId'] ?? null, 'updated_at' => now()]);
+            abort_if($this->hasForbiddenScheduleDependencies($projectId), 422, 'A nova hierarquia tornaria uma dependência inválida.');
+        });
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $sectionId]]);
@@ -319,6 +322,7 @@ final class ProjectController
                 }
                 DB::table($siblingTable)->where('id', $sibling['id'])->where('project_id', $projectId)->update($changes);
             }
+            abort_if($this->hasForbiddenScheduleDependencies($projectId), 422, 'A nova hierarquia tornaria uma dependência inválida.');
             DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
         });
 
@@ -376,7 +380,12 @@ final class ProjectController
         if (array_key_exists('actualCompletionDate', $data)) {
             $changes['completed_at'] = $data['actualCompletionDate'];
         }
-        DB::table('project_tasks')->where('id', $taskId)->update($changes);
+        DB::transaction(function () use ($projectId, $taskId, $changes, $data): void {
+            DB::table('project_tasks')->where('id', $taskId)->update($changes);
+            if (array_key_exists('sectionId', $data)) {
+                abort_if($this->hasForbiddenScheduleDependencies($projectId), 422, 'A nova hierarquia tornaria uma dependência inválida.');
+            }
+        });
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $taskId]]);
@@ -452,7 +461,13 @@ final class ProjectController
     public function deleteTask(Request $request, string $projectId, string $taskId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $deleted = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->delete();
+        $deleted = DB::transaction(function () use ($projectId, $taskId): int {
+            DB::table('project_schedule_dependencies')->where('project_id', $projectId)->where(function ($query) use ($taskId): void {
+                $query->where(fn ($endpoint) => $endpoint->where('predecessor_kind', 'task')->where('predecessor_id', $taskId))
+                    ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'task')->where('successor_id', $taskId));
+            })->delete();
+            return DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->delete();
+        });
         abort_unless($deleted, 404, 'Tarefa não encontrada.');
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
@@ -491,10 +506,11 @@ final class ProjectController
             foreach (DB::table('projectTaskChecklistItem')->where('projectId', $projectId)->where('taskId', $task->id)->orderBy('position')->get() as $item) {
                 DB::table('projectTaskChecklistItem')->insert(['id' => (string) Str::ulid(), 'projectId' => $projectId, 'taskId' => $copyId, 'text' => $item->text, 'isCompleted' => false, 'position' => $item->position, 'createdAt' => now(), 'updatedAt' => now()]);
             }
-            foreach (DB::table('project_task_dependencies')->where('project_id', $projectId)->where(function ($query) use ($task): void {
-                $query->where('predecessor_task_id', $task->id)->orWhere('successor_task_id', $task->id);
+            foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->where(function ($query) use ($task): void {
+                $query->where(fn ($endpoint) => $endpoint->where('predecessor_kind', 'task')->where('predecessor_id', $task->id))
+                    ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'task')->where('successor_id', $task->id));
             })->get() as $dependency) {
-                DB::table('project_task_dependencies')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'predecessor_task_id' => $dependency->predecessor_task_id === $task->id ? $copyId : $dependency->predecessor_task_id, 'successor_task_id' => $dependency->successor_task_id === $task->id ? $copyId : $dependency->successor_task_id, 'type' => $dependency->type, 'created_at' => now(), 'updated_at' => now()]);
+                DB::table('project_schedule_dependencies')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'predecessor_kind' => $dependency->predecessor_kind, 'predecessor_id' => $dependency->predecessor_kind === 'task' && $dependency->predecessor_id === $task->id ? $copyId : $dependency->predecessor_id, 'successor_kind' => $dependency->successor_kind, 'successor_id' => $dependency->successor_kind === 'task' && $dependency->successor_id === $task->id ? $copyId : $dependency->successor_id, 'type' => $dependency->type, 'created_at' => now(), 'updated_at' => now()]);
             }
             DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
@@ -691,7 +707,10 @@ final class ProjectController
                 DB::table('project_sections')->where('id', $sectionId)->delete();
             });
         } else {
-            DB::table('project_sections')->where('id', $sectionId)->delete();
+            DB::transaction(function () use ($projectId, $sectionId): void {
+                $this->removeScheduleDependenciesForSection($projectId, $sectionId);
+                DB::table('project_sections')->where('id', $sectionId)->delete();
+            });
         }
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
@@ -701,37 +720,44 @@ final class ProjectController
     public function createDependency(Request $request, string $projectId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['from' => ['required', 'string'], 'to' => ['required', 'string', 'different:from'], 'type' => ['required', 'in:FS,SS,FF,SF']]);
-        abort_unless(DB::table('project_tasks')->where('project_id', $projectId)->whereIn('id', [$data['from'], $data['to']])->count() === 2, 422, 'Tarefas inválidas.');
-        abort_if(DB::table('project_task_dependencies')->where('project_id', $projectId)->where('predecessor_task_id', $data['from'])->where('successor_task_id', $data['to'])->where('type', $data['type'])->exists(), 422, 'Dependência duplicada.');
-        abort_if($this->wouldCycle($projectId, $data['from'], $data['to']), 422, 'Dependência criaria um ciclo.');
+        $data = $request->validate(['from' => ['required', 'string'], 'fromKind' => ['sometimes', 'in:task,section'], 'to' => ['required', 'string'], 'toKind' => ['sometimes', 'in:task,section'], 'type' => ['required', 'in:FS,SS,FF,SF']]);
+        $fromKind = $data['fromKind'] ?? 'task';
+        $toKind = $data['toKind'] ?? 'task';
+        abort_if($fromKind === $toKind && $data['from'] === $data['to'], 422, 'Um item não pode depender de si mesmo.');
+        abort_unless($this->scheduleEndpointExists($projectId, $fromKind, $data['from']) && $this->scheduleEndpointExists($projectId, $toKind, $data['to']), 422, 'Ponta de dependência inválida.');
+        abort_if(($fromKind === 'section' && $this->scheduleEndpointLeaves($projectId, $fromKind, $data['from']) === []) || ($toKind === 'section' && $this->scheduleEndpointLeaves($projectId, $toKind, $data['to']) === []), 422, 'Uma seção sem tarefas não pode participar de dependência temporal.');
+        abort_if($this->forbiddenScheduleRelation($projectId, $fromKind, $data['from'], $toKind, $data['to']), 422, 'Uma seção não pode se relacionar com ela própria, suas descendentes ou tarefas internas.');
+        abort_if(DB::table('project_schedule_dependencies')->where('project_id', $projectId)->where('predecessor_kind', $fromKind)->where('predecessor_id', $data['from'])->where('successor_kind', $toKind)->where('successor_id', $data['to'])->where('type', $data['type'])->exists(), 422, 'Dependência duplicada.');
+        abort_if($this->wouldScheduleCycle($projectId, $fromKind, $data['from'], $toKind, $data['to']), 422, 'Dependência criaria um ciclo.');
         $id = (string) Str::ulid();
-        DB::table('project_task_dependencies')->insert(['id' => $id, 'project_id' => $projectId, 'predecessor_task_id' => $data['from'], 'successor_task_id' => $data['to'], 'type' => $data['type'], 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('project_schedule_dependencies')->insert(['id' => $id, 'project_id' => $projectId, 'predecessor_kind' => $fromKind, 'predecessor_id' => $data['from'], 'successor_kind' => $toKind, 'successor_id' => $data['to'], 'type' => $data['type'], 'created_at' => now(), 'updated_at' => now()]);
 
-        return response()->json(['data' => ['id' => $id]], 201);
+        return response()->json(['data' => ['id' => $id, 'from' => $data['from'], 'from_kind' => $fromKind, 'to' => $data['to'], 'to_kind' => $toKind, 'type' => $data['type'], 'critical' => false, 'constraint_state' => 'active']], 201);
     }
 
     public function updateDependency(Request $request, string $projectId, string $dependencyId): JsonResponse
     {
         $this->editable($request, $projectId);
         $data = $request->validate(['type' => ['required', 'in:FS,SS,FF,SF']]);
-        $dependency = DB::table('project_task_dependencies')
+        $dependency = DB::table('project_schedule_dependencies')
             ->where('id', $dependencyId)
             ->where('project_id', $projectId)
             ->first();
         abort_unless($dependency, 404, 'Dependência não encontrada.');
         abort_if(
-            DB::table('project_task_dependencies')
+            DB::table('project_schedule_dependencies')
                 ->where('project_id', $projectId)
-                ->where('predecessor_task_id', $dependency->predecessor_task_id)
-                ->where('successor_task_id', $dependency->successor_task_id)
+                ->where('predecessor_kind', $dependency->predecessor_kind)
+                ->where('predecessor_id', $dependency->predecessor_id)
+                ->where('successor_kind', $dependency->successor_kind)
+                ->where('successor_id', $dependency->successor_id)
                 ->where('type', $data['type'])
                 ->where('id', '!=', $dependencyId)
                 ->exists(),
             422,
             'Essa dependência já existe.',
         );
-        DB::table('project_task_dependencies')
+        DB::table('project_schedule_dependencies')
             ->where('id', $dependencyId)
             ->update(['type' => $data['type'], 'updated_at' => now()]);
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
@@ -742,7 +768,7 @@ final class ProjectController
     public function deleteDependency(Request $request, string $projectId, string $dependencyId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $deleted = DB::table('project_task_dependencies')->where('id', $dependencyId)->where('project_id', $projectId)->delete();
+        $deleted = DB::table('project_schedule_dependencies')->where('id', $dependencyId)->where('project_id', $projectId)->delete();
         abort_unless($deleted, 404, 'Dependência não encontrada.');
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
@@ -1074,28 +1100,78 @@ final class ProjectController
         return $task->planned_start || $task->planned_finish ? 'in_progress' : 'opened';
     }
 
-    private function wouldCycle(string $projectId, string $from, string $to): bool
+    private function scheduleEndpointExists(string $projectId, string $kind, string $id): bool
     {
-        $edges = DB::table('project_task_dependencies')->where('project_id', $projectId)->get(['predecessor_task_id', 'successor_task_id']);
-        $graph = [];
-        foreach ($edges as $edge) {
-            $graph[$edge->successor_task_id][] = $edge->predecessor_task_id;
+        return DB::table($kind === 'section' ? 'project_sections' : 'project_tasks')->where('project_id', $projectId)->where('id', $id)->exists();
+    }
+
+    private function hasForbiddenScheduleDependencies(string $projectId): bool
+    {
+        foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get() as $dependency) {
+            if ($this->forbiddenScheduleRelation($projectId, $dependency->predecessor_kind, $dependency->predecessor_id, $dependency->successor_kind, $dependency->successor_id)) return true;
         }
-        $stack = [$from];
-        $seen = [];
-        while ($stack) {
-            $node = array_pop($stack);
-            if ($node === $to) {
-                return true;
-            } if (isset($seen[$node])) {
-                continue;
-            } $seen[$node] = true;
-            foreach ($graph[$node] ?? [] as $next) {
-                $stack[] = $next;
+        return false;
+    }
+
+    private function forbiddenScheduleRelation(string $projectId, string $fromKind, string $fromId, string $toKind, string $toId): bool
+    {
+        return ($fromKind === 'section' && $this->sectionContainsEndpoint($projectId, $fromId, $toKind, $toId))
+            || ($toKind === 'section' && $this->sectionContainsEndpoint($projectId, $toId, $fromKind, $fromId));
+    }
+
+    private function sectionContainsEndpoint(string $projectId, string $sectionId, string $kind, string $id): bool
+    {
+        if ($kind === 'section') return $this->sectionIsDescendantOf($projectId, $id, $sectionId);
+        $section = DB::table('project_tasks')->where('project_id', $projectId)->where('id', $id)->value('section_id');
+        return $section !== null && $this->sectionIsDescendantOf($projectId, $section, $sectionId);
+    }
+
+    private function wouldScheduleCycle(string $projectId, string $fromKind, string $fromId, string $toKind, string $toId): bool
+    {
+        $graph = [];
+        foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get(['predecessor_kind', 'predecessor_id', 'successor_kind', 'successor_id']) as $edge) {
+            foreach ($this->scheduleEndpointLeaves($projectId, $edge->predecessor_kind, $edge->predecessor_id) as $source) {
+                foreach ($this->scheduleEndpointLeaves($projectId, $edge->successor_kind, $edge->successor_id) as $target) $graph[$source][] = $target;
             }
         }
-
+        foreach ($this->scheduleEndpointLeaves($projectId, $toKind, $toId) as $start) {
+            $pending = [$start];
+            $seen = [];
+            while ($pending !== []) {
+                $node = array_pop($pending);
+                if (in_array($node, $this->scheduleEndpointLeaves($projectId, $fromKind, $fromId), true)) return true;
+                if (isset($seen[$node])) continue;
+                $seen[$node] = true;
+                foreach ($graph[$node] ?? [] as $next) $pending[] = $next;
+            }
+        }
         return false;
+    }
+
+    /** @return list<string> */
+    private function scheduleEndpointLeaves(string $projectId, string $kind, string $id): array
+    {
+        if ($kind === 'task') return [$id];
+        $sectionIds = [$id];
+        for ($index = 0; $index < count($sectionIds); $index++) {
+            foreach (DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionIds[$index])->pluck('id') as $child) $sectionIds[] = $child;
+        }
+        return DB::table('project_tasks')->where('project_id', $projectId)->whereIn('section_id', $sectionIds)->pluck('id')->all();
+    }
+
+    private function removeScheduleDependenciesForSection(string $projectId, string $sectionId): void
+    {
+        $sectionIds = [$sectionId];
+        for ($index = 0; $index < count($sectionIds); $index++) {
+            foreach (DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionIds[$index])->pluck('id') as $child) $sectionIds[] = $child;
+        }
+        $taskIds = DB::table('project_tasks')->where('project_id', $projectId)->whereIn('section_id', $sectionIds)->pluck('id')->all();
+        DB::table('project_schedule_dependencies')->where('project_id', $projectId)->where(function ($query) use ($sectionIds, $taskIds): void {
+            $query->where(fn ($endpoint) => $endpoint->where('predecessor_kind', 'section')->whereIn('predecessor_id', $sectionIds))
+                ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'section')->whereIn('successor_id', $sectionIds));
+            if ($taskIds !== []) $query->orWhere(fn ($endpoint) => $endpoint->where('predecessor_kind', 'task')->whereIn('predecessor_id', $taskIds))
+                ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'task')->whereIn('successor_id', $taskIds));
+        })->delete();
     }
 
     private function nextSiblingPosition(string $projectId, ?string $parentSectionId): int

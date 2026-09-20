@@ -527,7 +527,6 @@ const relationCandidates = computed(() => {
     return (store.workspace?.tasks ?? [])
         .filter(
             (task) =>
-                task.kind === "task" &&
                 task.id !== activeTask.value?.id &&
                 activeRelationQuery.value.matches(task.title),
         )
@@ -546,8 +545,6 @@ const relationModalValidation = computed(() => {
     if (!modal?.type || !current || !selected) return "";
     const from = modal.direction === "predecessor" ? selected.id : current.id,
         to = modal.direction === "predecessor" ? current.id : selected.id;
-    if (isExpandable(selected) && modal.direction === "dependent")
-        return "Grupos podem ser somente predecessores.";
     if (
         (store.workspace?.dependencies ?? []).some(
             (item) =>
@@ -785,10 +782,8 @@ const canDragTask = (task: Task) =>
     !task.derived &&
     !isExpandable(task);
 const canResizeTask = (task: Task) => canDragTask(task);
-const canConnectFrom = (task: Task) =>
-    canMutateProject.value && task.kind === "task";
-const canConnectTo = (task: Task) =>
-    canMutateProject.value && task.kind === "task" && !isExpandable(task);
+const canConnectFrom = (task: Task) => canMutateProject.value && (task.kind === "task" || task.kind === "section");
+const canConnectTo = (task: Task) => canMutateProject.value && (task.kind === "task" || task.kind === "section");
 const visibleTasks = computed(() => {
     const all = new Map(store.tasks.map((task) => [task.id, task]));
     return store.tasks.filter((task) => {
@@ -2159,6 +2154,8 @@ async function createDependency(
     from: string,
     to: string,
     type: "FS" | "SS" | "FF" | "SF",
+    fromKind: "task" | "section" = "task",
+    toKind: "task" | "section" = "task",
 ) {
     const projectId = store.workspace?.project.id;
     if (!projectId) throw new Error("Projeto não carregado.");
@@ -2169,7 +2166,7 @@ async function createDependency(
             Accept: "application/json",
             ...csrfHeaders(),
         },
-        body: JSON.stringify({ from, to, type }),
+        body: JSON.stringify({ from, to, type, fromKind, toKind }),
     });
     if (!response.ok)
         throw new Error(
@@ -2330,11 +2327,15 @@ async function confirmRelationModal() {
         relationModalValidation.value
     )
         return;
-    const from = modal.direction === "predecessor" ? modal.selectedId : task.id,
-        to = modal.direction === "predecessor" ? task.id : modal.selectedId;
+    const selected = selectedRelationTask.value;
+    if (!selected) return;
+    const from = modal.direction === "predecessor" ? selected.id : task.id,
+        to = modal.direction === "predecessor" ? task.id : selected.id,
+        fromKind = modal.direction === "predecessor" ? selected.kind : task.kind,
+        toKind = modal.direction === "predecessor" ? task.kind : selected.kind;
     relationBusy.value = true;
     try {
-        await createDependency(from, to, modal.type);
+        await createDependency(from, to, modal.type, fromKind, toKind);
         relationModal.value = null;
         showToast("Relação criada", "success");
     } catch (error) {
@@ -2622,12 +2623,6 @@ function connectionValidation(task: Task, endpoint: TimeEndpoint) {
             reason: "Uma tarefa não pode depender dela mesma.",
             type,
         };
-    if (!canConnectTo(task))
-        return {
-            valid: false,
-            reason: "Grupos podem ser somente predecessores.",
-            type,
-        };
     if (
         (store.workspace?.dependencies ?? []).some(
             (item) =>
@@ -2736,11 +2731,9 @@ async function commitConnectionGesture() {
     }
     gesture.committing = true;
     try {
-        const dependency = await createDependency(
-            gesture.taskId,
-            target.id,
-            validation.type,
-        );
+        const source = visibleTasks.value.find((task) => task.id === gesture.taskId);
+        if (!source) throw new Error("Origem da dependência não encontrada.");
+        const dependency = await createDependency(gesture.taskId, target.id, validation.type, source.kind, target.kind);
         undoDependencyId.value = dependency.id;
         showToast(
             `Dependência ${validation.type} criada. Desfazer?`,
