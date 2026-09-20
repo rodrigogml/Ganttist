@@ -115,7 +115,7 @@ jobs:
           npm run test:e2e -- --reporter=line 2>&1 | tee pwa-test.log
           status=${PIPESTATUS[0]}
           if [ "$status" -ne 0 ]; then
-            diagnostics=$(grep -E 'failed|Error|Timeout|expect\(|›' pwa-test.log | tail -n 40)
+            diagnostics=$(grep -E 'failed \(|Error:|Timeout|Locator:|Expected:|Received:|Call log:|waiting for|at .*offline\.spec' pwa-test.log | tail -n 40)
             if [ -z "$diagnostics" ]; then diagnostics=$(tail -n 30 pwa-test.log); fi
             while IFS= read -r line; do printf '::error::%s\n' "$line"; done <<< "$diagnostics"
           fi
