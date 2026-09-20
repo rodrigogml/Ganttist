@@ -668,6 +668,8 @@ body.resizing-task-column * {
 
 .task-bar:not(.summary) {
   overflow: visible;
+  /* Ports must remain reachable when an existing dependency ends at this bar. */
+  z-index: 5;
 }
 
 .task-bar.provisional {
@@ -978,6 +980,8 @@ body.resizing-task-column * {
 
 .dependency-port {
   top: 50%;
+  /* Keep the drag/drop target above SVG arrows and their hit areas. */
+  z-index: 6;
   width: 10px;
   height: 12px;
   margin-top: -6px;
