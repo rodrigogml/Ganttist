@@ -89,6 +89,8 @@ jobs:
           php artisan documents:readiness --write
       - name: Run frontend suite and type checks
         shell: bash
+        env:
+          LARAVEL_BYPASS_ENV_CHECK: '1'
         run: |
           set +e
           npm test 2>&1 | tee frontend-test.log
