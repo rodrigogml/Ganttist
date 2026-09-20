@@ -88,9 +88,20 @@ jobs:
           php artisan migrate --force
           php artisan documents:readiness --write
       - name: Run frontend suite and type checks
+        shell: bash
         run: |
-          npm test
-          npx vue-tsc --noEmit
+          set +e
+          npm test 2>&1 | tee frontend-test.log
+          test_status=${PIPESTATUS[0]}
+          npx vue-tsc --noEmit 2>&1 | tee frontend-typecheck.log
+          type_status=${PIPESTATUS[0]}
+          if [ "$test_status" -ne 0 ] || [ "$type_status" -ne 0 ]; then
+            diagnostics=$(grep -E 'FAIL|Error|error TS|Test Files|Tests ' frontend-test.log frontend-typecheck.log | tail -n 30)
+            if [ -z "$diagnostics" ]; then diagnostics=$(tail -n 15 frontend-test.log; tail -n 15 frontend-typecheck.log); fi
+            while IFS= read -r line; do printf '::error::%s\n' "$line"; done <<< "$diagnostics"
+          fi
+          if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
+          exit "$type_status"
       - name: Build production assets
         run: npm run build
       - name: Install Playwright browser
