@@ -69,7 +69,7 @@ return new class extends Migration
             $table->timestamps();
             $table->unique(['document_id', 'revision_sequence']);
             $table->index(['document_id', 'created_at']);
-            $table->index(['derivation_id', 'source_revision_id']);
+            $table->index(['derivation_id', 'source_revision_id'], 'project_revision_provenance_idx');
         });
 
         Schema::create('project_document_derivation_runs', function (Blueprint $table): void {
