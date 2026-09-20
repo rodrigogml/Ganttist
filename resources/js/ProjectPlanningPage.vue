@@ -9,6 +9,7 @@ import {
     watch,
 } from "vue";
 import AuthGate from "./AuthGate.vue";
+import ProjectTopBar from "./ProjectTopBar.vue";
 import AccountPanel from "./AccountPanel.vue";
 import ProjectMembersPanel from "./ProjectMembersPanel.vue";
 import ProjectDashboard from "./ProjectDashboard.vue";
@@ -45,8 +46,8 @@ import { dependencyPath, dependencyStub } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
 import { parseTaskQuery } from "./utils/task-query";
 import { apiFetch, connectivity } from "./lib/api";
-import { features } from "./lib/features";
 import { useRouter } from "vue-router";
+import { spacing } from "./composables/useAppearancePreferences";
 const store = useWorkspaceStore();
 const auth = useAuthStore();
 const router = useRouter();
@@ -57,19 +58,9 @@ function syncProjectRoute() {
     projectView.value = (routeMatch()?.[2] as ProjectView | undefined) ?? "gantt";
     if (projectView.value !== "documents") activeView.value = projectView.value;
 }
-function navigateProjectView(view: ProjectView) {
-    const projectId = store.workspace?.project.id;
-    if (!projectId) return;
-    projectView.value = view;
-    if (view !== "documents") activeView.value = view;
-    void router.push(`/projects/${projectId}/${view}`);
-}
 const RichMarkdownEditor = defineAsyncComponent(
     () => import("./RichMarkdownEditor.vue"),
 );
-const appearance = ref(false),
-    textScale = ref<"compact" | "comfortable" | "large">("comfortable"),
-    spacing = ref<"compact" | "comfortable" | "spacious">("comfortable");
 const csrfHeaders = (): Record<string, string> => {
     const token = document.querySelector<HTMLMetaElement>(
         'meta[name="csrf-token"]',
@@ -109,23 +100,9 @@ onMounted(async () => {
     document.addEventListener("pointerdown", closeFloatingMenusOnOutside);
     window.addEventListener("keydown", focusTaskSearchFromShortcut);
     window.addEventListener("popstate", syncProjectRoute);
-    const savedText = localStorage.getItem("ganttist.text-scale"),
-        savedSpacing = localStorage.getItem("ganttist.spacing"),
-        savedEditorWidth = Number(
+    const savedEditorWidth = Number(
             localStorage.getItem("ganttist.task-editor-width"),
         );
-    if (
-        savedText === "compact" ||
-        savedText === "comfortable" ||
-        savedText === "large"
-    )
-        textScale.value = savedText;
-    if (
-        savedSpacing === "compact" ||
-        savedSpacing === "comfortable" ||
-        savedSpacing === "spacious"
-    )
-        spacing.value = savedSpacing;
     editorPinned.value =
         localStorage.getItem("ganttist.task-editor-pinned") === "1";
     if (Number.isFinite(savedEditorWidth) && savedEditorWidth > 0)
@@ -152,10 +129,6 @@ onUnmounted(() => {
     stopTaskColumnResize();
     stopStructureDrag();
 });
-watch([textScale, spacing], () => {
-    localStorage.setItem("ganttist.text-scale", textScale.value);
-    localStorage.setItem("ganttist.spacing", spacing.value);
-});
 type ToastKind = "success" | "error" | "info";
 type AppNotification = { message: string; kind: ToastKind };
 const drawer = ref(false),
@@ -165,11 +138,7 @@ const drawer = ref(false),
     hierarchyMenu = ref(false),
     account = ref(false),
     responsiblePanel = ref(false),
-    settingsMenu = ref(false),
     historyPanel = ref(false),
-    projectMenu = ref(false),
-    projectLoading = ref(false),
-    projects = ref<{ id: string; name: string }[]>([]),
     creationMenu = ref(false),
     deleting = ref(false),
     preserveContinuity = ref(true),
@@ -295,9 +264,6 @@ const hierarchyButton = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
     dependencyContextMenuElement = ref<HTMLElement | null>(null),
     dependencyPickerMenuElement = ref<HTMLElement | null>(null),
-    appearanceWrap = ref<HTMLElement | null>(null),
-    settingsWrap = ref<HTMLElement | null>(null),
-    projectSwitcher = ref<HTMLElement | null>(null),
     editorPriorityWrap = ref<HTMLElement | null>(null);
 const quickAssigneeMenu = ref<{
     taskId: string;
@@ -1097,8 +1063,6 @@ function toggleColumnsMenu(event: MouseEvent) {
 }
 function closeFloatingMenusOnOutside(event: PointerEvent) {
     const target = event.target as Node;
-    if (projectMenu.value && !projectSwitcher.value?.contains(target))
-        projectMenu.value = false;
     if (
         columnsMenu.value &&
         !columnPickerButton.value?.contains(target) &&
@@ -1140,10 +1104,6 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         !(target instanceof Element && target.closest("[data-quick-assignee-trigger]"))
     )
         quickAssigneeMenu.value = null;
-    if (appearance.value && !appearanceWrap.value?.contains(target))
-        appearance.value = false;
-    if (settingsMenu.value && !settingsWrap.value?.contains(target))
-        settingsMenu.value = false;
     if (
         editorPriorityMenu.value &&
         !editorPriorityWrap.value?.contains(target)
@@ -1972,7 +1932,6 @@ function returnToProjectDashboard() {
         return;
     }
     finishTaskEditorClose(false);
-    projectMenu.value = false;
     store.clearWorkspace();
 }
 function continueTaskEditing() {
@@ -2185,46 +2144,6 @@ function rowKeydown(task: Task, event: KeyboardEvent) {
 }
 function taskTitle(id: string) {
     return store.workspace?.tasks.find((task) => task.id === id)?.title ?? id;
-}
-async function toggleProjectMenu() {
-    projectMenu.value = !projectMenu.value;
-    if (!projectMenu.value || projects.value.length) return;
-    projectLoading.value = true;
-    try {
-        const response = await apiFetch("/api/v1/projects", {
-            headers: { Accept: "application/json" },
-        });
-        if (!response.ok)
-            throw new Error("Não foi possível carregar os projetos.");
-        projects.value = (await response.json()).data;
-    } catch (error) {
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível carregar projetos.",
-            "error",
-        );
-        projectMenu.value = false;
-        setTimeout(() => (toast.value = ""), 3500);
-    } finally {
-        projectLoading.value = false;
-    }
-}
-async function switchProject(project: { id: string; name: string }) {
-    try {
-        projectMenu.value = false;
-        await store.load(project.id);
-        await router.push(`/projects/${project.id}/${projectView.value}`);
-        showToast(`Projeto ${project.name} selecionado`, "success");
-    } catch (error) {
-        showToast(
-            error instanceof Error
-                ? error.message
-                : "Não foi possível trocar o projeto.",
-            "error",
-        );
-    }
-    setTimeout(() => (toast.value = ""), 3500);
 }
 async function responseError(response: Response, fallback: string) {
     try {
@@ -3012,6 +2931,10 @@ function statusLabel(s: string) {
         } as Record<string, string>
     )[s];
 }
+function showTopBarNotice(message: string, kind: ToastKind) {
+    showToast(message, kind);
+    window.setTimeout(() => (toast.value = ""), 3500);
+}
 </script>
 
 <template>
@@ -3031,123 +2954,18 @@ function statusLabel(s: string) {
         v-else
         class="app-shell"
         :class="[
-            `text-${textScale}`,
-            `space-${spacing}`,
             { 'editor-pinned': drawer && (activeTask || sectionDraft) && editorPinned },
         ]"
         :style="{ '--task-editor-width': editorWidth + 'px' }"
     >
-        <header class="topbar">
-            <div class="brand">
-                <span class="brand-mark"><img :src="'/brand/logo-square.png'" alt="" /></span
-                ><strong>Ganttist</strong>
-            </div>
-            <button
-                type="button"
-                class="project-dashboard-back"
-                aria-label="Voltar para seus projetos"
-                title="Voltar para seus projetos"
-                @click="returnToProjectDashboard"
-            >
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                    <path d="M19 12H5m6-6-6 6 6 6" />
-                </svg>
-            </button>
-            <div ref="projectSwitcher" class="project-switcher">
-                <span class="eyebrow">PROJETO</span
-                ><button
-                    :aria-expanded="projectMenu"
-                    aria-haspopup="listbox"
-                    @click="toggleProjectMenu"
-                >
-                    <span class="project-dot"></span
-                    >{{ store.workspace?.project.name || "Carregando…" }}
-                    <span class="chevron">⌄</span>
-                </button>
-                <div
-                    v-if="projectMenu"
-                    class="project-menu"
-                    role="listbox"
-                    aria-label="Projetos"
-                >
-                    <span v-if="projectLoading">Carregando projetos…</span
-                    ><button
-                        v-for="project in projects"
-                        :key="project.id"
-                        role="option"
-                        :aria-selected="
-                            project.id === store.workspace?.project.id
-                        "
-                        @click="() => switchProject(project)"
-                    >
-                        {{ project.name }}
-                    </button>
-                </div>
-            </div>
-            <nav class="project-view-nav" aria-label="Áreas do projeto">
-                <button :class="{ active: projectView !== 'documents' }" @click="navigateProjectView(activeView)">Planejamento</button>
-                <button v-if="features.documents" :class="{ active: projectView === 'documents' }" @click="navigateProjectView('documents')">Documentos</button>
-            </nav>
-            <div class="top-actions">
-                <div ref="appearanceWrap" class="appearance-wrap">
-                    <button
-                        class="icon-btn appearance-btn"
-                        aria-label="Aparência"
-                        title="Aparência"
-                        @click="appearance = !appearance"
-                    >
-                        A<span>a</span>
-                    </button>
-                    <div v-if="appearance" class="appearance-menu">
-                        <b>Aparência</b
-                        ><label
-                            >Tamanho do texto<select v-model="textScale">
-                                <option value="compact">Menor</option>
-                                <option value="comfortable">Confortável</option>
-                                <option value="large">Maior</option>
-                            </select></label
-                        ><label
-                            >Espaçamento<select v-model="spacing">
-                                <option value="compact">Compacto</option>
-                                <option value="comfortable">Confortável</option>
-                                <option value="spacious">Espaçoso</option>
-                            </select></label
-                        >
-                    </div>
-                </div>
-                <div ref="settingsWrap" class="settings-wrap">
-                    <button
-                        class="icon-btn settings-trigger"
-                        aria-label="Abrir configurações do projeto"
-                        title="Configurações"
-                        aria-haspopup="menu"
-                        :aria-expanded="settingsMenu"
-                        @click="settingsMenu = !settingsMenu"
-                    >
-                        <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" />
-                            <path d="M19.4 13.15c.05-.38.05-.77 0-1.15l1.74-1.35-1.8-3.12-2.04.82a8.2 8.2 0 0 0-1-.58L16 5.6h-3.6l-.3 2.17c-.35.16-.68.35-1 .58l-2.04-.82-1.8 3.12L9 12c-.05.38-.05.77 0 1.15L7.26 14.5l1.8 3.12 2.04-.82c.32.23.65.42 1 .58l.3 2.17H16l.3-2.17c.35-.16.68-.35 1-.58l2.04.82 1.8-3.12-1.74-1.35Z" />
-                        </svg>
-                    </button>
-                    <div v-if="settingsMenu" class="settings-menu" role="menu" aria-label="Configurações do projeto">
-                        <button role="menuitem" :disabled="!connectivity.online.value" @click="settingsMenu = false; responsiblePanel = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg><span>Responsáveis</span></button>
-                    </div>
-                </div>
-                <button
-                    class="avatar"
-                    aria-label="Abrir sessões e configurações da conta"
-                    :aria-expanded="account"
-                    aria-haspopup="dialog"
-                    @click="account = true"
-                >
-                    {{
-                        (auth.user.name || auth.user.email)
-                            .slice(0, 2)
-                            .toUpperCase()
-                    }}
-                </button>
-            </div>
-        </header>
+        <ProjectTopBar
+            active-area="planning"
+            :planning-view="activeView"
+            @back="returnToProjectDashboard"
+            @account="account = true"
+            @manage-members="responsiblePanel = true"
+            @notice="showTopBarNotice"
+        />
 
         <div v-if="!connectivity.online.value" class="global-offline-banner">OFFLINE — SOMENTE LEITURA · Alterações exigem conexão com o servidor.</div>
 
