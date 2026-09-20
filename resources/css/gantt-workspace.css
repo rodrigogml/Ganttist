@@ -666,10 +666,18 @@ body.resizing-task-column * {
   background: #e86c68;
 }
 
+.dependencies {
+  /* Edges stay beneath every timeblock so their hit areas cannot cover a port. */
+  z-index: 1;
+}
+
+.task-bar {
+  /* This applies to tasks and summary sections alike. */
+  z-index: 5;
+}
+
 .task-bar:not(.summary) {
   overflow: visible;
-  /* Ports must remain reachable when an existing dependency ends at this bar. */
-  z-index: 5;
 }
 
 .task-bar.provisional {
