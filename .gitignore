@@ -24,3 +24,7 @@
 Homestead.json
 Homestead.yaml
 Thumbs.db
+__pycache__/
+*.py[cod]
+/test-results/
+/playwright-report/

@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue'
+import { apiFetch } from './lib/api'
 
 type Event = { id: string; action: string; origin: string; subjectType: string | null; subjectId: string | null; causationId: string | null; occurredAt: string; before: Record<string, unknown> | null; after: Record<string, unknown> | null }
 const props = defineProps<{ open: boolean }>()
 const emit = defineEmits<{ close: [] }>()
 const events = ref<Event[]>([]), loading = ref(false), error = ref(''), cursor = ref<string | null>(null), hasMore = ref(false), origin = ref(''), action = ref('')
 
-async function load(reset = true): Promise<void> { loading.value = true; error.value = ''; try { const params = new URLSearchParams(); if (!reset && cursor.value) params.set('cursor', cursor.value); if (origin.value) params.set('origin', origin.value); if (action.value) params.set('action', action.value); const response = await fetch(`/api/v1/audit-events?${params}`, { headers: { Accept: 'application/json' } }); if (!response.ok) throw new Error('Não foi possível carregar o histórico.'); const body = await response.json(); events.value = reset ? body.data : [...events.value, ...body.data]; cursor.value = body.meta.nextCursor; hasMore.value = body.meta.hasMore } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível carregar o histórico.' } finally { loading.value = false } }
+async function load(reset = true): Promise<void> { loading.value = true; error.value = ''; try { const params = new URLSearchParams(); if (!reset && cursor.value) params.set('cursor', cursor.value); if (origin.value) params.set('origin', origin.value); if (action.value) params.set('action', action.value); const response = await apiFetch(`/api/v1/audit-events?${params}`, { headers: { Accept: 'application/json' } }); if (!response.ok) throw new Error('Não foi possível carregar o histórico.'); const body = await response.json(); events.value = reset ? body.data : [...events.value, ...body.data]; cursor.value = body.meta.nextCursor; hasMore.value = body.meta.hasMore } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível carregar o histórico.' } finally { loading.value = false } }
 watch(() => props.open, open => { if (open) load() })
 </script>
 

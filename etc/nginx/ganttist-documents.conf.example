@@ -1,0 +1,8 @@
+# Include inside the Ganttist server block. The extra 20 MiB covers multipart framing.
+client_max_body_size 520m;
+client_body_timeout 600s;
+
+# Include inside the PHP location when Nginx fronts PHP-FPM.
+# This prevents Nginx from retaining the complete upload before forwarding it.
+fastcgi_request_buffering off;
+fastcgi_read_timeout 600s;

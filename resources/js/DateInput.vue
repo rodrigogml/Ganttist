@@ -3,7 +3,7 @@ import { ref } from "vue";
 
 defineOptions({ inheritAttrs: false });
 
-defineProps<{ modelValue: string | null }>();
+defineProps<{ modelValue: string | null | undefined }>();
 const emit = defineEmits<{ "update:modelValue": [value: string | null] }>();
 const input = ref<HTMLInputElement | null>(null);
 

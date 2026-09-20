@@ -11,6 +11,7 @@ import MarkdownContent from "./MarkdownContent.vue";
 import type { Collaborator, Task, TaskComment, TaskTable } from "./types";
 import { createEmptyTaskTableDocument, type TaskTableDocument } from "./task-table/univer-adapter";
 import { TaskTableApiError, taskTableClient } from "./task-table/client";
+import { apiFetch } from "./lib/api";
 
 const RichMarkdownEditor = defineAsyncComponent(
     () => import("./RichMarkdownEditor.vue"),
@@ -145,7 +146,7 @@ function cancelEdit() {
 async function publish() {
     const content = draft.value.trim();
     if (!content) return;
-    const response = await fetch(
+    const response = await apiFetch(
         `/api/v1/projects/${props.projectId}/tasks/${props.task.id}/comments`,
         {
             method: "POST",
@@ -288,7 +289,7 @@ async function saveEdit() {
     const commentId = editingId.value;
     const content = editDraft.value.trim();
     if (!commentId || !content) return;
-    const response = await fetch(
+    const response = await apiFetch(
         `/api/v1/projects/${props.projectId}/tasks/${props.task.id}/comments/${commentId}`,
         {
             method: "PUT",
@@ -312,7 +313,7 @@ async function deleteComment() {
     if (!comment || deletingInFlight.value) return;
     deletingInFlight.value = true;
     try {
-        const response = await fetch(
+        const response = await apiFetch(
             `/api/v1/projects/${props.projectId}/tasks/${props.task.id}/comments/${comment.id}`,
             { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } },
         );

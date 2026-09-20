@@ -11,6 +11,7 @@
 
 ## P1 — hardening
 
+- **BUG — consistência visual global:** auditar todos os modos e superfícies autenticadas para que as preferências de aparência da top bar (tamanho de texto e espaçamento) sejam aplicadas de forma uniforme; eliminar estilos ou layouts que ainda ignorem essas definições globais.
 - Concorrência por campo, múltiplas abas e deduplicação de eco.
 - Inserção/remoção com continuidade de rota e recuperação de falha parcial.
 - Observabilidade completa, retenção de auditoria e exportação diagnóstica.

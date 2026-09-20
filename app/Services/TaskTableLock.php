@@ -10,6 +10,7 @@ use RuntimeException;
 final class TaskTableLock
 {
     public const TTL_SECONDS = 10;
+
     private const MAX_ATTEMPTS_PER_MINUTE = 90;
 
     /** @return array{lock_token: string, expires_at: string} */
@@ -130,14 +131,8 @@ final class TaskTableLock
     }
 }
 
-final class TaskTableNotFound extends RuntimeException
-{
-}
+final class TaskTableNotFound extends RuntimeException {}
 
-final class TaskTableLockConflict extends RuntimeException
-{
-}
+final class TaskTableLockConflict extends RuntimeException {}
 
-final class TaskTableLockRateLimited extends RuntimeException
-{
-}
+final class TaskTableLockRateLimited extends RuntimeException {}

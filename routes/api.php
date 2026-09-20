@@ -1,5 +1,12 @@
 <?php
 
+use App\Http\Controllers\Api\Documents\DerivationRunController;
+use App\Http\Controllers\Api\Documents\DocumentContentController;
+use App\Http\Controllers\Api\Documents\DocumentController;
+use App\Http\Controllers\Api\Documents\DocumentDerivationController;
+use App\Http\Controllers\Api\Documents\DocumentRevisionController;
+use App\Http\Controllers\Api\Documents\OfflineManifestController;
+use App\Http\Controllers\Api\Documents\ProjectTagController;
 use App\Http\Controllers\Api\ObservabilityController;
 use App\Http\Controllers\Api\ProjectController;
 use App\Http\Controllers\Api\SessionController;
@@ -17,6 +24,27 @@ Route::prefix('v1')->group(function () {
             Route::get('/projects', [ProjectController::class, 'index']);
             Route::post('/projects', [ProjectController::class, 'store']);
             Route::get('/projects/{projectId}/workspace', [ProjectController::class, 'workspace']);
+            Route::get('/projects/{projectId}/documents', [DocumentController::class, 'index']);
+            Route::post('/projects/{projectId}/documents', [DocumentController::class, 'store']);
+            Route::get('/projects/{projectId}/documents/{documentId}', [DocumentController::class, 'show']);
+            Route::patch('/projects/{projectId}/documents/{documentId}', [DocumentController::class, 'update']);
+            Route::delete('/projects/{projectId}/documents/{documentId}', [DocumentController::class, 'destroy']);
+            Route::post('/projects/{projectId}/documents/{documentId}/restore', [DocumentController::class, 'restore']);
+            Route::get('/projects/{projectId}/documents/{documentId}/revisions', [DocumentRevisionController::class, 'index']);
+            Route::post('/projects/{projectId}/documents/{documentId}/revisions', [DocumentRevisionController::class, 'store']);
+            Route::match(['get', 'head'], '/projects/{projectId}/revisions/{revisionId}/content', DocumentContentController::class);
+            Route::get('/projects/{projectId}/documents/{documentId}/derivations', [DocumentDerivationController::class, 'index']);
+            Route::post('/projects/{projectId}/documents/{documentId}/derivations', [DocumentDerivationController::class, 'store']);
+            Route::get('/projects/{projectId}/derivations/{derivationId}', [DocumentDerivationController::class, 'show']);
+            Route::patch('/projects/{projectId}/derivations/{derivationId}', [DocumentDerivationController::class, 'update']);
+            Route::post('/projects/{projectId}/derivations/{derivationId}/regenerate', [DocumentDerivationController::class, 'regenerate']);
+            Route::delete('/projects/{projectId}/derivations/{derivationId}', [DocumentDerivationController::class, 'destroy']);
+            Route::get('/projects/{projectId}/derivation-runs/{runId}', DerivationRunController::class);
+            Route::get('/projects/{projectId}/tags', [ProjectTagController::class, 'index']);
+            Route::post('/projects/{projectId}/tags', [ProjectTagController::class, 'store']);
+            Route::patch('/projects/{projectId}/tags/{tagId}', [ProjectTagController::class, 'update']);
+            Route::delete('/projects/{projectId}/tags/{tagId}', [ProjectTagController::class, 'destroy']);
+            Route::get('/projects/{projectId}/offline-manifest', OfflineManifestController::class);
             Route::post('/projects/{projectId}/sections', [ProjectController::class, 'createSection']);
             Route::put('/projects/{projectId}/sections/{sectionId}', [ProjectController::class, 'updateSection']);
             Route::post('/projects/{projectId}/structure/move', [ProjectController::class, 'moveStructureItem']);

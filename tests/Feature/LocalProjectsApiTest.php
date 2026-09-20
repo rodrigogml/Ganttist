@@ -407,7 +407,9 @@ final class LocalProjectsApiTest extends TestCase
         \DB::table('project_members')->insert(['id' => (string) \Str::ulid(), 'project_id' => $project, 'user_id' => $editor->id, 'role' => 'editor', 'created_at' => now(), 'updated_at' => now()]);
         $person = $this->actingAs($editor)->postJson("/api/v1/projects/{$project}/people", ['name' => 'Ana', 'email' => 'ana@example.com'])->assertCreated()->json('data.id');
         $this->actingAs($editor)->putJson("/api/v1/projects/{$project}/people/{$person}", ['name' => 'Ana Silva', 'email' => null])->assertOk()->assertJsonPath('data.name', 'Ana Silva');
-        $this->actingAs($editor)->getJson("/api/v1/projects/{$project}/members")->assertOk()->assertJsonPath('data.people.0.name', 'Ana Silva');
+        $this->actingAs($editor)->getJson("/api/v1/projects/{$project}/members")
+            ->assertOk()
+            ->assertJsonFragment(['id' => $person, 'name' => 'Ana Silva']);
         $this->assertDatabaseMissing('project_members', ['project_id' => $project, 'user_id' => $editor->id, 'role' => 'owner']);
     }
 

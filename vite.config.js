@@ -4,6 +4,9 @@ import vue from '@vitejs/plugin-vue';
 import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
+    test: {
+        exclude: ['tests/e2e/**', '**/node_modules/**'],
+    },
     plugins: [
         laravel({
             input: ['resources/css/app.css', 'resources/css/gantt-workspace.css', 'resources/js/app.ts'],

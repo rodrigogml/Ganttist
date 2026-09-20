@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { taskTableClient } from "./client";
 import { createEmptyTaskTableDocument } from "./univer-adapter";
+import { connectivity } from "../lib/api";
 
 describe("taskTableClient", () => {
+    beforeEach(() => connectivity.markOnline());
     afterEach(() => vi.unstubAllGlobals());
 
     it("sends the documented publish payload and returns its table block", async () => {

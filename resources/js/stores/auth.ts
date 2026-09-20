@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
+import { purgeOfflineUser, rememberTrustedUser, trustedUser } from '../offline/offline-store'
+import { apiFetch } from '../lib/api'
 
 type User = { id: string; name: string | null; email: string }
 type VerifiedSession = { user: User; csrfToken?: string }
@@ -37,6 +39,8 @@ export const useAuthStore = defineStore('auth', () => {
   const remember = ref(false)
 
   function expireSession(): void {
+    const userId = user.value?.id
+    if (userId) void purgeOfflineUser(userId)
     forgetActiveSession()
     user.value = null
     loading.value = false
@@ -45,18 +49,29 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   function handleUnauthorized(response: Response): boolean {
-    if (response.status !== 401) return false
+    if (response.status !== 401 && response.status !== 419) return false
+    if (response.status === 419) {
+      const userId = user.value?.id
+      if (userId && (typeof navigator === 'undefined' || navigator.onLine)) void purgeOfflineUser(userId)
+      return false
+    }
     expireSession()
     return true
   }
 
   async function current(): Promise<boolean> {
-    const response = await fetch('/api/v1/me', { headers: { Accept: 'application/json' } })
+    const response = await apiFetch('/api/v1/me', { headers: { Accept: 'application/json' } })
     if (!response.ok) {
-      if (response.status === 401 && hadActiveSession()) expireSession()
+      if (response.status === 401 || response.status === 419) {
+        if (typeof navigator !== 'undefined' && !navigator.onLine) throw new TypeError('offline')
+        const cachedUser = await trustedUser()
+        if (cachedUser) await purgeOfflineUser(cachedUser.id)
+        if (hadActiveSession()) expireSession()
+      }
       return false
     }
     user.value = (await response.json()).user
+    await rememberTrustedUser(user.value!)
     rememberActiveSession()
     return true
   }
@@ -65,23 +80,28 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const token = new URLSearchParams(window.location.search).get('token')
       if (token) {
-        const response = await fetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ token }) })
+        const response = await apiFetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ token }) })
         if (response.ok) {
           const verified = await response.json() as VerifiedSession
           user.value = verified.user
           updateCsrfToken(verified.csrfToken)
+          await rememberTrustedUser(user.value!)
           rememberActiveSession()
           window.history.replaceState({}, document.title, window.location.pathname)
         } else error.value = 'Este link de acesso é inválido ou expirou.'
       }
       if (!user.value) await current()
-    } catch { error.value = 'Não foi possível verificar sua sessão.' } finally { loading.value = false }
+    } catch {
+      const cachedUser = await trustedUser()
+      if (cachedUser) user.value = cachedUser
+      else error.value = 'Não foi possível verificar sua sessão.'
+    } finally { loading.value = false }
   }
 
   async function requestLink(email: string, name = '') {
     sending.value = true; error.value = ''
     try {
-      const response = await fetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email, name, remember: remember.value }) })
+      const response = await apiFetch('/auth/request-link', { method: 'POST', headers: headers(), body: JSON.stringify({ email, name, remember: remember.value }) })
       if (!response.ok) {
         const body = await response.json().catch(() => null)
         const error = new Error(typeof body?.message === 'string' ? body.message : 'Não foi possível enviar o link. Tente novamente.')
@@ -98,16 +118,21 @@ export const useAuthStore = defineStore('auth', () => {
   async function verifyPin(pin: string) {
     sending.value = true; error.value = ''
     try {
-      const response = await fetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ email: loginEmail.value, pin }) })
+      const response = await apiFetch('/auth/verify', { method: 'POST', headers: headers(), body: JSON.stringify({ email: loginEmail.value, pin }) })
       if (!response.ok) throw new Error('Código inválido ou expirado.')
       const verified = await response.json() as VerifiedSession
-      user.value = verified.user; updateCsrfToken(verified.csrfToken); sent.value = false; rememberActiveSession()
+      user.value = verified.user; updateCsrfToken(verified.csrfToken); sent.value = false; rememberActiveSession(); await rememberTrustedUser(user.value!)
     } catch (exception) { error.value = exception instanceof Error ? exception.message : 'Não foi possível validar o código.' } finally { sending.value = false }
   }
 
   async function logout() {
-    await fetch('/auth/logout', { method: 'POST', headers: headers() })
-    forgetActiveSession(); user.value = null; sent.value = false
+    const userId = user.value?.id
+    try {
+      await apiFetch('/auth/logout', { method: 'POST', headers: headers() })
+    } finally {
+      if (userId) await purgeOfflineUser(userId)
+      forgetActiveSession(); user.value = null; sent.value = false
+    }
   }
 
   function resetSent() { sent.value = false }

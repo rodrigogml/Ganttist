@@ -4,6 +4,8 @@ import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
 import type { Dependency, Task, TaskStatus, Workspace } from '../types'
 import { parseTaskQuery } from '../utils/task-query'
+import { preparedManifest, removeProjectOffline } from '../offline/offline-store'
+import { apiFetch } from '../lib/api'
 
 export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed']
 export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'in_progress', 'scheduled', 'late']
@@ -104,19 +106,33 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     else refreshing.value = true
     error.value = ''
     try {
-      const response = await fetch(`/api/v1/projects/${projectId ?? workspace.value?.project.id}/workspace`)
+      const response = await apiFetch(`/api/v1/projects/${projectId ?? workspace.value?.project.id}/workspace`)
       if (useAuthStore().handleUnauthorized(response)) return
       if (!response.ok) {
-        if ([403, 404].includes(response.status)) activeProjectStorage()?.removeItem(activeProjectStorageKey)
+        if ([403, 404].includes(response.status)) {
+          activeProjectStorage()?.removeItem(activeProjectStorageKey)
+          const userId = useAuthStore().user?.id
+          const deniedProjectId = projectId ?? workspace.value?.project.id
+          if (userId && deniedProjectId) await removeProjectOffline(userId, deniedProjectId)
+          workspace.value = null
+          throw Object.assign(new Error('Você não possui mais acesso a este projeto.'), { accessRevoked: true })
+        }
         throw new Error('Não foi possível carregar o projeto.')
       }
       workspace.value = parseWorkspaceResponse(await response.json())
       activeProjectStorage()?.setItem(activeProjectStorageKey, workspace.value.project.id)
       stale.value = false
     } catch (exception) {
-      const message = exception instanceof Error ? exception.message : 'Erro inesperado'
-      if (initialLoad) error.value = message
-      else stale.value = true
+      const revoked = Boolean((exception as Error & { accessRevoked?: boolean })?.accessRevoked)
+      const userId = useAuthStore().user?.id
+      const offlineProjectId = projectId ?? workspace.value?.project.id
+      const cached = !revoked && userId && offlineProjectId ? await preparedManifest(userId, offlineProjectId) : null
+      if (cached) { workspace.value = cached.workspace as Workspace; stale.value = true; error.value = '' }
+      else {
+        const message = exception instanceof Error ? exception.message : 'Erro inesperado'
+        if (initialLoad) error.value = message
+        else stale.value = true
+      }
     } finally {
       if (initialLoad) loading.value = false
       refreshing.value = false
