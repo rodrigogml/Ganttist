@@ -8,15 +8,18 @@ use App\Domain\Scheduling\TaskPlan;
 use App\Domain\Scheduling\TaskProjectionCalculator;
 use App\Domain\Scheduling\TaskProjectionInput;
 use App\Domain\Scheduling\WorkCalendar;
+use App\Jobs\Documents\PurgeProjectDocumentFiles;
 use App\Mail\ProjectInvitation;
 use App\Services\TaskTableDocument;
 use App\Services\TaskTableLock;
 use App\Services\TaskTableLockConflict;
 use App\Services\TaskTableLockRateLimited;
 use App\Services\TaskTableNotFound;
+use Carbon\Carbon;
 use DateTimeImmutable;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Str;
@@ -163,6 +166,7 @@ final class ProjectController
                     $section = $child->item;
                     $rows[] = ['id' => $section->id, 'title' => $section->name, 'kind' => 'section', 'parent_id' => $section->parent_section_id, 'level' => $levelFor($section), 'has_children' => $sections->contains('parent_section_id', $section->id) || $tasks->contains('section_id', $section->id), 'start' => null, 'finish' => null, 'progress' => 0, 'status' => 'opened', 'critical' => isset($criticalSections[$section->id])];
                     $appendChildren($section->id);
+
                     continue;
                 }
                 $task = $child->item;
@@ -402,8 +406,12 @@ final class ProjectController
         $data = $request->validate(['text' => ['sometimes', 'nullable', 'string', 'max:1000'], 'completed' => ['sometimes', 'boolean']]);
         abort_if($data === [], 422, 'Informe ao menos uma alteração.');
         $changes = ['updatedAt' => now()];
-        if (array_key_exists('text', $data)) $changes['text'] = $this->checklistText($data['text']);
-        if (array_key_exists('completed', $data)) $changes['isCompleted'] = $data['completed'];
+        if (array_key_exists('text', $data)) {
+            $changes['text'] = $this->checklistText($data['text']);
+        }
+        if (array_key_exists('completed', $data)) {
+            $changes['isCompleted'] = $data['completed'];
+        }
         $updated = DB::table('projectTaskChecklistItem')->where('id', $itemId)->where('projectId', $projectId)->where('taskId', $taskId)->update($changes);
         abort_unless($updated, 404, 'Item do checklist não encontrado.');
         $this->touchProject($projectId);
@@ -483,10 +491,13 @@ final class ProjectController
             foreach (DB::table('projectTaskChecklistItem')->where('projectId', $projectId)->where('taskId', $task->id)->orderBy('position')->get() as $item) {
                 DB::table('projectTaskChecklistItem')->insert(['id' => (string) Str::ulid(), 'projectId' => $projectId, 'taskId' => $copyId, 'text' => $item->text, 'isCompleted' => false, 'position' => $item->position, 'createdAt' => now(), 'updatedAt' => now()]);
             }
-            foreach (DB::table('project_task_dependencies')->where('project_id', $projectId)->where(function ($query) use ($task): void { $query->where('predecessor_task_id', $task->id)->orWhere('successor_task_id', $task->id); })->get() as $dependency) {
+            foreach (DB::table('project_task_dependencies')->where('project_id', $projectId)->where(function ($query) use ($task): void {
+                $query->where('predecessor_task_id', $task->id)->orWhere('successor_task_id', $task->id);
+            })->get() as $dependency) {
                 DB::table('project_task_dependencies')->insert(['id' => (string) Str::ulid(), 'project_id' => $projectId, 'predecessor_task_id' => $dependency->predecessor_task_id === $task->id ? $copyId : $dependency->predecessor_task_id, 'successor_task_id' => $dependency->successor_task_id === $task->id ? $copyId : $dependency->successor_task_id, 'type' => $dependency->type, 'created_at' => now(), 'updated_at' => now()]);
             }
             DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+
             return $copyId;
         });
 
@@ -671,7 +682,9 @@ final class ProjectController
         if (($data['action'] ?? 'delete') === 'move') {
             $destination = $data['destinationSectionId'] ?? null;
             abort_if($destination === $sectionId || ($destination && $this->sectionIsDescendantOf($projectId, $destination, $sectionId)), 422, 'O destino não pode estar dentro da seção removida.');
-            if ($destination) abort_unless(DB::table('project_sections')->where('id', $destination)->where('project_id', $projectId)->exists(), 422, 'Seção de destino inválida.');
+            if ($destination) {
+                abort_unless(DB::table('project_sections')->where('id', $destination)->where('project_id', $projectId)->exists(), 422, 'Seção de destino inválida.');
+            }
             DB::transaction(function () use ($projectId, $sectionId, $destination): void {
                 DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionId)->update(['parent_section_id' => $destination, 'updated_at' => now()]);
                 DB::table('project_tasks')->where('project_id', $projectId)->where('section_id', $sectionId)->update(['section_id' => $destination, 'updated_at' => now()]);
@@ -828,7 +841,7 @@ final class ProjectController
         abort_unless($member->role === 'owner', 403);
         $invitation = DB::table('project_invitations')->where('id', $invitationId)->where('project_id', $projectId)->where('status', 'pending')->first();
         abort_unless($invitation, 404, 'Convite pendente não encontrado.');
-        $availableAt = $invitation->last_sent_at ? \Carbon\Carbon::parse($invitation->last_sent_at)->addMinutes(10) : now();
+        $availableAt = $invitation->last_sent_at ? Carbon::parse($invitation->last_sent_at)->addMinutes(10) : now();
         if ($availableAt->isFuture()) {
             return response()->json(['message' => 'Aguarde antes de reenviar este convite.', 'retryAfterSeconds' => now()->diffInSeconds($availableAt)], 429);
         }
@@ -886,7 +899,14 @@ final class ProjectController
     {
         $member = $this->member($request, $projectId);
         abort_unless($member->role === 'owner', 403);
+        $storageDisks = DB::table('project_document_revisions')
+            ->join('project_documents', 'project_documents.id', '=', 'project_document_revisions.document_id')
+            ->where('project_documents.project_id', $projectId)
+            ->distinct()
+            ->pluck('project_document_revisions.storage_disk')
+            ->all();
         DB::table('projects')->where('id', $projectId)->delete();
+        PurgeProjectDocumentFiles::dispatch($projectId, $storageDisks)->afterResponse();
 
         return response()->json([], 204);
     }
@@ -1083,7 +1103,7 @@ final class ProjectController
         return $this->siblings($projectId, $parentSectionId)->count() + 1;
     }
 
-    private function siblings(string $projectId, ?string $parentSectionId): \Illuminate\Support\Collection
+    private function siblings(string $projectId, ?string $parentSectionId): Collection
     {
         $sections = DB::table('project_sections')->where('project_id', $projectId);
         $tasks = DB::table('project_tasks')->where('project_id', $projectId);
@@ -1121,7 +1141,7 @@ final class ProjectController
         $completedWeight = 0;
         $overdue = 0;
         foreach ($tasks as $task) {
-            $weight = $task->planned_start && $task->planned_finish ? max(1, (new \DateTimeImmutable($task->planned_start))->diff(new \DateTimeImmutable($task->planned_finish))->days + 1) : 1;
+            $weight = $task->planned_start && $task->planned_finish ? max(1, (new DateTimeImmutable($task->planned_start))->diff(new DateTimeImmutable($task->planned_finish))->days + 1) : 1;
             $totalWeight += $weight;
             $completedWeight += $task->completed_at ? $weight : 0;
             $overdue += ! $task->completed_at && $task->planned_finish && $task->planned_finish < now()->toDateString() ? 1 : 0;

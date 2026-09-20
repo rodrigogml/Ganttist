@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Jobs\Documents\PurgeProjectDocumentFiles;
 use App\Mail\MagicLoginLink;
 use App\Models\User;
 use Illuminate\Http\JsonResponse;
@@ -104,6 +105,12 @@ final class AuthController extends Controller
     public function destroyAccount(Request $request): JsonResponse
     {
         $user = $request->user();
+        $projectFiles = DB::table('projects')
+            ->leftJoin('project_documents', 'project_documents.project_id', '=', 'projects.id')
+            ->leftJoin('project_document_revisions', 'project_document_revisions.document_id', '=', 'project_documents.id')
+            ->where('projects.owner_user_id', $user->id)
+            ->get(['projects.id as project_id', 'project_document_revisions.storage_disk'])
+            ->groupBy('project_id');
         DB::transaction(function () use ($user): void {
             DB::table('sessions')->where('user_id', $user->id)->delete();
             $user->delete();
@@ -111,6 +118,9 @@ final class AuthController extends Controller
         Auth::logout();
         $request->session()->invalidate();
         $request->session()->regenerateToken();
+        foreach ($projectFiles as $projectId => $rows) {
+            PurgeProjectDocumentFiles::dispatch((string) $projectId, $rows->pluck('storage_disk')->filter()->unique()->values()->all())->afterResponse();
+        }
         Log::info('auth.account.deleted', ['user_id' => $user->id]);
 
         return response()->json(['message' => 'Conta excluída.']);

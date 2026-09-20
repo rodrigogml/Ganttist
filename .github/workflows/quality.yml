@@ -43,8 +43,11 @@ jobs:
       - uses: shivammathur/setup-php@v2
         with:
           php-version: '8.4'
-          extensions: mbstring, openssl, fileinfo, pdo_mysql
+          extensions: mbstring, openssl, fileinfo, pdo_mysql, pdo_sqlite
           coverage: none
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -53,6 +56,8 @@ jobs:
         run: composer install --no-interaction --prefer-dist --no-progress
       - name: Install frontend dependencies
         run: npm ci
+      - name: Install document processor dependencies
+        run: python -m pip install -r scripts/documents/requirements.txt pytest==9.1.1
       - name: Audit PHP dependencies
         run: composer audit --no-interaction
       - name: Audit production frontend dependencies
@@ -61,9 +66,24 @@ jobs:
         run: vendor/bin/pint --test
       - name: Run backend suite on MySQL
         run: php artisan test
+      - name: Run backend suite on SQLite
+        env:
+          DB_CONNECTION: sqlite
+          DB_DATABASE: ':memory:'
+        run: php artisan test
+      - name: Run document processor suite
+        run: python -m pytest scripts/documents/tests
+      - name: Smoke document runtime and private storage
+        run: |
+          php artisan migrate --force
+          php artisan documents:readiness --write
       - name: Run frontend suite and type checks
         run: |
           npm test
           npx vue-tsc --noEmit
       - name: Build production assets
         run: npm run build
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+      - name: Run PWA scenarios
+        run: npm run test:e2e

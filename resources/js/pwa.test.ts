@@ -24,10 +24,11 @@ describe("PWA installation assets", () => {
         }
     });
 
-    it("never caches authenticated API responses", () => {
+    it("never transparently caches authenticated API responses", () => {
         const worker = readFileSync(resolve(publicPath, "sw.js"), "utf8");
 
-        expect(worker).toContain("url.pathname.startsWith('/api/')");
-        expect(worker).toContain("OFFLINE_URL");
+        expect(worker).not.toContain("cache.put('/api/")
+        expect(worker).toContain("'/revisions/'")
+        expect(worker).toContain("'/offline.html'")
     });
 });

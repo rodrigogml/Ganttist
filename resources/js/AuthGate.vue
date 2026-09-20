@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { connectivity } from './lib/api'
 
 const props = defineProps<{ auth: { sending: boolean; sent: boolean; error: string; remember: boolean; requestLink: (email: string, name?: string) => Promise<void>; verifyPin: (pin: string) => Promise<void>; resetSent: () => void } }>()
 const email = ref('')
@@ -19,6 +20,11 @@ async function submit() {
       <div class="auth-mark"><img :src="'/brand/logo-square.png'" alt="Ganttist"></div>
       <p class="eyebrow">PLANEJAMENTO COM CLAREZA</p>
       <h1>Entre no Ganttist</h1>
+      <div v-if="!connectivity.online.value" class="auth-offline" role="status">
+        <strong>OFFLINE — SOMENTE LEITURA</strong>
+        <p>Não há um projeto preparado para este perfil. Conecte-se, entre na conta e use “Disponibilizar offline” antes de sair da rede.</p>
+      </div>
+      <template v-else>
       <p v-if="!auth.sent" class="auth-copy">Informe seu e-mail e enviaremos um link seguro para acessar seu espaço de trabalho.</p>
       <template v-if="auth.sent">
         <p class="auth-copy">Se o endereço puder ser utilizado, enviamos um link de acesso. Verifique sua caixa de entrada e a pasta de spam.</p>
@@ -36,6 +42,11 @@ async function submit() {
         <button class="auth-submit" :disabled="auth.sending">{{ auth.sending ? 'Enviando…' : 'Enviar link de acesso' }}</button>
       </form>
       <p v-if="auth.error" class="auth-error">{{ auth.error }}</p>
+      </template>
     </section>
   </main>
 </template>
+
+<style scoped>
+.auth-offline{margin:18px 0;padding:14px;border:1px solid #e8c978;border-radius:10px;background:#fff8df;color:#604d18}.auth-offline strong{font-size:12px;letter-spacing:.5px}.auth-offline p{margin:8px 0 0;font-size:13px;line-height:1.5}
+</style>

@@ -1,5 +1,6 @@
 import type { TaskComment, TaskTable } from "../types";
 import type { TaskTableDocument } from "./univer-adapter";
+import { apiFetch } from "../lib/api";
 
 export type TaskTableLockCode = "TABLE_LOCKED" | "TABLE_LOCK_LOST" | "TABLE_NOT_FOUND" | "TABLE_DOCUMENT_INVALID" | "TABLE_LOCK_RATE_LIMITED";
 
@@ -24,7 +25,7 @@ function csrfHeaders(): Record<string, string> {
 }
 
 async function request<T>(url: string, init: RequestInit = {}): Promise<T> {
-    const response = await fetch(url, {
+    const response = await apiFetch(url, {
         ...init,
         headers: { Accept: "application/json", ...csrfHeaders(), ...init.headers },
     });

@@ -12,14 +12,16 @@ const props = withDefaults(
         placeholder?: string;
         ariaLabel: string;
         compact?: boolean;
+        disabled?: boolean;
     }>(),
-    { placeholder: "Escreva em Markdown…", compact: false },
+    { placeholder: "Escreva em Markdown…", compact: false, disabled: false },
 );
 const emit = defineEmits<{ "update:modelValue": [value: string] }>();
 
 const editor = useEditor({
     content: props.modelValue ?? "",
     contentType: "markdown",
+    editable: !props.disabled,
     extensions: [
         StarterKit.configure({
             heading: { levels: [1, 2, 3, 4] },
@@ -54,6 +56,10 @@ watch(
             });
     },
 );
+watch(
+    () => props.disabled,
+    (disabled) => editor.value?.setEditable(!disabled),
+);
 onBeforeUnmount(() => editor.value?.destroy());
 
 const isHeading = (level: 1 | 2 | 3 | 4) =>
@@ -79,8 +85,8 @@ function setLink() {
 </script>
 
 <template>
-    <div class="rich-markdown" :class="{ compact }">
-        <div class="rich-markdown-toolbar" role="toolbar" aria-label="Formatação Markdown">
+    <div class="rich-markdown" :class="{ compact, disabled }">
+        <div v-if="!disabled" class="rich-markdown-toolbar" role="toolbar" aria-label="Formatação Markdown">
             <button type="button" :class="{ active: editor?.isActive('paragraph') }" :aria-pressed="editor?.isActive('paragraph')" aria-label="Texto normal" title="Texto normal" @click="command(() => editor?.chain().focus().setParagraph().run())">¶</button>
             <button v-for="level in [1, 2, 3, 4] as const" :key="level" type="button" :class="{ active: isHeading(level) }" :aria-pressed="isHeading(level)" :aria-label="`Título ${level}`" :title="`Título ${level} — #${'#'.repeat(level - 1)} `" @click="command(() => editor?.chain().focus().toggleHeading({ level }).run())">H{{ level }}</button>
             <span class="rich-markdown-divider" aria-hidden="true"></span>

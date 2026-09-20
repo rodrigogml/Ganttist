@@ -1,12 +1,13 @@
 import './bootstrap'
 import '../css/brand.css'
-import { createApp } from 'vue'
+import { createApp, h } from 'vue'
 import { createPinia } from 'pinia'
-import App from './App.vue'
-createApp(App).use(createPinia()).mount('#app')
+import { RouterView } from 'vue-router'
+import { router } from './router'
+import { setApiResponseHandler } from './lib/api'
+import { useAuthStore } from './stores/auth'
 
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    void navigator.serviceWorker.register('/sw.js?v=3', { scope: '/' })
-  })
-}
+const pinia = createPinia()
+setApiResponseHandler(response => { useAuthStore(pinia).handleUnauthorized(response) })
+createApp({ render: () => h(RouterView) }).use(pinia).use(router).mount('#app')
+if ('serviceWorker' in navigator && import.meta.env.PROD) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=7', { scope: '/' }))

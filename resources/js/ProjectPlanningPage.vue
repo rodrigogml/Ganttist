@@ -44,8 +44,26 @@ import {
 import { dependencyPath, dependencyStub } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
 import { parseTaskQuery } from "./utils/task-query";
+import { apiFetch, connectivity } from "./lib/api";
+import { features } from "./lib/features";
+import { useRouter } from "vue-router";
 const store = useWorkspaceStore();
 const auth = useAuthStore();
+const router = useRouter();
+type ProjectView = "tasks" | "gantt" | "documents";
+const routeMatch = () => window.location.pathname.match(/^\/projects\/([^/]+)\/(tasks|gantt|documents)(?:\/.*)?$/);
+const projectView = ref<ProjectView>((routeMatch()?.[2] as ProjectView | undefined) ?? "gantt");
+function syncProjectRoute() {
+    projectView.value = (routeMatch()?.[2] as ProjectView | undefined) ?? "gantt";
+    if (projectView.value !== "documents") activeView.value = projectView.value;
+}
+function navigateProjectView(view: ProjectView) {
+    const projectId = store.workspace?.project.id;
+    if (!projectId) return;
+    projectView.value = view;
+    if (view !== "documents") activeView.value = view;
+    void router.push(`/projects/${projectId}/${view}`);
+}
 const RichMarkdownEditor = defineAsyncComponent(
     () => import("./RichMarkdownEditor.vue"),
 );
@@ -58,22 +76,11 @@ const csrfHeaders = (): Record<string, string> => {
     )?.content;
     return token ? { "X-CSRF-TOKEN": token } : {};
 };
-const fetchWithSessionGuard = globalThis.fetch.bind(globalThis);
-const sessionGuardedFetch = async (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-): Promise<Response> => {
-    const response = await fetchWithSessionGuard(input, init);
-    if (response.status === 401 && auth.user)
-        auth.expireSession();
-    return response;
-};
-globalThis.fetch = sessionGuardedFetch;
 let initializedUserId: string | null = null;
 async function initializeWorkspace() {
     if (!auth.user || initializedUserId === auth.user.id) return;
     initializedUserId = auth.user.id;
-    const activeProjectId = localStorage.getItem("ganttist.active-project-id");
+    const activeProjectId = routeMatch()?.[1] ?? localStorage.getItem("ganttist.active-project-id");
     if (activeProjectId) await store.load(activeProjectId);
 }
 watch(
@@ -87,6 +94,7 @@ watch(
     () => store.workspace?.project.id,
     async (projectId) => {
         if (!projectId) return;
+        if (!routeMatch()) void router.replace(`/projects/${projectId}/${projectView.value}`);
         await nextTick();
         measureGantt();
         const timeline = timelineElement.value;
@@ -100,6 +108,7 @@ onMounted(async () => {
     loadColumnPreferences();
     document.addEventListener("pointerdown", closeFloatingMenusOnOutside);
     window.addEventListener("keydown", focusTaskSearchFromShortcut);
+    window.addEventListener("popstate", syncProjectRoute);
     const savedText = localStorage.getItem("ganttist.text-scale"),
         savedSpacing = localStorage.getItem("ganttist.spacing"),
         savedEditorWidth = Number(
@@ -135,14 +144,13 @@ onUnmounted(() => {
     window.removeEventListener("beforeunload", guardUnsavedTask);
     window.removeEventListener("resize", handleViewportResize);
     window.removeEventListener("keydown", focusTaskSearchFromShortcut);
+    window.removeEventListener("popstate", syncProjectRoute);
     document.removeEventListener("pointerdown", closeFloatingMenusOnOutside);
     cancelTaskContextLongPress();
     cancelTimeblockGesture();
     stopEditorResize();
     stopTaskColumnResize();
     stopStructureDrag();
-    if (globalThis.fetch === sessionGuardedFetch)
-        globalThis.fetch = fetchWithSessionGuard;
 });
 watch([textScale, spacing], () => {
     localStorage.setItem("ganttist.text-scale", textScale.value);
@@ -153,7 +161,7 @@ type AppNotification = { message: string; kind: ToastKind };
 const drawer = ref(false),
     notices = ref(false),
     filters = ref(false),
-    activeView = ref<"tasks" | "gantt">("tasks"),
+    activeView = ref<"tasks" | "gantt">(routeMatch()?.[2] === "tasks" ? "tasks" : "gantt"),
     hierarchyMenu = ref(false),
     account = ref(false),
     responsiblePanel = ref(false),
@@ -323,12 +331,31 @@ type StructureDrag = {
 };
 const structureDrag = ref<StructureDrag | null>(null);
 const structureMoveBusy = ref(false);
+const canMutateProject = computed(
+    () =>
+        Boolean(store.workspace) &&
+        store.workspace?.project.role !== "reader" &&
+        connectivity.online.value,
+);
 const canMoveStructure = computed(
-    () => store.workspace?.project.role !== "reader" && !structureMoveBusy.value,
+    () => canMutateProject.value && !structureMoveBusy.value,
 );
 const canQuickAssign = computed(
-    () => store.workspace?.project.role !== "reader" && !quickAssigneeBusy.value,
+    () => canMutateProject.value && !quickAssigneeBusy.value,
 );
+watch(canMutateProject, (allowed) => {
+    if (allowed) return;
+    creationMenu.value = false;
+    taskContextMenu.value = null;
+    dependencyContextMenu.value = null;
+    dependencyPickerMenu.value = null;
+    sectionDeleteDialog.value = null;
+    relationModal.value = null;
+    dependencyConfirmation.value = null;
+    editorPriorityMenu.value = false;
+    cancelTimeblockGesture();
+    stopStructureDrag();
+});
 const quickAssigneePeople = computed(() => store.workspace?.people ?? []);
 const sectionDeleteDialog = ref<{ task: Task; action: "delete" | "move"; destinationId: string | null } | null>(null);
 const taskPriorityOptions: ReadonlyArray<{
@@ -632,7 +659,7 @@ async function addChecklistItem() {
     const projectId = store.workspace?.project.id;
     if (!projectId) return;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: "" }) });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: "" }) });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível adicionar o item."));
         const item = (await response.json()).data as ChecklistItem;
         setChecklistItems([...checklistItems.value, item]);
@@ -647,7 +674,7 @@ async function saveChecklistItem(item: ChecklistItem) {
     const projectId = store.workspace?.project.id, task = activeTask.value;
     if (!projectId || !task) return;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist/${item.id}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: normalized, completed: item.completed }) });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist/${item.id}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: normalized, completed: item.completed }) });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível salvar o item."));
     } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível salvar o item.", "error"); }
 }
@@ -659,7 +686,7 @@ async function removeChecklistItem(item: ChecklistItem) {
     const projectId = store.workspace?.project.id, task = activeTask.value;
     if (!projectId || !task) return;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist/${item.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist/${item.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível excluir o item."));
         setChecklistItems(checklistItems.value.filter((current) => current.id !== item.id).map((current, index) => ({ ...current, position: index + 1 })));
     } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível excluir o item.", "error"); }
@@ -677,7 +704,7 @@ async function reorderChecklist(sourceId: string, targetId: string, position: "b
     const projectId = store.workspace?.project.id, task = activeTask.value;
     if (!projectId || !task) return;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ itemIds: checklistItems.value.map((item) => item.id) }) });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}/checklist`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ itemIds: checklistItems.value.map((item) => item.id) }) });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível reorganizar o checklist."));
     } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível reorganizar o checklist.", "error"); }
 }
@@ -694,7 +721,7 @@ async function persistDraftChecklist(taskId: string) {
     const projectId = store.workspace?.project.id;
     if (!projectId) return;
     for (const item of checklistItems.value) {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${taskId}/checklist`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: item.text.trim() || "<Sem texto>", completed: item.completed }) });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${taskId}/checklist`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ text: item.text.trim() || "<Sem texto>", completed: item.completed }) });
         if (!response.ok) throw new Error(await responseError(response, "A tarefa foi criada, mas não foi possível salvar o checklist."));
     }
 }
@@ -786,14 +813,16 @@ const hasTimelineMark = (task: Task) =>
             civilDate(task.considered_deadline),
     );
 const canDragTask = (task: Task) =>
+    canMutateProject.value &&
     task.kind === "task" &&
     !task.completed &&
     !task.derived &&
     !isExpandable(task);
 const canResizeTask = (task: Task) => canDragTask(task);
-const canConnectFrom = (task: Task) => task.kind === "task";
+const canConnectFrom = (task: Task) =>
+    canMutateProject.value && task.kind === "task";
 const canConnectTo = (task: Task) =>
-    task.kind === "task" && !isExpandable(task);
+    canMutateProject.value && task.kind === "task" && !isExpandable(task);
 const visibleTasks = computed(() => {
     const all = new Map(store.tasks.map((task) => [task.id, task]));
     return store.tasks.filter((task) => {
@@ -1151,7 +1180,7 @@ async function assignQuickAssignee(assigneeId: string | null) {
     }
     quickAssigneeBusy.value = true;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${task.id}`, {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}`, {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",
@@ -1275,7 +1304,7 @@ async function finishStructureDrag(event: PointerEvent) {
     if (!projectId) return;
     structureMoveBusy.value = true;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/structure/move`, {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/structure/move`, {
             method: "POST",
             headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
             body: JSON.stringify({ itemId: drag.task.id, itemKind: drag.task.kind, parentSectionId: drop.parentId, beforeItemId: drop.beforeId }),
@@ -1321,6 +1350,7 @@ function startStructureDrag(task: Task, event: PointerEvent) {
     document.addEventListener("pointercancel", stopStructureDrag, { once: true });
 }
 function openCreationDialog(kind: "task" | "section", parentId: string | null = null) {
+    if (!canMutateProject.value) return;
     creationMenu.value = false;
     if (kind === "task") {
         collaborators.value = store.workspace?.people ?? [];
@@ -1468,14 +1498,14 @@ function focusTaskRelationsFromContext() {
 async function toggleTaskCompletionFromContext() {
     const menu = taskContextMenu.value,
         projectId = store.workspace?.project.id;
-    if (!menu || !projectId || taskContextBusy.value) return;
+    if (!canMutateProject.value || !menu || !projectId || taskContextBusy.value) return;
     const completed = !(
         menu.task.completed ?? menu.task.status === "completed"
     );
     taskContextMenu.value = null;
     taskContextBusy.value = true;
     try {
-        const response = await fetch(
+        const response = await apiFetch(
             `/api/v1/projects/${projectId}/tasks/${menu.task.id}/completion`,
             {
                 method: "PATCH",
@@ -1513,7 +1543,7 @@ async function toggleTaskCompletionFromContext() {
 }
 async function setTaskPriorityFromContext(priority: 1 | 2 | 3 | 4) {
     const menu = taskContextMenu.value;
-    if (!menu || menu.task.kind !== "task" || taskContextBusy.value) return;
+    if (!canMutateProject.value || !menu || menu.task.kind !== "task" || taskContextBusy.value) return;
     taskContextMenu.value = null;
     taskContextBusy.value = true;
     try {
@@ -1529,21 +1559,21 @@ async function setTaskPriorityFromContext(priority: 1 | 2 | 3 | 4) {
 }
 function editSectionFromContext() {
     const menu = taskContextMenu.value;
-    if (!menu || menu.task.kind !== "section") return;
+    if (!canMutateProject.value || !menu || menu.task.kind !== "section") return;
     taskContextMenu.value = null;
     openSection(menu.task);
 }
 async function deleteSectionFromContext() {
     const menu = taskContextMenu.value;
-    if (!menu || menu.task.kind !== "section") return;
+    if (!canMutateProject.value || !menu || menu.task.kind !== "section") return;
     taskContextMenu.value = null;
     sectionDeleteDialog.value = { task: menu.task, action: "delete", destinationId: null };
 }
 async function confirmSectionDeletion() {
     const dialog = sectionDeleteDialog.value, projectId = store.workspace?.project.id;
-    if (!dialog || !projectId) return;
+    if (!canMutateProject.value || !dialog || !projectId) return;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/sections/${dialog.task.id}`, { method: "DELETE", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ action: dialog.action, destinationSectionId: dialog.destinationId }) });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/sections/${dialog.task.id}`, { method: "DELETE", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ action: dialog.action, destinationSectionId: dialog.destinationId }) });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível excluir a seção."));
         await store.load();
         sectionDeleteDialog.value = null;
@@ -1556,7 +1586,7 @@ async function confirmSectionDeletion() {
 }
 function createBelowSection(kind: "task" | "section") {
     const section = taskContextMenu.value?.task;
-    if (!section || section.kind !== "section") return;
+    if (!canMutateProject.value || !section || section.kind !== "section") return;
     openCreationDialog(kind, section.id);
 }
 function setBranchExpanded(section: Task, expanded: boolean) {
@@ -1572,10 +1602,10 @@ function setBranchExpanded(section: Task, expanded: boolean) {
 }
 async function duplicateTaskFromContext() {
     const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
-    if (!menu || menu.task.kind !== "task" || !projectId) return;
+    if (!canMutateProject.value || !menu || menu.task.kind !== "task" || !projectId) return;
     taskContextMenu.value = null;
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}/duplicate`, { method: "POST", headers: { Accept: "application/json", ...csrfHeaders() } });
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}/duplicate`, { method: "POST", headers: { Accept: "application/json", ...csrfHeaders() } });
         if (!response.ok) throw new Error(await responseError(response, "Não foi possível duplicar a tarefa."));
         await store.load();
         showToast("Tarefa duplicada", "success");
@@ -1583,10 +1613,10 @@ async function duplicateTaskFromContext() {
 }
 async function deleteTaskFromContext() {
     const menu = taskContextMenu.value, projectId = store.workspace?.project.id;
-    if (!menu || menu.task.kind !== "task" || !projectId) return;
+    if (!canMutateProject.value || !menu || menu.task.kind !== "task" || !projectId) return;
     taskContextMenu.value = null;
     if (!confirm(`Excluir a tarefa “${menu.task.title}”?`)) return;
-    const response = await fetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
+    const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
     if (!response.ok) { showToast(await responseError(response, "Não foi possível excluir a tarefa."), "error"); return; }
     await store.load(); showToast("Tarefa excluída", "success");
 }
@@ -1652,6 +1682,9 @@ function observeGanttSize() {
 }
 function selectWorkspaceView(view: "tasks" | "gantt") {
     activeView.value = view;
+    projectView.value = view;
+    const projectId = store.workspace?.project.id;
+    if (projectId) void router.push(`/projects/${projectId}/${view}`);
     if (view !== "gantt") {
         resizeObserver?.disconnect();
         return;
@@ -1836,7 +1869,7 @@ async function loadEditorContext(_taskId: string) {
     try {
         collaborators.value = store.workspace?.people ?? [];
         if (!projectId) return;
-        const response = await fetch(
+        const response = await apiFetch(
             `/api/v1/projects/${projectId}/tasks/${_taskId}/context`,
             { headers: { Accept: "application/json" } },
         );
@@ -2158,7 +2191,7 @@ async function toggleProjectMenu() {
     if (!projectMenu.value || projects.value.length) return;
     projectLoading.value = true;
     try {
-        const response = await fetch("/api/v1/projects", {
+        const response = await apiFetch("/api/v1/projects", {
             headers: { Accept: "application/json" },
         });
         if (!response.ok)
@@ -2181,6 +2214,7 @@ async function switchProject(project: { id: string; name: string }) {
     try {
         projectMenu.value = false;
         await store.load(project.id);
+        await router.push(`/projects/${project.id}/${projectView.value}`);
         showToast(`Projeto ${project.name} selecionado`, "success");
     } catch (error) {
         showToast(
@@ -2209,7 +2243,7 @@ async function createDependency(
 ) {
     const projectId = store.workspace?.project.id;
     if (!projectId) throw new Error("Projeto não carregado.");
-    const response = await fetch(`/api/v1/projects/${projectId}/dependencies`, {
+    const response = await apiFetch(`/api/v1/projects/${projectId}/dependencies`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
@@ -2232,7 +2266,7 @@ async function removeDependency(id: string) {
     const projectId = store.workspace?.project.id;
     if (!projectId) return;
     try {
-        const response = await fetch(
+        const response = await apiFetch(
             `/api/v1/projects/${projectId}/dependencies/${id}`,
             {
                 method: "DELETE",
@@ -2309,7 +2343,7 @@ async function setDependencyTypeFromContext(type: RelationType) {
         return;
     dependencyContextBusy.value = true;
     try {
-        const response = await fetch(
+        const response = await apiFetch(
             `/api/v1/projects/${projectId}/dependencies/${menu.dependency.id}`,
             {
                 method: "PUT",
@@ -2597,7 +2631,7 @@ async function commitDateGesture() {
         plannedFinish: gesture.kind === "resize" && gesture.edge === "start" ? task.finish : gesture.previewFinish,
     };
     try {
-        const response = await fetch(`/api/v1/projects/${projectId}/tasks/${gesture.taskId}`, {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${gesture.taskId}`, {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",
@@ -2824,7 +2858,7 @@ async function persistTask(task: Task) {
     const projectId = store.workspace?.project.id;
     if (!projectId) throw new Error("Projeto não carregado.");
     const completed = task.completed ?? task.status === "completed";
-    const response = await fetch(
+    const response = await apiFetch(
         `/api/v1/projects/${projectId}/tasks/${task.id}`,
         {
             method: "PUT",
@@ -2865,10 +2899,10 @@ async function previewDeletion() {
 }
 async function deleteTask() {
     const projectId = store.workspace?.project.id;
-    if (!activeTask.value || !deletionPreview.value || !projectId) return;
+    if (!canMutateProject.value || !activeTask.value || !deletionPreview.value || !projectId) return;
     deleting.value = true;
     try {
-        const response = await fetch(
+        const response = await apiFetch(
             `/api/v1/projects/${projectId}/tasks/${activeTask.value.id}`,
             {
                 method: "DELETE",
@@ -2892,7 +2926,7 @@ async function deleteTask() {
     }
 }
 async function saveTask() {
-    if (!activeTask.value) return;
+    if (!canMutateProject.value || !activeTask.value) return;
     const task = { ...activeTask.value },
         source = store.workspace?.tasks.find((item) => item.id === task.id),
         pending = pendingTaskToOpen.value;
@@ -2900,7 +2934,7 @@ async function saveTask() {
         if (isCreatingTask.value) {
             const projectId = store.workspace?.project.id;
             if (!projectId) throw new Error("Projeto não carregado.");
-            const response = await fetch(`/api/v1/projects/${projectId}/tasks`, {
+            const response = await apiFetch(`/api/v1/projects/${projectId}/tasks`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
                 body: JSON.stringify({ title: task.title, description: task.description || null, priority: task.priority ?? 1, sectionId: task.section_id ?? null, assigneePersonId: task.assignee_id ?? null, plannedStart: task.start, plannedFinish: task.finish, actualCompletionDate: task.completed ? task.effective_completion ?? todayCivil() : null }),
@@ -2950,10 +2984,10 @@ async function saveTask() {
 }
 async function saveSection() {
     const section = sectionDraft.value, projectId = store.workspace?.project.id;
-    if (!section || !projectId || !section.title.trim()) return;
+    if (!canMutateProject.value || !section || !projectId || !section.title.trim()) return;
     try {
         const creating = section.id === "__new-section__";
-        const response = await fetch(`/api/v1/projects/${projectId}/sections${creating ? "" : `/${section.id}`}`, {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/sections${creating ? "" : `/${section.id}`}`, {
             method: creating ? "POST" : "PUT",
             headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
             body: JSON.stringify(creating ? { name: section.title.trim(), parentSectionId: section.parent_id ?? null } : { name: section.title.trim(), parentSectionId: section.parent_id ?? null }),
@@ -2990,6 +3024,7 @@ function statusLabel(s: string) {
         v-else-if="!store.workspace"
         :opening="store.loading"
         :open-error="store.error"
+        :user-id="auth.user.id"
         @open="(id) => store.load(id)"
     />
     <div
@@ -3049,6 +3084,10 @@ function statusLabel(s: string) {
                     </button>
                 </div>
             </div>
+            <nav class="project-view-nav" aria-label="Áreas do projeto">
+                <button :class="{ active: projectView !== 'documents' }" @click="navigateProjectView(activeView)">Planejamento</button>
+                <button v-if="features.documents" :class="{ active: projectView === 'documents' }" @click="navigateProjectView('documents')">Documentos</button>
+            </nav>
             <div class="top-actions">
                 <div ref="appearanceWrap" class="appearance-wrap">
                     <button
@@ -3091,7 +3130,7 @@ function statusLabel(s: string) {
                         </svg>
                     </button>
                     <div v-if="settingsMenu" class="settings-menu" role="menu" aria-label="Configurações do projeto">
-                        <button role="menuitem" @click="settingsMenu = false; responsiblePanel = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg><span>Responsáveis</span></button>
+                        <button role="menuitem" :disabled="!connectivity.online.value" @click="settingsMenu = false; responsiblePanel = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg><span>Responsáveis</span></button>
                     </div>
                 </div>
                 <button
@@ -3110,6 +3149,8 @@ function statusLabel(s: string) {
             </div>
         </header>
 
+        <div v-if="!connectivity.online.value" class="global-offline-banner">OFFLINE — SOMENTE LEITURA · Alterações exigem conexão com o servidor.</div>
+
         <main v-if="store.loading" class="loading">
             <div class="loader-logo"><img :src="'/brand/logo-square.png'" alt="" /></div>
             <p>Organizando seu planejamento…</p>
@@ -3120,7 +3161,7 @@ function statusLabel(s: string) {
                 Tentar novamente
             </button>
         </main>
-        <main v-else class="main">
+        <main v-else class="main" :class="{ 'tasks-view': projectView === 'tasks' }">
             <section class="commandbar">
                 <div class="workspace-view-control">
                     <nav class="workspace-view-tabs" role="tablist" aria-label="Visualização do projeto">
@@ -3242,8 +3283,8 @@ function statusLabel(s: string) {
                         </button>
                     </div>
                     <div class="creation-control">
-                        <button ref="creationTrigger" class="primary create-item-trigger" :aria-expanded="creationMenu" aria-haspopup="menu" aria-label="Criar item" title="Criar tarefa ou seção" @click="creationMenu = !creationMenu">+</button>
-                        <div v-if="creationMenu" ref="creationMenuElement" class="creation-menu" role="menu" aria-label="Criar item"><button role="menuitem" @click="openCreationDialog('task')"><b>＋</b><span><strong>Tarefa</strong><small>Uma atividade do projeto</small></span></button><button role="menuitem" @click="openCreationDialog('section')"><b>▤</b><span><strong>Seção</strong><small>Um agrupamento hierárquico</small></span></button></div>
+                        <button ref="creationTrigger" class="primary create-item-trigger" :disabled="!canMutateProject" :aria-expanded="creationMenu" aria-haspopup="menu" aria-label="Criar item" title="Criar tarefa ou seção" @click="creationMenu = !creationMenu">+</button>
+                        <div v-if="creationMenu && canMutateProject" ref="creationMenuElement" class="creation-menu" role="menu" aria-label="Criar item"><button role="menuitem" @click="openCreationDialog('task')"><b>＋</b><span><strong>Tarefa</strong><small>Uma atividade do projeto</small></span></button><button role="menuitem" @click="openCreationDialog('section')"><b>▤</b><span><strong>Seção</strong><small>Um agrupamento hierárquico</small></span></button></div>
                     </div>
                 </div>
             </section>
@@ -3536,7 +3577,7 @@ function statusLabel(s: string) {
                     @click="taskContextMenu = null"
                 >
                     <button
-                        v-if="taskContextMenu.task.kind === 'task'"
+                        v-if="taskContextMenu.task.kind === 'task' && canMutateProject"
                         type="button"
                         role="menuitem"
                         :disabled="taskContextBusy"
@@ -3574,17 +3615,17 @@ function statusLabel(s: string) {
                         </svg>
                         <span>Filtrar esta tarefa</span>
                     </button>
-                    <div v-if="taskContextMenu.task.kind === 'task'" class="task-context-priorities" role="group" aria-label="Definir prioridade"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" class="task-context-priority" :class="[option.flag, { active: (taskContextMenu.task.priority ?? 1) === option.priority }]" :disabled="taskContextBusy" :aria-label="option.label" :title="option.label" @click="setTaskPriorityFromContext(option.priority)"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div>
-                    <template v-if="taskContextMenu.task.kind === 'task'"><button type="button" role="menuitem" @click="duplicateTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5"></rect><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"></path></svg>Duplicar tarefa</button><button type="button" role="menuitem" class="context-danger" @click="deleteTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir tarefa</button></template>
-                    <template v-else><div class="task-context-section-create"><button type="button" role="menuitem" @click="createBelowSection('task')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Tarefa</button><button type="button" role="menuitem" @click="createBelowSection('section')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v10H4zM12 13v4M10 15h4"></path></svg>Seção</button></div><div class="task-context-section-create"><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, false)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4 4 4-4M5 5h14M5 19h14"></path></svg>Collapse all</button><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 15 4-4 4 4M5 5h14M5 19h14"></path></svg>Expand all</button></div></template>
+                    <div v-if="taskContextMenu.task.kind === 'task' && canMutateProject" class="task-context-priorities" role="group" aria-label="Definir prioridade"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" class="task-context-priority" :class="[option.flag, { active: (taskContextMenu.task.priority ?? 1) === option.priority }]" :disabled="taskContextBusy" :aria-label="option.label" :title="option.label" @click="setTaskPriorityFromContext(option.priority)"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div>
+                    <template v-if="taskContextMenu.task.kind === 'task' && canMutateProject"><button type="button" role="menuitem" @click="duplicateTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5"></rect><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"></path></svg>Duplicar tarefa</button><button type="button" role="menuitem" class="context-danger" @click="deleteTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir tarefa</button></template>
+                    <template v-else-if="taskContextMenu.task.kind === 'section'"><div v-if="canMutateProject" class="task-context-section-create"><button type="button" role="menuitem" @click="createBelowSection('task')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Tarefa</button><button type="button" role="menuitem" @click="createBelowSection('section')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v10H4zM12 13v4M10 15h4"></path></svg>Seção</button></div><div class="task-context-section-create"><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, false)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4 4 4-4M5 5h14M5 19h14"></path></svg>Collapse all</button><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 15 4-4 4 4M5 5h14M5 19h14"></path></svg>Expand all</button></div></template>
                     <button
-                        v-if="taskContextMenu.task.kind === 'section'"
+                        v-if="taskContextMenu.task.kind === 'section' && canMutateProject"
                         type="button"
                         role="menuitem"
                         @click="editSectionFromContext"
                     ><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 16.5-.8 3.3 3.3-.8L18 8.5 15.5 6zM14.5 7l2.5 2.5"></path></svg>Editar seção</button>
                     <button
-                        v-if="taskContextMenu.task.kind === 'section'"
+                        v-if="taskContextMenu.task.kind === 'section' && canMutateProject"
                         type="button"
                         role="menuitem"
                         class="context-danger"
@@ -3594,7 +3635,7 @@ function statusLabel(s: string) {
             ></Teleport>
             <Teleport to="body"
                 ><section
-                    v-if="dependencyContextMenu"
+                    v-if="dependencyContextMenu && canMutateProject"
                     ref="dependencyContextMenuElement"
                     class="task-context-menu dependency-context-menu"
                     role="menu"
@@ -3654,7 +3695,7 @@ function statusLabel(s: string) {
                     ><span :class="{ critical: dependency.critical }">{{ taskTitle(dependency.from) }}</span><b>{{ dependency.type }}</b><span :class="{ critical: dependency.critical }">{{ taskTitle(dependency.to) }}</span></button>
                     </section
             ></Teleport>
-            <div v-if="sectionDeleteDialog" class="relation-modal-scrim" @click.self="sectionDeleteDialog = null"><section class="relation-modal section-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="section-delete-title"><header><div><b id="section-delete-title">Excluir seção</b><small>Escolha como tratar os subitens de “{{ sectionDeleteDialog.task.title }}”.</small></div></header><div class="relation-modal-body"><label><input v-model="sectionDeleteDialog.action" value="delete" type="radio" /> Excluir esta seção e todos os subitens</label><label><input v-model="sectionDeleteDialog.action" value="move" type="radio" /> Mover os subitens antes de excluir</label><label v-if="sectionDeleteDialog.action === 'move'">Destino<HierarchyCombobox v-model="sectionDeleteDialog.destinationId" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDeleteDialog.task.id" /></label></div><footer><button class="soft-btn" @click="sectionDeleteDialog = null">Cancelar</button><button class="danger-btn" @click="confirmSectionDeletion">Excluir seção</button></footer></section></div>
+            <div v-if="sectionDeleteDialog && canMutateProject" class="relation-modal-scrim" @click.self="sectionDeleteDialog = null"><section class="relation-modal section-delete-dialog" role="alertdialog" aria-modal="true" aria-labelledby="section-delete-title"><header><div><b id="section-delete-title">Excluir seção</b><small>Escolha como tratar os subitens de “{{ sectionDeleteDialog.task.title }}”.</small></div></header><div class="relation-modal-body"><label><input v-model="sectionDeleteDialog.action" value="delete" type="radio" /> Excluir esta seção e todos os subitens</label><label><input v-model="sectionDeleteDialog.action" value="move" type="radio" /> Mover os subitens antes de excluir</label><label v-if="sectionDeleteDialog.action === 'move'">Destino<HierarchyCombobox v-model="sectionDeleteDialog.destinationId" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDeleteDialog.task.id" /></label></div><footer><button class="soft-btn" @click="sectionDeleteDialog = null">Cancelar</button><button class="danger-btn" @click="confirmSectionDeletion">Excluir seção</button></footer></section></div>
 
             <section
                 v-if="activeView === 'tasks'"
@@ -4704,7 +4745,7 @@ function statusLabel(s: string) {
                     <div>
                         <button
                             class="soft-btn"
-                            :disabled="store.selected.length !== 1"
+                            :disabled="!canMutateProject || store.selected.length !== 1"
                             @click="openSelectedTask"
                         >
                             Editar</button
@@ -4789,7 +4830,8 @@ function statusLabel(s: string) {
                     </div>
                 </header>
                 <div class="drawer-body">
-                    <div class="task-title-field"><label>Título<input v-model="activeTask.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask?.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask?.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
+                    <fieldset class="drawer-edit-fields" :disabled="!canMutateProject">
+                    <div class="task-title-field"><label>Título<input v-model="activeTask!.title" /></label><div ref="editorPriorityWrap" class="editor-priority-wrap"><button type="button" class="editor-priority-button" :class="taskPriorityOptions.find((option) => option.priority === (activeTask!.priority ?? 1))?.flag" aria-label="Definir prioridade" title="Definir prioridade" @click="editorPriorityMenu = !editorPriorityMenu"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (activeTask!.priority ?? 1))?.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button><div v-if="editorPriorityMenu" class="editor-priority-menu"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" :class="[option.flag, { active: (activeTask!.priority ?? 1) === option.priority }]" :aria-label="option.label" :title="option.label" @click="activeTask!.priority = option.priority; editorPriorityMenu = false"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div></div></div>
                     <section class="task-checklist" aria-label="Checklist de orientação">
                         <header><div><b>Checklist de orientação</b><small>{{ checklistItems.filter((item) => item.completed).length }}/{{ checklistItems.length }} concluído(s)</small></div><button type="button" class="checklist-add" aria-label="Adicionar item ao checklist" title="Adicionar item" @click="addChecklistItem">+</button></header>
                         <p v-if="!checklistItems.length" class="checklist-empty">Inclua pontos de acompanhamento sem criar novas tarefas.</p>
@@ -4803,7 +4845,7 @@ function statusLabel(s: string) {
                             </li>
                         </ul>
                     </section>
-                    <label>Descrição<RichMarkdownEditor :model-value="activeTask?.description ?? ''" ariaLabel="Descrição da tarefa" placeholder="Descreva a tarefa…" @update:model-value="(value) => { if (activeTask) activeTask.description = value }" /></label>
+                    <label>Descrição<RichMarkdownEditor :model-value="activeTask?.description ?? ''" :disabled="!canMutateProject" ariaLabel="Descrição da tarefa" placeholder="Descreva a tarefa…" @update:model-value="(value) => { if (activeTask) activeTask.description = value }" /></label>
                     <label>Posição na hierarquia<HierarchyCombobox v-model="activeTask.section_id" :items="store.workspace?.tasks ?? []" /></label>
                     <div class="form-grid" style="grid-template-columns: 1fr">
                         <label
@@ -5055,7 +5097,7 @@ function statusLabel(s: string) {
                                 Cancelar</button
                             ><button
                                 class="danger-btn"
-                                :disabled="deleting"
+                                :disabled="deleting || !canMutateProject"
                                 @click="deleteTask"
                             >
                                 {{
@@ -5066,6 +5108,7 @@ function statusLabel(s: string) {
                             </button>
                         </div>
                     </section>
+                    </fieldset>
                 </div>
                 <section
                     v-if="closeConfirmation"
@@ -5096,7 +5139,7 @@ function statusLabel(s: string) {
                             Descartar alterações</button
                         ><button
                             class="primary save-before-close"
-                            :disabled="deleting"
+                            :disabled="deleting || !canMutateProject"
                             @click="saveTask"
                         >
                             Salvar alterações
@@ -5105,7 +5148,7 @@ function statusLabel(s: string) {
                 </section>
                 <footer>
                     <button
-                        v-if="!isCreatingTask && activeTask.kind === 'task' && !deletionPreview"
+                        v-if="canMutateProject && !isCreatingTask && activeTask.kind === 'task' && !deletionPreview"
                         class="danger-btn"
                         @click="previewDeletion"
                     >
@@ -5117,7 +5160,7 @@ function statusLabel(s: string) {
                         Cancelar</button
                     ><button
                         class="primary"
-                        :disabled="deleting"
+                        :disabled="deleting || !canMutateProject"
                         @click="saveTask"
                     >
                         {{ isCreatingTask ? 'Criar tarefa' : 'Salvar alterações' }}
@@ -5126,8 +5169,8 @@ function statusLabel(s: string) {
             </template>
             <template v-else-if="sectionDraft">
                 <header><div><span class="eyebrow">{{ sectionDraft.id === '__new-section__' ? 'NOVA SEÇÃO' : 'EDITAR SEÇÃO' }}</span><h2 id="task-editor-title">{{ sectionDraft.id === '__new-section__' ? 'Adicionar seção' : sectionDraft.title }}</h2></div><div class="drawer-header-actions"><button class="drawer-pin" :class="{ active: editorPinned }" :aria-pressed="editorPinned" :aria-label="editorPinned ? 'Soltar editor do layout' : 'Fixar editor no layout'" :title="editorPinned ? 'Soltar editor' : 'Fixar editor'" @click="toggleEditorPinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3-1-6Z"></path></svg></button><button class="drawer-close" aria-label="Fechar editor" title="Fechar" @click="requestTaskEditorClose">×</button></div></header>
-                <div class="drawer-body section-editor-body"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></div>
-                <footer><button class="soft-btn drawer-cancel" @click="() => finishTaskEditorClose()">Cancelar</button><button class="primary" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
+                <div class="drawer-body section-editor-body"><fieldset class="drawer-edit-fields" :disabled="!canMutateProject"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></fieldset></div>
+                <footer><button class="soft-btn drawer-cancel" @click="() => finishTaskEditorClose()">Cancelar</button><button class="primary" :disabled="!canMutateProject" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
             </template>
         </aside>
         <TaskCommentsWindow
@@ -5136,7 +5179,7 @@ function statusLabel(s: string) {
             :task="task"
             :project-id="store.workspace!.project.id"
             :people="store.workspace?.people ?? []"
-            :can-edit="store.workspace?.project.role !== 'reader'"
+            :can-edit="store.workspace?.project.role !== 'reader' && connectivity.online.value"
             :window-index="index"
             :z-index="140 + index"
             @close="closeComments(task.id)"
@@ -5358,6 +5401,7 @@ function statusLabel(s: string) {
     </Teleport>
     <AccountPanel
         :open="account"
+        :user-id="auth.user!.id"
         @close="account = false"
         @deleted="
             account = false;
