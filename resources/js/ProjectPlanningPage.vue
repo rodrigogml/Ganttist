@@ -123,6 +123,8 @@ onUnmounted(() => {
     window.removeEventListener("keydown", focusTaskSearchFromShortcut);
     window.removeEventListener("popstate", syncProjectRoute);
     document.removeEventListener("pointerdown", closeFloatingMenusOnOutside);
+    if (checklistPreviewCloseTimer !== null)
+        clearTimeout(checklistPreviewCloseTimer);
     cancelTaskContextLongPress();
     cancelTimeblockGesture();
     stopEditorResize();
@@ -216,6 +218,8 @@ const timelinePlane = ref<HTMLElement | null>(null),
     undoDependencyId = ref<string | null>(null);
 const taskDraft = ref<Task | null>(null);
 const sectionDraft = ref<Task | null>(null);
+const checklistPreview = ref<{ task: Task; top: number; left: number } | null>(null);
+let checklistPreviewCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const checklistItems = ref<ChecklistItem[]>([]);
 const editingChecklistItemId = ref<string | null>(null);
 const checklistDragItemId = ref<string | null>(null);
@@ -229,24 +233,24 @@ const taskDraftBaseline = ref(""),
 const editorMinWidth = 390;
 let editorResize: { originX: number; originWidth: number } | null = null;
 type WorkspaceColumnId =
-    "assignee" | "status" | "start" | "finish" | "comments";
+    "assignee" | "status" | "start" | "finish" | "checklist" | "comments";
+type WorkspaceColumn = { id: WorkspaceColumnId; label: string; width: number };
 const TASK_COLUMN_MIN = 278;
-const workspaceColumns: ReadonlyArray<{
-    id: WorkspaceColumnId;
-    label: string;
-    width: number;
-}> = [
+const workspaceColumns: ReadonlyArray<WorkspaceColumn> = [
     { id: "assignee", label: "Responsável", width: 58 },
     { id: "status", label: "Status", width: 94 },
     { id: "start", label: "Data inicial", width: 92 },
     { id: "finish", label: "Data final", width: 92 },
+    { id: "checklist", label: "Checklist", width: 64 },
     { id: "comments", label: "Comentários", width: 76 },
 ];
+const workspaceColumnOrder = ref<WorkspaceColumnId[]>(workspaceColumns.map((column) => column.id));
 const columnVisibility = ref<Record<WorkspaceColumnId, boolean>>({
     assignee: true,
     status: true,
     start: false,
     finish: false,
+    checklist: true,
     comments: false,
 });
 const taskColumnWidth = ref(TASK_COLUMN_MIN),
@@ -254,7 +258,10 @@ const taskColumnWidth = ref(TASK_COLUMN_MIN),
     columnsMenu = ref(false),
     columnPickerButton = ref<HTMLElement | null>(null),
     columnPickerMenu = ref<HTMLElement | null>(null),
+    checklistPreviewElement = ref<HTMLElement | null>(null),
     columnPickerPosition = ref({ top: 0, left: 0 });
+const columnDragId = ref<WorkspaceColumnId | null>(null);
+const columnDropTarget = ref<{ id: WorkspaceColumnId; position: "before" | "after" } | null>(null);
 const hierarchyButton = ref<HTMLElement | null>(null),
     hierarchyMenuElement = ref<HTMLElement | null>(null),
     filterButton = ref<HTMLElement | null>(null),
@@ -388,8 +395,13 @@ const unblockedStatusesIndeterminate = computed(
 const taskColumnMax = computed(() =>
     Math.max(TASK_COLUMN_MIN, Math.floor(viewportWidth.value * 0.25)),
 );
+const orderedWorkspaceColumns = computed(() =>
+    workspaceColumnOrder.value
+        .map((id) => workspaceColumns.find((column) => column.id === id))
+        .filter((column): column is WorkspaceColumn => Boolean(column)),
+);
 const visibleWorkspaceColumns = computed(() =>
-    workspaceColumns.filter((column) => columnVisibility.value[column.id]),
+    orderedWorkspaceColumns.value.filter((column) => columnVisibility.value[column.id]),
 );
 const taskPaneWidth = computed(
     () =>
@@ -1010,15 +1022,30 @@ function clampTaskColumnWidth(width: number) {
 }
 function loadColumnPreferences() {
     try {
-        const storedVisibility = JSON.parse(
+        const stored = JSON.parse(
             localStorage.getItem("ganttist.workspace-columns") ?? "null",
-        ) as Partial<Record<WorkspaceColumnId, boolean>> | null;
+        ) as (Partial<Record<WorkspaceColumnId, boolean>> & {
+            visibility?: Partial<Record<WorkspaceColumnId, boolean>>;
+            order?: WorkspaceColumnId[];
+        }) | null;
+        const storedVisibility = stored?.visibility ?? stored;
         if (storedVisibility)
             workspaceColumns.forEach((column) => {
                 if (typeof storedVisibility[column.id] === "boolean")
                     columnVisibility.value[column.id] =
                         storedVisibility[column.id]!;
             });
+        if (Array.isArray(stored?.order)) {
+            const validOrder = stored.order.filter((id): id is WorkspaceColumnId =>
+                workspaceColumns.some((column) => column.id === id),
+            );
+            workspaceColumnOrder.value = [
+                ...new Set(validOrder),
+                ...workspaceColumns
+                    .map((column) => column.id)
+                    .filter((id) => !validOrder.includes(id)),
+            ];
+        }
         const storedWidth = Number(
             localStorage.getItem("ganttist.task-column-width"),
         );
@@ -1032,7 +1059,10 @@ function loadColumnPreferences() {
 function persistColumnPreferences() {
     localStorage.setItem(
         "ganttist.workspace-columns",
-        JSON.stringify(columnVisibility.value),
+        JSON.stringify({
+            visibility: columnVisibility.value,
+            order: workspaceColumnOrder.value,
+        }),
     );
     localStorage.setItem(
         "ganttist.task-column-width",
@@ -1056,6 +1086,85 @@ function toggleColumnsMenu(event: MouseEvent) {
         );
     }
 }
+function workspaceColumnPosition(id: WorkspaceColumnId) {
+    return workspaceColumnOrder.value.indexOf(id) + 1;
+}
+function startColumnDrag(column: WorkspaceColumn, event: DragEvent) {
+    columnDragId.value = column.id;
+    columnDropTarget.value = null;
+    event.dataTransfer?.setData("text/plain", column.id);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+function previewColumnDrop(column: WorkspaceColumn, event: DragEvent) {
+    if (!columnDragId.value || columnDragId.value === column.id) {
+        columnDropTarget.value = null;
+        return;
+    }
+    const bounds = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    columnDropTarget.value = {
+        id: column.id,
+        position: event.clientX < bounds.left + bounds.width / 2 ? "before" : "after",
+    };
+}
+function clearColumnDrag() {
+    columnDragId.value = null;
+    columnDropTarget.value = null;
+}
+function reorderWorkspaceColumn(sourceId: WorkspaceColumnId, targetId: WorkspaceColumnId, position: "before" | "after") {
+    if (sourceId === targetId) return;
+    const next = workspaceColumnOrder.value.filter((id) => id !== sourceId);
+    const targetIndex = next.indexOf(targetId);
+    if (targetIndex < 0) return;
+    next.splice(targetIndex + (position === "after" ? 1 : 0), 0, sourceId);
+    workspaceColumnOrder.value = next;
+    persistColumnPreferences();
+    void nextTick(measureGantt);
+}
+function dropWorkspaceColumn(column: WorkspaceColumn, event: DragEvent) {
+    previewColumnDrop(column, event);
+    const sourceId = columnDragId.value;
+    const target = columnDropTarget.value;
+    clearColumnDrag();
+    if (sourceId && target) reorderWorkspaceColumn(sourceId, target.id, target.position);
+}
+function moveWorkspaceColumn(column: WorkspaceColumn, direction: -1 | 1) {
+    const position = workspaceColumnOrder.value.indexOf(column.id);
+    const targetId = workspaceColumnOrder.value[position + direction];
+    if (targetId) reorderWorkspaceColumn(column.id, targetId, direction < 0 ? "before" : "after");
+}
+function openChecklistPreview(task: Task, event: MouseEvent) {
+    keepChecklistPreviewOpen();
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    checklistPreview.value = {
+        task,
+        top: Math.min(rect.bottom + 8, globalThis.innerHeight - 310),
+        left: Math.max(8, Math.min(rect.left - 112, globalThis.innerWidth - 320)),
+    };
+}
+function keepChecklistPreviewOpen() {
+    if (checklistPreviewCloseTimer === null) return;
+    clearTimeout(checklistPreviewCloseTimer);
+    checklistPreviewCloseTimer = null;
+}
+function scheduleChecklistPreviewClose() {
+    keepChecklistPreviewOpen();
+    checklistPreviewCloseTimer = setTimeout(() => {
+        checklistPreview.value = null;
+        checklistPreviewCloseTimer = null;
+    }, 180);
+}
+function openChecklistPreviewTask() {
+    const task = checklistPreview.value?.task;
+    keepChecklistPreviewOpen();
+    checklistPreview.value = null;
+    if (task) openTask(task);
+}
+
+function openTaskFromChecklistProgress(task: Task) {
+    keepChecklistPreviewOpen();
+    checklistPreview.value = null;
+    openTask(task);
+}
 function closeFloatingMenusOnOutside(event: PointerEvent) {
     const target = event.target as Node;
     if (
@@ -1064,6 +1173,10 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         !columnPickerMenu.value?.contains(target)
     )
         columnsMenu.value = false;
+    if (checklistPreview.value && !checklistPreviewElement.value?.contains(target)) {
+        keepChecklistPreviewOpen();
+        checklistPreview.value = null;
+    }
     if (
         hierarchyMenu.value &&
         !hierarchyButton.value?.contains(target) &&
@@ -1615,6 +1728,11 @@ function formatTaskDate(value: string | null) {
     if (!value) return "—";
     const [year, month, day] = value.slice(0, 10).split("-");
     return `${day}/${month}/${year}`;
+}
+function checklistProgress(task: Task) {
+    const items = task.kind === "task" ? task.checklist ?? [] : [];
+    if (!items.length) return null;
+    return `${items.filter((item) => item.completed).length}/${items.length}`;
 }
 function consideredStart(task: Task) {
     return task.considered_start ?? task.start;
@@ -3317,15 +3435,24 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                     <label class="mandatory"
                         ><input type="checkbox" checked disabled /> Tarefa
                         <small>Obrigatória · redimensionável</small></label
-                    ><label v-for="column in workspaceColumns" :key="column.id"
-                        ><input
-                            v-model="columnVisibility[column.id]"
-                            type="checkbox"
-                        />
-                        {{ column.label }}</label
+                    ><label v-for="column in orderedWorkspaceColumns" :key="column.id"
+                        ><input v-model="columnVisibility[column.id]" type="checkbox" />{{ column.label }}</label
                     >
                 </div></Teleport
             >
+
+            <Teleport to="body"><section
+                v-if="checklistPreview"
+                ref="checklistPreviewElement"
+                class="checklist-preview-popover"
+                role="dialog"
+                aria-modal="false"
+                :aria-label="`Checklist de ${checklistPreview.task.title}`"
+                :style="{ top: checklistPreview.top + 'px', left: checklistPreview.left + 'px' }"
+                @keydown.esc="checklistPreview = null"
+                @mouseenter="keepChecklistPreviewOpen"
+                @mouseleave="scheduleChecklistPreviewClose"
+            ><div class="checklist-preview-body" role="button" tabindex="0" aria-label="Abrir tarefa para editar o checklist" @click="openChecklistPreviewTask" @keydown.enter.prevent="openChecklistPreviewTask" @keydown.space.prevent="openChecklistPreviewTask"><ul><li v-for="item in checklistPreview.task.checklist" :key="item.id" :class="{ completed: item.completed }"><span class="checklist-preview-bullet" aria-hidden="true"></span><span>{{ item.text }}</span></li></ul><small>Clique para abrir a tarefa</small></div></section></Teleport>
 
             <Teleport to="body">
                 <section
@@ -3602,9 +3729,21 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                     ><span
                         v-for="column in visibleWorkspaceColumns"
                         :key="column.id"
-                        :class="['column-heading', `column-heading--${column.id}`]"
+                        :class="['column-heading', `column-heading--${column.id}`, {
+                            dragging: columnDragId === column.id,
+                            'drop-before': columnDropTarget?.id === column.id && columnDropTarget.position === 'before',
+                            'drop-after': columnDropTarget?.id === column.id && columnDropTarget.position === 'after',
+                        }]"
+                        draggable="true"
+                        tabindex="0"
                         :aria-label="column.label"
-                        :title="column.label"
+                        :title="`Arraste para reorganizar ${column.label}`"
+                        @dragstart="startColumnDrag(column, $event)"
+                        @dragend="clearColumnDrag"
+                        @dragover.prevent="previewColumnDrop(column, $event)"
+                        @drop.prevent="dropWorkspaceColumn(column, $event)"
+                        @keydown.alt.arrow-left.prevent="moveWorkspaceColumn(column, -1)"
+                        @keydown.alt.arrow-right.prevent="moveWorkspaceColumn(column, 1)"
                         ><svg
                             v-if="column.id === 'assignee'"
                             class="column-heading-icon"
@@ -3612,6 +3751,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                             aria-hidden="true"
                         ><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg
                         ><span v-else-if="column.id === 'status'">STATUS</span
+                        ><svg v-else-if="column.id === 'checklist'" class="column-heading-icon column-heading-checklist-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2A2.5 2.5 0 0 1 5 6.95V8.5a2.5 2.5 0 0 0 2.336 2.495L7.5 11h1.55a2.5 2.5 0 1 1 0 1H7.5a3.5 3.5 0 0 1-3.495-3.308L4 8.5V6.95A2.5 2.5 0 0 1 4.5 2m7 8a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3m-7-7a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3"></path></svg
                         ><span v-else-if="column.id === 'comments'" class="column-heading-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg></span
                         ><span v-else class="column-heading-date-icons"><svg class="column-heading-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2" /><path d="M7.5 3v4M16.5 3v4M3.5 9h17" /></svg><svg class="column-heading-icon column-heading-date-direction" viewBox="0 0 24 24" aria-hidden="true"><path v-if="column.id === 'start'" d="M4 4v16m3-8h12m-4-4 4 4-4 4" /><path v-else d="M20 4v16M17 12H5m4-4-4 4 4 4" /></svg></span
                     ></span
@@ -4168,6 +4308,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 <div
                                     v-if="columnVisibility.assignee"
                                     class="task-assignee task-meta-cell"
+                                    :style="{ order: workspaceColumnPosition('assignee') }"
                                 >
                                     <template
                                         v-if="
@@ -4197,6 +4338,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 <div
                                     v-if="columnVisibility.status"
                                     class="task-status task-meta-cell"
+                                    :style="{ order: workspaceColumnPosition('status') }"
                                 >
                                     <template
                                         v-if="
@@ -4219,6 +4361,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 <div
                                     v-if="columnVisibility.start"
                                     class="task-date task-meta-cell"
+                                    :style="{ order: workspaceColumnPosition('start') }"
                                 >
                                     <template v-if="task.kind === 'task'"
                                         ><span
@@ -4235,6 +4378,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 <div
                                     v-if="columnVisibility.finish"
                                     class="task-date task-meta-cell"
+                                    :style="{ order: workspaceColumnPosition('finish') }"
                                 >
                                     <template v-if="task.kind === 'task'"
                                         ><span
@@ -4249,8 +4393,25 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                     >
                                 </div>
                                 <div
+                                    v-if="columnVisibility.checklist"
+                                    class="task-checklist-progress task-meta-cell"
+                                    :style="{ order: workspaceColumnPosition('checklist') }"
+                                >
+                                    <button
+                                        v-if="checklistProgress(task)"
+                                        type="button"
+                                        class="task-checklist-progress-button"
+                                        :aria-label="`Abrir tarefa: checklist com ${checklistProgress(task)} itens concluídos`"
+                                        @mouseenter="openChecklistPreview(task, $event)"
+                                        @mouseleave="scheduleChecklistPreviewClose"
+                                        @click.stop="openTaskFromChecklistProgress(task)"
+                                        >{{ checklistProgress(task) }}</button
+                                    >
+                                </div>
+                                <div
                                     v-if="columnVisibility.comments"
                                     class="task-comments task-meta-cell"
+                                    :style="{ order: workspaceColumnPosition('comments') }"
                                 >
                                     <template v-if="task.kind === 'task'">
                                         <button
