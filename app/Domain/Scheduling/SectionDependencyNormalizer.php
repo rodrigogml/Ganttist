@@ -13,16 +13,18 @@ final readonly class SectionDependencyNormalizer
     public function __construct(private WorkCalendar $calendar, private ProjectionPolicy $policy = ProjectionPolicy::PreserveDuration) {}
 
     /**
-     * @param list<TaskProjectionInput> $tasks
-     * @param array<string, string|null> $taskSections
-     * @param array<string, string|null> $sectionParents
-     * @param list<ScheduleDependency> $dependencies
+     * @param  list<TaskProjectionInput>  $tasks
+     * @param  array<string, string|null>  $taskSections
+     * @param  array<string, string|null>  $sectionParents
+     * @param  list<ScheduleDependency>  $dependencies
      * @return array{projections: array<string, TaskProjection>, dependencies: list<Dependency>, violations: array<string, bool>}
      */
     public function calculate(array $tasks, array $taskSections, array $sectionParents, array $dependencies, DateTimeImmutable $today): array
     {
         $inputs = [];
-        foreach ($tasks as $task) $inputs[$task->id] = $task;
+        foreach ($tasks as $task) {
+            $inputs[$task->id] = $task;
+        }
         $descendants = $this->descendants($inputs, $taskSections, $sectionParents);
         $projections = (new TaskProjectionCalculator($this->calendar, $this->policy))->calculate($tasks, [], $today);
         $normalized = [];
@@ -40,12 +42,19 @@ final readonly class SectionDependencyNormalizer
                     : $this->targets($descendants[$dependency->successorId] ?? [], $projections, $dependency->type);
                 if ($sources === [] || $targets === []) {
                     $violations[(string) $index] = true;
+
                     continue;
                 }
-                foreach ($sources as $source) foreach ($targets as $target) $next[] = new Dependency($source, $target, $dependency->type);
+                foreach ($sources as $source) {
+                    foreach ($targets as $target) {
+                        $next[] = new Dependency($source, $target, $dependency->type);
+                    }
+                }
             }
             $unique = [];
-            foreach ($next as $dependency) $unique[implode('|', [$dependency->predecessorId, $dependency->successorId, $dependency->type])] = $dependency;
+            foreach ($next as $dependency) {
+                $unique[implode('|', [$dependency->predecessorId, $dependency->successorId, $dependency->type])] = $dependency;
+            }
             $normalized = array_values($unique);
             $updated = (new TaskProjectionCalculator($this->calendar, $this->policy))->calculate($tasks, $normalized, $today);
             if ($this->same($projections, $updated)) {
@@ -67,6 +76,7 @@ final readonly class SectionDependencyNormalizer
                 $section = $sectionParents[$section] ?? null;
             }
         }
+
         return $result;
     }
 
@@ -74,20 +84,27 @@ final readonly class SectionDependencyNormalizer
     private function anchor(array $ids, array $projections, bool $finish): array
     {
         $available = array_values(array_filter($ids, fn (string $id): bool => isset($projections[$id])));
-        if ($available === []) return [];
+        if ($available === []) {
+            return [];
+        }
         usort($available, function (string $left, string $right) use ($projections, $finish): int {
             $a = $finish ? $projections[$left]->consideredDeadline : $projections[$left]->consideredStart;
             $b = $finish ? $projections[$right]->consideredDeadline : $projections[$right]->consideredStart;
             $comparison = $a <=> $b;
+
             return $comparison === 0 ? $left <=> $right : ($finish ? -$comparison : $comparison);
         });
+
         return [$available[0]];
     }
 
     /** @param list<string> $ids @param array<string, TaskProjection> $projections @return list<string> */
     private function targets(array $ids, array $projections, string $type): array
     {
-        if (in_array($type, ['FS', 'SS'], true)) return $ids;
+        if (in_array($type, ['FS', 'SS'], true)) {
+            return $ids;
+        }
+
         return $this->anchor($ids, $projections, true);
     }
 
@@ -95,8 +112,11 @@ final readonly class SectionDependencyNormalizer
     private function same(array $before, array $after): bool
     {
         foreach ($before as $id => $projection) {
-            if (! isset($after[$id]) || $projection->consideredStart != $after[$id]->consideredStart || $projection->consideredDeadline != $after[$id]->consideredDeadline) return false;
+            if (! isset($after[$id]) || $projection->consideredStart != $after[$id]->consideredStart || $projection->consideredDeadline != $after[$id]->consideredDeadline) {
+                return false;
+            }
         }
+
         return true;
     }
 }

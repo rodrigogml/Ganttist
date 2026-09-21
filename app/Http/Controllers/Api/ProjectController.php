@@ -2,12 +2,10 @@
 
 namespace App\Http\Controllers\Api;
 
-use App\Domain\Scheduling\Dependency;
 use App\Domain\Scheduling\ScheduleDependency;
 use App\Domain\Scheduling\SchedulingEngine;
 use App\Domain\Scheduling\SectionDependencyNormalizer;
 use App\Domain\Scheduling\TaskPlan;
-use App\Domain\Scheduling\TaskProjectionCalculator;
 use App\Domain\Scheduling\TaskProjectionInput;
 use App\Domain\Scheduling\WorkCalendar;
 use App\Jobs\Documents\PurgeProjectDocumentFiles;
@@ -466,6 +464,7 @@ final class ProjectController
                 $query->where(fn ($endpoint) => $endpoint->where('predecessor_kind', 'task')->where('predecessor_id', $taskId))
                     ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'task')->where('successor_id', $taskId));
             })->delete();
+
             return DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->delete();
         });
         abort_unless($deleted, 404, 'Tarefa não encontrada.');
@@ -1108,8 +1107,11 @@ final class ProjectController
     private function hasForbiddenScheduleDependencies(string $projectId): bool
     {
         foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get() as $dependency) {
-            if ($this->forbiddenScheduleRelation($projectId, $dependency->predecessor_kind, $dependency->predecessor_id, $dependency->successor_kind, $dependency->successor_id)) return true;
+            if ($this->forbiddenScheduleRelation($projectId, $dependency->predecessor_kind, $dependency->predecessor_id, $dependency->successor_kind, $dependency->successor_id)) {
+                return true;
+            }
         }
+
         return false;
     }
 
@@ -1121,8 +1123,11 @@ final class ProjectController
 
     private function sectionContainsEndpoint(string $projectId, string $sectionId, string $kind, string $id): bool
     {
-        if ($kind === 'section') return $this->sectionIsDescendantOf($projectId, $id, $sectionId);
+        if ($kind === 'section') {
+            return $this->sectionIsDescendantOf($projectId, $id, $sectionId);
+        }
         $section = DB::table('project_tasks')->where('project_id', $projectId)->where('id', $id)->value('section_id');
+
         return $section !== null && $this->sectionIsDescendantOf($projectId, $section, $sectionId);
     }
 
@@ -1131,7 +1136,9 @@ final class ProjectController
         $graph = [];
         foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get(['predecessor_kind', 'predecessor_id', 'successor_kind', 'successor_id']) as $edge) {
             foreach ($this->scheduleEndpointLeaves($projectId, $edge->predecessor_kind, $edge->predecessor_id) as $source) {
-                foreach ($this->scheduleEndpointLeaves($projectId, $edge->successor_kind, $edge->successor_id) as $target) $graph[$source][] = $target;
+                foreach ($this->scheduleEndpointLeaves($projectId, $edge->successor_kind, $edge->successor_id) as $target) {
+                    $graph[$source][] = $target;
+                }
             }
         }
         foreach ($this->scheduleEndpointLeaves($projectId, $toKind, $toId) as $start) {
@@ -1139,23 +1146,35 @@ final class ProjectController
             $seen = [];
             while ($pending !== []) {
                 $node = array_pop($pending);
-                if (in_array($node, $this->scheduleEndpointLeaves($projectId, $fromKind, $fromId), true)) return true;
-                if (isset($seen[$node])) continue;
+                if (in_array($node, $this->scheduleEndpointLeaves($projectId, $fromKind, $fromId), true)) {
+                    return true;
+                }
+                if (isset($seen[$node])) {
+                    continue;
+                }
                 $seen[$node] = true;
-                foreach ($graph[$node] ?? [] as $next) $pending[] = $next;
+                foreach ($graph[$node] ?? [] as $next) {
+                    $pending[] = $next;
+                }
             }
         }
+
         return false;
     }
 
     /** @return list<string> */
     private function scheduleEndpointLeaves(string $projectId, string $kind, string $id): array
     {
-        if ($kind === 'task') return [$id];
+        if ($kind === 'task') {
+            return [$id];
+        }
         $sectionIds = [$id];
         for ($index = 0; $index < count($sectionIds); $index++) {
-            foreach (DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionIds[$index])->pluck('id') as $child) $sectionIds[] = $child;
+            foreach (DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionIds[$index])->pluck('id') as $child) {
+                $sectionIds[] = $child;
+            }
         }
+
         return DB::table('project_tasks')->where('project_id', $projectId)->whereIn('section_id', $sectionIds)->pluck('id')->all();
     }
 
@@ -1163,14 +1182,18 @@ final class ProjectController
     {
         $sectionIds = [$sectionId];
         for ($index = 0; $index < count($sectionIds); $index++) {
-            foreach (DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionIds[$index])->pluck('id') as $child) $sectionIds[] = $child;
+            foreach (DB::table('project_sections')->where('project_id', $projectId)->where('parent_section_id', $sectionIds[$index])->pluck('id') as $child) {
+                $sectionIds[] = $child;
+            }
         }
         $taskIds = DB::table('project_tasks')->where('project_id', $projectId)->whereIn('section_id', $sectionIds)->pluck('id')->all();
         DB::table('project_schedule_dependencies')->where('project_id', $projectId)->where(function ($query) use ($sectionIds, $taskIds): void {
             $query->where(fn ($endpoint) => $endpoint->where('predecessor_kind', 'section')->whereIn('predecessor_id', $sectionIds))
                 ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'section')->whereIn('successor_id', $sectionIds));
-            if ($taskIds !== []) $query->orWhere(fn ($endpoint) => $endpoint->where('predecessor_kind', 'task')->whereIn('predecessor_id', $taskIds))
-                ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'task')->whereIn('successor_id', $taskIds));
+            if ($taskIds !== []) {
+                $query->orWhere(fn ($endpoint) => $endpoint->where('predecessor_kind', 'task')->whereIn('predecessor_id', $taskIds))
+                    ->orWhere(fn ($endpoint) => $endpoint->where('successor_kind', 'task')->whereIn('successor_id', $taskIds));
+            }
         })->delete();
     }
 

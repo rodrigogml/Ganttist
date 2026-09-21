@@ -33,8 +33,14 @@ Acesse `http://127.0.0.1:8000`. A workspace inicial usa fixtures sintéticas pre
 ```powershell
 php -d extension=mbstring -d extension=openssl -d extension=fileinfo -d xdebug.mode=off vendor/phpunit/phpunit/phpunit
 $env:PATH=(Resolve-Path '.tools/node-v22.14.0-win-x64').Path+';'+$env:PATH
+npm test
+npx vue-tsc --noEmit
 npm run build
+npm run test:e2e:install # primeira execução; no Linux com dependências ausentes: npx playwright install --with-deps chromium
+npm run test:e2e
 ```
+
+Os recursos de processamento documental exigem a instalação da versão fixada do Python antes dos testes de prontidão: `python -m pip install -r scripts/documents/requirements.txt`. O comando `php artisan documents:readiness --write` confirma que o interpretador configurado consegue carregar essa versão.
 
 ## Estrutura
 

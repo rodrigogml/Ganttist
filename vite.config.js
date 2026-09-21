@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite';
 export default defineConfig({
     test: {
         exclude: ['tests/e2e/**', '**/node_modules/**'],
+        setupFiles: ['resources/js/test-setup.ts'],
     },
     plugins: [
         laravel({
