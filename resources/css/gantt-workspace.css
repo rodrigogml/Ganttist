@@ -686,6 +686,10 @@ body.resizing-task-column * {
   min-width: 0;
 }
 
+.task-row:not(.section) .task-title-line b {
+  font-weight: 500;
+}
+
 .task-priority-flag {
   position: absolute;
   z-index: 2;
