@@ -6,8 +6,9 @@ import { RouterView } from 'vue-router'
 import { router } from './router'
 import { setApiResponseHandler } from './lib/api'
 import { useAuthStore } from './stores/auth'
+import { defaultForm } from './directives/default-form'
 
 const pinia = createPinia()
 setApiResponseHandler(response => { useAuthStore(pinia).handleUnauthorized(response) })
-createApp({ render: () => h(RouterView) }).use(pinia).use(router).mount('#app')
+createApp({ render: () => h(RouterView) }).directive('default-form', defaultForm).use(pinia).use(router).mount('#app')
 if ('serviceWorker' in navigator && import.meta.env.PROD) window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js?v=7', { scope: '/' }))

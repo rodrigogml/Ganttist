@@ -12,6 +12,7 @@ import type { Collaborator, Task, TaskComment, TaskTable } from "./types";
 import { createEmptyTaskTableDocument, type TaskTableDocument } from "./task-table/univer-adapter";
 import { TaskTableApiError, taskTableClient } from "./task-table/client";
 import { apiFetch } from "./lib/api";
+import DefaultSubmitButton from "./components/forms/DefaultSubmitButton.vue";
 
 const RichMarkdownEditor = defineAsyncComponent(
     () => import("./RichMarkdownEditor.vue"),
@@ -513,7 +514,7 @@ onBeforeUnmount(() => {
         </header>
 
         <div class="comments-window-body">
-            <section v-if="editingTable && editingDocument" class="task-table-edit-panel" aria-label="Editar tabela">
+            <section v-if="editingTable && editingDocument" v-default-form class="task-table-edit-panel" aria-label="Editar tabela">
                 <div v-if="lockLost" ref="lockLostAlert" role="alert" tabindex="-1" class="task-table-lock-lost">
                     A edição foi assumida por outra pessoa. Seu rascunho não será salvo nesta tabela.
                     <button type="button" class="soft-btn" @click="run(copyLostTable)">Copiar conteúdo</button>
@@ -523,7 +524,7 @@ onBeforeUnmount(() => {
                 <div class="comment-actions">
                     <button type="button" class="soft-btn" @click="run(cancelTableEdit)">Cancelar</button>
                     <button v-if="!lockLost" type="button" class="danger-btn" @click="run(deleteTable, 'Tabela excluída')">Excluir</button>
-                    <button v-if="!lockLost" type="button" class="primary" @click="run(saveTableEdit, 'Tabela salva')">Salvar tabela</button>
+                    <DefaultSubmitButton v-if="!lockLost" @click="run(saveTableEdit, 'Tabela salva')">Salvar tabela</DefaultSubmitButton>
                 </div>
             </section>
             <p v-if="loading" class="comments-window-empty">Carregando comentários…</p>
@@ -535,10 +536,12 @@ onBeforeUnmount(() => {
                     <time v-if="block.item.posted_at">{{ new Date(block.item.posted_at).toLocaleString("pt-BR") }}</time>
                 </header>
                 <template v-if="editingId === block.item.id">
+                    <div v-default-form>
                     <RichMarkdownEditor v-model="editDraft" ariaLabel="Editar comentário" placeholder="Edite o comentário…" />
                     <div class="comment-actions">
                         <button type="button" class="soft-btn" @click="cancelEdit">Cancelar</button>
-                        <button type="button" class="primary" :disabled="!editDraft.trim()" @click="run(saveEdit, 'Comentário atualizado')">Salvar</button>
+                        <DefaultSubmitButton :disabled="!editDraft.trim()" @click="run(saveEdit, 'Comentário atualizado')">Salvar</DefaultSubmitButton>
+                    </div>
                     </div>
                 </template>
                 <template v-else>
@@ -569,13 +572,13 @@ onBeforeUnmount(() => {
                 <button id="new-comment-tab" type="button" role="tab" :aria-selected="composerTab === 'comment'" aria-controls="new-comment-panel" @click="composerTab = 'comment'">Novo Comentário</button>
                 <button v-if="canEdit" id="new-table-tab" type="button" role="tab" :aria-selected="composerTab === 'table'" aria-controls="new-table-panel" @click="composerTab = 'table'">Nova Tabela</button>
             </div>
-            <div v-if="composerTab === 'comment' && canEdit" id="new-comment-panel" role="tabpanel" aria-labelledby="new-comment-tab">
+            <div v-if="composerTab === 'comment' && canEdit" v-default-form id="new-comment-panel" role="tabpanel" aria-labelledby="new-comment-tab">
                 <label>Novo comentário<RichMarkdownEditor v-model="draft" ariaLabel="Novo comentário" placeholder="Escreva um comentário…" /></label>
-                <button type="button" class="primary" :disabled="!draft.trim()" @click="run(publish, 'Comentário publicado')">Publicar comentário</button>
+                <DefaultSubmitButton :disabled="!draft.trim()" @click="run(publish, 'Comentário publicado')">Publicar comentário</DefaultSubmitButton>
             </div>
-            <div v-else-if="canEdit" id="new-table-panel" role="tabpanel" aria-labelledby="new-table-tab">
-                <TaskTableEditor :key="tableEditorKey" ref="tableEditor" :document="tableDraft" />
-                <button type="button" class="primary" @click="run(publishTable, 'Tabela publicada')">Publicar tabela</button>
+            <div v-else-if="canEdit" v-default-form id="new-table-panel" role="tabpanel" aria-labelledby="new-table-tab">
+                <TaskTableEditor :key="tableEditorKey" ref="tableEditor" data-default-form-shortcut-ignore :document="tableDraft" />
+                <DefaultSubmitButton @click="run(publishTable, 'Tabela publicada')">Publicar tabela</DefaultSubmitButton>
             </div>
             <p v-else class="comments-window-empty">Você tem acesso somente para leitura nesta conversa.</p>
         </footer>

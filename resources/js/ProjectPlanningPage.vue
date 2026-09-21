@@ -17,6 +17,7 @@ import HierarchyCombobox from "./HierarchyCombobox.vue";
 import PersonCombobox from "./PersonCombobox.vue";
 import TaskCommentsWindow from "./TaskCommentsWindow.vue";
 import DateInput from "./DateInput.vue";
+import DefaultSubmitButton from "./components/forms/DefaultSubmitButton.vue";
 import { useAuthStore } from "./stores/auth";
 import {
     unblockedTaskStatuses,
@@ -4745,6 +4746,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
         </main>
 
         <aside
+            v-default-form
             class="drawer"
             :class="{ open: drawer && (activeTask || sectionDraft), pinned: editorPinned }"
             role="dialog"
@@ -5130,19 +5132,18 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         @click="requestTaskEditorClose"
                     >
                         Cancelar</button
-                    ><button
-                        class="primary"
+                    ><DefaultSubmitButton
                         :disabled="deleting || !canMutateProject"
                         @click="saveTask"
                     >
                         {{ isCreatingTask ? 'Criar tarefa' : 'Salvar alterações' }}
-                    </button>
+                    </DefaultSubmitButton>
                 </footer>
             </template>
             <template v-else-if="sectionDraft">
                 <header><div><span class="eyebrow">{{ sectionDraft.id === '__new-section__' ? 'NOVA SEÇÃO' : 'EDITAR SEÇÃO' }}</span><h2 id="task-editor-title">{{ sectionDraft.id === '__new-section__' ? 'Adicionar seção' : sectionDraft.title }}</h2></div><div class="drawer-header-actions"><button class="drawer-pin" :class="{ active: editorPinned }" :aria-pressed="editorPinned" :aria-label="editorPinned ? 'Soltar editor do layout' : 'Fixar editor no layout'" :title="editorPinned ? 'Soltar editor' : 'Fixar editor'" @click="toggleEditorPinned"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3h8l-1 6 3 3v2h-5v7l-1 1-1-1v-7H6v-2l3-3-1-6Z"></path></svg></button><button class="drawer-close" aria-label="Fechar editor" title="Fechar" @click="requestTaskEditorClose">×</button></div></header>
                 <div class="drawer-body section-editor-body"><fieldset class="drawer-edit-fields" :disabled="!canMutateProject"><div class="source-line"><span class="todoist-mark">▤</span><div><b>Estrutura do projeto</b><small>Seções organizam tarefas e outras seções.</small></div></div><label>Nome da seção<input v-model="sectionDraft.title" autofocus placeholder="Ex.: Planejamento"></label><label>Seção-pai<HierarchyCombobox v-model="sectionDraft.parent_id" :items="store.workspace?.tasks ?? []" :exclude-id="sectionDraft.id" /></label></fieldset></div>
-                <footer><button class="soft-btn drawer-cancel" @click="() => finishTaskEditorClose()">Cancelar</button><button class="primary" :disabled="!canMutateProject" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</button></footer>
+                <footer><button class="soft-btn drawer-cancel" @click="() => finishTaskEditorClose()">Cancelar</button><DefaultSubmitButton :disabled="!canMutateProject" @click="saveSection">{{ sectionDraft.id === '__new-section__' ? 'Criar seção' : 'Salvar alterações' }}</DefaultSubmitButton></footer>
             </template>
         </aside>
         <TaskCommentsWindow
@@ -5165,6 +5166,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
             @keydown.esc="relationModal = null"
         >
             <section
+                v-default-form
                 class="relation-modal"
                 role="dialog"
                 aria-modal="true"
@@ -5319,8 +5321,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                 <footer>
                     <button class="soft-btn" @click="relationModal = null">
                         Cancelar</button
-                    ><button
-                        class="primary"
+                    ><DefaultSubmitButton
                         :disabled="
                             !relationModal.selectedId ||
                             !relationModal.type ||
@@ -5330,7 +5331,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         @click="confirmRelationModal"
                     >
                         {{ relationBusy ? "Criando…" : "Criar relação" }}
-                    </button>
+                    </DefaultSubmitButton>
                 </footer>
             </section>
         </div>
