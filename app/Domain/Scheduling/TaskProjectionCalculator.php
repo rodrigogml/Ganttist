@@ -62,15 +62,23 @@ final readonly class TaskProjectionCalculator
         foreach ($order as $id) {
             $input = $inputs[$id];
             $completionDate = $this->date($input->completionDate ?? $today);
-            $baseStart = $this->date($input->start ?? ($input->completed ? $completionDate : $today));
             $explicitDeadline = $input->deadline ? $this->date($input->deadline) : null;
+            $duration = (new TaskDurationResolver($this->calendar))->resolve($input->start, $input->deadline, $input->plannedDurationWorkdays);
+            $baseStart = $input->start !== null
+                ? $this->date($input->start)
+                : ($explicitDeadline !== null && $input->plannedDurationWorkdays !== null
+                    ? $this->calendar->subtractWorkDays($explicitDeadline, $duration - 1)
+                    : $this->date($input->completed ? $completionDate : $today));
             $baseDeadline = $input->completed
                 ? $completionDate
-                : ($explicitDeadline !== null && $explicitDeadline >= $baseStart ? $explicitDeadline : $baseStart);
+                : ($input->plannedDurationWorkdays !== null
+                    ? $this->calendar->addWorkDays($baseStart, $duration - 1)
+                    : ($explicitDeadline !== null && $explicitDeadline >= $baseStart
+                    ? $explicitDeadline
+                    : $this->calendar->addWorkDays($baseStart, $duration - 1)));
             if ($baseStart > $baseDeadline) {
                 $baseStart = $baseDeadline;
             }
-            $duration = $this->calendar->countWorkDays($baseStart, $baseDeadline);
             $consideredStart = $baseStart;
             $unlockDate = null;
             $earliestStart = null;
@@ -100,12 +108,16 @@ final readonly class TaskProjectionCalculator
                 }
             }
 
-            $consideredDeadline = match ($this->policy) {
-                ProjectionPolicy::PreserveDuration => $consideredStart == $baseStart
-                    ? $baseDeadline
-                    : ($duration === 1 ? $consideredStart : $this->calendar->addWorkDays($consideredStart, $duration - 1)),
-                ProjectionPolicy::PreserveDeadline => $baseDeadline >= $consideredStart ? $baseDeadline : $consideredStart,
-            };
+            $consideredDeadline = $input->plannedDurationWorkdays !== null || $this->policy === ProjectionPolicy::PreserveDuration
+                ? ($consideredStart == $baseStart ? $baseDeadline : $this->calendar->addWorkDays($consideredStart, $duration - 1))
+                : match ($this->policy) {
+                    ProjectionPolicy::PreserveDuration => throw new \LogicException('Política de projeção não reconhecida.'),
+                    ProjectionPolicy::PreserveDeadline => $baseDeadline >= $consideredStart ? $baseDeadline : $consideredStart,
+                };
+            $constraintViolated = ! $input->completed
+                && $input->plannedDurationWorkdays !== null
+                && $explicitDeadline !== null
+                && $consideredDeadline !== $explicitDeadline;
             $hasExplicitSchedule = $input->start !== null || $input->deadline !== null;
             $status = match (true) {
                 $input->completed => ProjectedTaskStatus::Completed,
@@ -115,7 +127,18 @@ final readonly class TaskProjectionCalculator
                 $hasExplicitSchedule => ProjectedTaskStatus::InProgress,
                 default => ProjectedTaskStatus::Opened,
             };
-            $result[$id] = new TaskProjection($id, $consideredStart, $consideredDeadline, $unlockDate, $earliestStart, $completionDate, $status);
+            $result[$id] = new TaskProjection(
+                $id,
+                $consideredStart,
+                $consideredDeadline,
+                $unlockDate,
+                $earliestStart,
+                $completionDate,
+                $status,
+                $duration,
+                $constraintViolated ? ScheduleConstraintState::Violated : ScheduleConstraintState::Satisfied,
+                $constraintViolated ? 'A duração planejada não pode ser satisfeita junto do prazo após aplicar as dependências.' : null,
+            );
         }
 
         return $result;

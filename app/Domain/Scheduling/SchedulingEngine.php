@@ -60,7 +60,7 @@ final class SchedulingEngine
 
         foreach ($order as $id) {
             $task = $byId[$id];
-            $virtualStart = $task->start ?? $operationalToday;
+            $virtualStart = $task->anchoredStart($this->calendar) ?? $operationalToday;
             if ($task->completed) {
                 continue;
             }
@@ -68,7 +68,7 @@ final class SchedulingEngine
             foreach ($incoming[$id] ?? [] as $dependency) {
                 $predecessor = $byId[$dependency->predecessorId];
                 $predecessorStart = $predecessor->effectiveCompletionDate
-                    ?? $predecessor->start
+                    ?? $predecessor->anchoredStart($this->calendar)
                     ?? $operationalToday;
                 $predecessorFinish = $predecessor->completed && $predecessor->effectiveCompletionDate
                     ? $predecessor->effectiveCompletionDate
@@ -204,7 +204,7 @@ final class SchedulingEngine
 
         $float = [];
         foreach ($tasks as $id => $task) {
-            $early = $task->start ?? $task->effectiveCompletionDate ?? throw new DomainException('Data virtual ausente.');
+            $early = $task->start ?? $task->anchoredStart($this->calendar) ?? $task->effectiveCompletionDate ?? throw new DomainException('Data virtual ausente.');
             $float[$id] = $lateStart[$id] <= $early
                 ? 0
                 : $this->calendar->countWorkDays($early, $lateStart[$id]) - 1;

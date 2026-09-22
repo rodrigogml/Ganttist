@@ -79,6 +79,6 @@
 
 ## Derived Values
 
-- Status: concluída > atrasada > bloqueada > agendada > aberta.
+- Status: concluída > bloqueada > agendada > atrasada > em andamento > aberta.
 - Progresso: soma da duração planejada de tarefas concluídas dividida pela soma total; tarefas sem duração entram conforme regra do core a ser validada nos testes de domínio.
 - Atrasadas: tarefas não concluídas com fim planejado anterior à data civil corrente.

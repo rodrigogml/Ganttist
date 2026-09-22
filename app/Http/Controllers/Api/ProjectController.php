@@ -2,10 +2,14 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Scheduling\PlanningDriver;
 use App\Domain\Scheduling\ScheduleDependency;
 use App\Domain\Scheduling\SchedulingEngine;
 use App\Domain\Scheduling\SectionDependencyNormalizer;
 use App\Domain\Scheduling\TaskPlan;
+use App\Domain\Scheduling\TaskPlanningNormalizer;
+use App\Domain\Scheduling\TaskPlanningPatch;
+use App\Domain\Scheduling\TaskPlanningState;
 use App\Domain\Scheduling\TaskProjectionInput;
 use App\Domain\Scheduling\WorkCalendar;
 use App\Jobs\Documents\PurgeProjectDocumentFiles;
@@ -107,6 +111,7 @@ final class ProjectController
             $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
             $task->completed_at !== null,
             $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
+            $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
         ))->all();
         $sectionCalculation = (new SectionDependencyNormalizer($calendar))->calculate($projectionInputs, $taskSections, $sectionParents, $scheduleDependencies, $today);
         $domainDependencies = $sectionCalculation['dependencies'];
@@ -119,6 +124,8 @@ final class ProjectController
                 $calendar,
                 $task->completed_at !== null,
                 $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
+                null,
+                $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
             ))->all(),
             $domainDependencies,
             $today,
@@ -169,7 +176,7 @@ final class ProjectController
                 }
                 $task = $child->item;
                 $projection = $projections[$task->id];
-                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0) + (int) ($tableCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? []];
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'plannedDurationWorkdays' => $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays, 'resolved_duration_workdays' => $projection->resolvedDurationWorkdays, 'schedule_constraint_state' => $projection->scheduleConstraintState->value, 'schedule_constraint_reason' => $projection->scheduleConstraintReason, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0) + (int) ($tableCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? []];
             }
         };
         $appendChildren(null);
@@ -202,9 +209,11 @@ final class ProjectController
         $people = DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']);
         $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
         $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['completed']));
+        $totalWeight = array_sum(array_map(fn (array $task): int => $task['resolved_duration_workdays'], $leafTasks));
+        $completedWeight = array_sum(array_map(fn (array $task): int => $task['completed'] ? $task['resolved_duration_workdays'] : 0, $leafTasks));
         $statusCount = fn (string $status): int => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === $status));
         $stats = [
-            'progress' => $leafTasks === [] ? 0 : (int) round($completed / count($leafTasks) * 100),
+            'progress' => $totalWeight === 0 ? 0 : (int) round($completedWeight / $totalWeight * 100),
             'completed' => $completed,
             'total' => count($leafTasks),
             'critical' => count($calculation->criticalTaskIds),
@@ -214,6 +223,7 @@ final class ProjectController
             'late' => $statusCount('late'),
             'in_progress' => $statusCount('in_progress'),
             'without_dates' => count(array_filter($leafTasks, fn (array $task): bool => $task['start'] === null && $task['finish'] === null)),
+            'without_duration' => count(array_filter($leafTasks, fn (array $task): bool => $task['plannedDurationWorkdays'] === null)),
         ];
 
         return response()->json(['data' => ['project' => ['id' => $project->id, 'name' => $project->name, 'source' => 'Local', 'sync_status' => 'local', 'updated_at' => $project->updated_at, 'role' => $member->role], 'tasks' => $rows, 'people' => $people, 'dependencies' => $dependencies, 'stats' => $stats]]);
@@ -237,17 +247,24 @@ final class ProjectController
     public function createTask(Request $request, string $projectId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'description' => ['nullable', 'string'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'sectionId' => ['nullable', 'string'], 'assigneePersonId' => ['nullable', 'string'], 'plannedStart' => ['nullable', 'date'], 'plannedFinish' => ['nullable', 'date', 'after_or_equal:plannedStart'], 'actualCompletionDate' => ['nullable', 'date']]);
+        $data = $request->validate(['title' => ['required', 'string', 'max:255'], 'description' => ['nullable', 'string'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'sectionId' => ['nullable', 'string'], 'assigneePersonId' => ['nullable', 'string'], 'plannedStart' => ['nullable', 'date'], 'plannedFinish' => ['nullable', 'date'], 'plannedDurationWorkdays' => ['nullable', 'integer'], 'planningDriver' => ['nullable', 'in:start,finish,duration'], 'actualCompletionDate' => ['nullable', 'date']]);
         if (! empty($data['sectionId'])) {
             abort_unless(DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists(), 422, 'Seção inválida.');
         }
         if (! empty($data['assigneePersonId'])) {
             abort_unless(DB::table('project_people')->where('id', $data['assigneePersonId'])->where('project_id', $projectId)->whereNull('blocked_at')->exists(), 422, 'Responsável inválido.');
         }
+        try {
+            $planning = $this->normalizeTaskPlanning(new TaskPlanningState(null, null, null), $request, $data);
+        } catch (\InvalidArgumentException $exception) {
+            return $this->planningError($exception->getMessage());
+        }
         $id = (string) Str::ulid();
         $position = $this->nextSiblingPosition($projectId, $data['sectionId'] ?? null);
-        DB::table('project_tasks')->insert(['id' => $id, 'project_id' => $projectId, 'section_id' => $data['sectionId'] ?? null, 'assignee_person_id' => $data['assigneePersonId'] ?? null, 'title' => trim($data['title']), 'description' => $data['description'] ?? null, 'priority' => $data['priority'] ?? 1, 'planned_start' => $data['plannedStart'] ?? null, 'planned_finish' => $data['plannedFinish'] ?? null, 'completed_at' => $data['actualCompletionDate'] ?? null, 'position' => $position, 'created_at' => now(), 'updated_at' => now()]);
-        DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+        DB::transaction(function () use ($id, $projectId, $data, $planning, $position): void {
+            DB::table('project_tasks')->insert(['id' => $id, 'project_id' => $projectId, 'section_id' => $data['sectionId'] ?? null, 'assignee_person_id' => $data['assigneePersonId'] ?? null, 'title' => trim($data['title']), 'description' => $data['description'] ?? null, 'priority' => $data['priority'] ?? 1, 'planned_start' => $planning->start?->format('Y-m-d'), 'planned_finish' => $planning->finish?->format('Y-m-d'), 'plannedDurationWorkdays' => $planning->durationWorkdays, 'completed_at' => $data['actualCompletionDate'] ?? null, 'position' => $position, 'created_at' => now(), 'updated_at' => now()]);
+            DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
+        });
 
         return response()->json(['data' => ['id' => $id]], 201);
     }
@@ -341,7 +358,7 @@ final class ProjectController
     public function updateTask(Request $request, string $projectId, string $taskId): JsonResponse
     {
         $this->editable($request, $projectId);
-        $data = $request->validate(['title' => ['sometimes', 'required', 'string', 'max:255'], 'description' => ['sometimes', 'nullable', 'string'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'sectionId' => ['sometimes', 'nullable', 'string'], 'assigneePersonId' => ['sometimes', 'nullable', 'string'], 'plannedStart' => ['sometimes', 'nullable', 'date'], 'plannedFinish' => ['sometimes', 'nullable', 'date'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
+        $data = $request->validate(['title' => ['sometimes', 'required', 'string', 'max:255'], 'description' => ['sometimes', 'nullable', 'string'], 'priority' => ['sometimes', 'integer', 'between:1,4'], 'sectionId' => ['sometimes', 'nullable', 'string'], 'assigneePersonId' => ['sometimes', 'nullable', 'string'], 'plannedStart' => ['sometimes', 'nullable', 'date'], 'plannedFinish' => ['sometimes', 'nullable', 'date'], 'plannedDurationWorkdays' => ['sometimes', 'nullable', 'integer'], 'planningDriver' => ['sometimes', 'nullable', 'in:start,finish,duration'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
         if (array_key_exists('sectionId', $data) && $data['sectionId'] && ! DB::table('project_sections')->where('id', $data['sectionId'])->where('project_id', $projectId)->exists()) {
             abort(422, 'Seção inválida.');
         }
@@ -350,9 +367,15 @@ final class ProjectController
         }
         $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
         abort_unless($task, 404, 'Tarefa não encontrada.');
-        $start = array_key_exists('plannedStart', $data) ? $data['plannedStart'] : $task->planned_start;
-        $finish = array_key_exists('plannedFinish', $data) ? $data['plannedFinish'] : $task->planned_finish;
-        abort_if($start && $finish && $finish < $start, 422, 'A data final não pode ser anterior à inicial.');
+        $planningChanged = $this->hasPlanningPatch($request);
+        $planning = $this->taskPlanningState($task);
+        if ($planningChanged) {
+            try {
+                $planning = $this->normalizeTaskPlanning($planning, $request, $data);
+            } catch (\InvalidArgumentException $exception) {
+                return $this->planningError($exception->getMessage());
+            }
+        }
         $changes = ['updated_at' => now()];
         if (array_key_exists('title', $data)) {
             $changes['title'] = trim($data['title']);
@@ -369,11 +392,10 @@ final class ProjectController
         if (array_key_exists('assigneePersonId', $data)) {
             $changes['assignee_person_id'] = $data['assigneePersonId'];
         }
-        if (array_key_exists('plannedStart', $data)) {
-            $changes['planned_start'] = $data['plannedStart'];
-        }
-        if (array_key_exists('plannedFinish', $data)) {
-            $changes['planned_finish'] = $data['plannedFinish'];
+        if ($planningChanged) {
+            $changes['planned_start'] = $planning->start?->format('Y-m-d');
+            $changes['planned_finish'] = $planning->finish?->format('Y-m-d');
+            $changes['plannedDurationWorkdays'] = $planning->durationWorkdays;
         }
         if (array_key_exists('actualCompletionDate', $data)) {
             $changes['completed_at'] = $data['actualCompletionDate'];
@@ -486,7 +508,7 @@ final class ProjectController
                 'assignee_person_id' => $task->assignee_person_id, 'title' => $task->title.' - Copia',
                 'description' => rtrim((string) $task->description)."\nTarefa duplicada de {$task->title}",
                 'priority' => $task->priority, 'planned_start' => $task->planned_start,
-                'planned_finish' => $task->planned_finish, 'completed_at' => $task->completed_at,
+                'planned_finish' => $task->planned_finish, 'plannedDurationWorkdays' => $task->plannedDurationWorkdays, 'completed_at' => $task->completed_at,
                 'position' => $this->nextSiblingPosition($projectId, $task->section_id),
                 'created_at' => now(), 'updated_at' => now(),
             ]);
@@ -1233,14 +1255,62 @@ final class ProjectController
         return false;
     }
 
+    private function hasPlanningPatch(Request $request): bool
+    {
+        return $request->exists('plannedStart')
+            || $request->exists('plannedFinish')
+            || $request->exists('plannedDurationWorkdays')
+            || $request->exists('planningDriver');
+    }
+
+    /** @param array<string, mixed> $data */
+    private function normalizeTaskPlanning(TaskPlanningState $persisted, Request $request, array $data): TaskPlanningState
+    {
+        $hasStart = $request->exists('plannedStart');
+        $hasFinish = $request->exists('plannedFinish');
+        $hasDuration = $request->exists('plannedDurationWorkdays');
+        $patch = new TaskPlanningPatch(
+            hasStart: $hasStart,
+            start: $hasStart && ($data['plannedStart'] ?? null) !== null ? new DateTimeImmutable($data['plannedStart']) : null,
+            hasFinish: $hasFinish,
+            finish: $hasFinish && ($data['plannedFinish'] ?? null) !== null ? new DateTimeImmutable($data['plannedFinish']) : null,
+            hasDurationWorkdays: $hasDuration,
+            durationWorkdays: $hasDuration ? $data['plannedDurationWorkdays'] ?? null : null,
+        );
+        $driver = ($data['planningDriver'] ?? null) === null ? null : PlanningDriver::from($data['planningDriver']);
+
+        return (new TaskPlanningNormalizer(new WorkCalendar))->normalize($persisted, $patch, $driver);
+    }
+
+    private function taskPlanningState(object $task): TaskPlanningState
+    {
+        return new TaskPlanningState(
+            $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
+            $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
+            $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
+        );
+    }
+
+    private function planningError(string $message): JsonResponse
+    {
+        return response()->json(['code' => 'VALIDATION_ERROR', 'message' => $message], 422);
+    }
+
     private function summary(object $project): array
     {
-        $tasks = DB::table('project_tasks')->where('project_id', $project->id)->get(['planned_start', 'planned_finish', 'completed_at']);
+        $tasks = DB::table('project_tasks')->where('project_id', $project->id)->get(['title', 'planned_start', 'planned_finish', 'plannedDurationWorkdays', 'completed_at']);
         $totalWeight = 0;
         $completedWeight = 0;
         $overdue = 0;
         foreach ($tasks as $task) {
-            $weight = $task->planned_start && $task->planned_finish ? max(1, (new DateTimeImmutable($task->planned_start))->diff(new DateTimeImmutable($task->planned_finish))->days + 1) : 1;
+            $weight = TaskPlan::fromDates(
+                '',
+                $task->title,
+                $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
+                $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
+                new WorkCalendar,
+                plannedDurationWorkdays: $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
+            )->duration;
             $totalWeight += $weight;
             $completedWeight += $task->completed_at ? $weight : 0;
             $overdue += ! $task->completed_at && $task->planned_finish && $task->planned_finish < now()->toDateString() ? 1 : 0;
@@ -1255,6 +1325,6 @@ final class ProjectController
             }
         }
 
-        return ['id' => $project->id, 'name' => $project->name, 'taskCount' => $tasks->count(), 'progress' => $totalWeight ? (int) round($completedWeight / $totalWeight * 100) : 0, 'overdueTaskCount' => $overdue, 'role' => $project->role, 'updatedAt' => $project->updated_at, 'completed' => $tasks->whereNotNull('completed_at')->count(), 'total' => $tasks->count(), 'critical' => 0, 'opened' => $statusCounts['opened'], 'blocked' => $statusCounts['blocked'], 'scheduled' => $statusCounts['scheduled'], 'late' => $statusCounts['late'], 'in_progress' => $statusCounts['in_progress'], 'without_dates' => $tasks->filter(fn (object $task): bool => ! $task->planned_start && ! $task->planned_finish)->count()];
+        return ['id' => $project->id, 'name' => $project->name, 'taskCount' => $tasks->count(), 'progress' => $totalWeight ? (int) round($completedWeight / $totalWeight * 100) : 0, 'overdueTaskCount' => $overdue, 'role' => $project->role, 'updatedAt' => $project->updated_at, 'completed' => $tasks->whereNotNull('completed_at')->count(), 'total' => $tasks->count(), 'critical' => 0, 'opened' => $statusCounts['opened'], 'blocked' => $statusCounts['blocked'], 'scheduled' => $statusCounts['scheduled'], 'late' => $statusCounts['late'], 'in_progress' => $statusCounts['in_progress'], 'without_dates' => $tasks->filter(fn (object $task): bool => ! $task->planned_start && ! $task->planned_finish)->count(), 'without_duration' => $tasks->whereNull('plannedDurationWorkdays')->count()];
     }
 }

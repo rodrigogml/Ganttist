@@ -10,7 +10,9 @@ use App\Services\TaskTableLockConflict;
 use App\Services\TaskTableLockRateLimited;
 use Carbon\Carbon;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Tests\TestCase;
 
 final class LocalProjectsApiTest extends TestCase
@@ -51,6 +53,122 @@ final class LocalProjectsApiTest extends TestCase
         $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")
             ->assertOk()
             ->assertJsonPath('data.tasks.0.comment_count', 2);
+    }
+
+    public function test_task_planned_duration_is_migrated_persisted_and_validated(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'planned-duration'])->json('data.id');
+
+        $this->assertTrue(Schema::hasColumn('project_tasks', 'plannedDurationWorkdays'));
+
+        $withoutDuration = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Sem duração', 'plannedDurationWorkdays' => null])->assertCreated()->json('data.id');
+        $withDuration = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Com prazo e duração',
+            'plannedFinish' => '2026-09-30',
+            'plannedDurationWorkdays' => 5,
+            'planningDriver' => 'duration',
+        ])->assertCreated()->json('data.id');
+        $durationOnly = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Somente duração',
+            'plannedDurationWorkdays' => 3,
+        ])->assertCreated()->json('data.id');
+
+        $this->assertDatabaseHas('project_tasks', ['id' => $withoutDuration, 'plannedDurationWorkdays' => null]);
+        $this->assertDatabaseHas('project_tasks', ['id' => $withDuration, 'plannedDurationWorkdays' => 5, 'planned_start' => null, 'planned_finish' => '2026-09-30']);
+        $this->assertDatabaseHas('project_tasks', ['id' => $durationOnly, 'plannedDurationWorkdays' => 3, 'planned_start' => null, 'planned_finish' => null]);
+        $this->actingAs($user)->putJson("/api/v1/projects/{$project}/tasks/{$durationOnly}", ['plannedDurationWorkdays' => 4])->assertOk();
+        $this->assertDatabaseHas('project_tasks', ['id' => $durationOnly, 'plannedDurationWorkdays' => 4, 'planned_start' => null, 'planned_finish' => null]);
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Zero', 'plannedDurationWorkdays' => 0])->assertUnprocessable()->assertJsonPath('code', 'VALIDATION_ERROR');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Excessiva', 'plannedDurationWorkdays' => 3651])->assertUnprocessable()->assertJsonPath('code', 'VALIDATION_ERROR');
+    }
+
+    public function test_task_planning_commands_are_normalized_atomic_and_authorized(): void
+    {
+        $owner = User::factory()->create();
+        $reader = User::factory()->create();
+        $project = $this->actingAs($owner)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'planning-commands'])->json('data.id');
+        DB::table('project_members')->insert(['id' => (string) \Str::ulid(), 'project_id' => $project, 'user_id' => $reader->id, 'role' => 'reader', 'created_at' => now(), 'updated_at' => now()]);
+
+        $task = $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Implementar',
+            'plannedStart' => '2026-08-20',
+            'plannedDurationWorkdays' => 3,
+            'planningDriver' => 'duration',
+        ])->assertCreated()->json('data.id');
+
+        $this->assertDatabaseHas('project_tasks', ['id' => $task, 'planned_start' => '2026-08-20', 'planned_finish' => '2026-08-24', 'plannedDurationWorkdays' => 3]);
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['plannedFinish' => '2026-08-26', 'planningDriver' => 'finish'])->assertOk();
+        $this->assertDatabaseHas('project_tasks', ['id' => $task, 'planned_start' => '2026-08-20', 'planned_finish' => '2026-08-26', 'plannedDurationWorkdays' => 5]);
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['plannedStart' => null])->assertOk();
+        $this->assertDatabaseHas('project_tasks', ['id' => $task, 'planned_start' => null, 'planned_finish' => '2026-08-26', 'plannedDurationWorkdays' => 5]);
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['plannedDurationWorkdays' => null])->assertOk();
+        $this->assertDatabaseHas('project_tasks', ['id' => $task, 'planned_start' => null, 'planned_finish' => '2026-08-26', 'plannedDurationWorkdays' => null]);
+
+        $this->actingAs($owner)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Ambígua',
+            'plannedStart' => '2026-08-20',
+            'plannedDurationWorkdays' => 2,
+        ])->assertUnprocessable()->assertJsonPath('code', 'VALIDATION_ERROR');
+        $this->assertDatabaseMissing('project_tasks', ['project_id' => $project, 'title' => 'Ambígua']);
+        $this->actingAs($owner)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['plannedStart' => '2026-08-28', 'plannedFinish' => '2026-08-20'])
+            ->assertUnprocessable()->assertJsonPath('code', 'VALIDATION_ERROR');
+        $this->assertDatabaseHas('project_tasks', ['id' => $task, 'planned_start' => null, 'planned_finish' => '2026-08-26', 'plannedDurationWorkdays' => null]);
+        $this->actingAs($reader)->putJson("/api/v1/projects/{$project}/tasks/{$task}", ['plannedDurationWorkdays' => 3])->assertForbidden();
+    }
+
+    public function test_workspace_returns_authoritative_duration_projection_constraints_and_indicators(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Cronograma', 'commandId' => 'duration-workspace'])->json('data.id');
+        $predecessor = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Preparar',
+            'plannedStart' => '2026-08-20',
+            'plannedDurationWorkdays' => 3,
+            'planningDriver' => 'duration',
+        ])->json('data.id');
+        $successor = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", [
+            'title' => 'Entregar',
+            'plannedFinish' => '2026-08-21',
+            'plannedDurationWorkdays' => 2,
+            'planningDriver' => 'duration',
+        ])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $predecessor, 'to' => $successor, 'type' => 'FS'])->assertCreated();
+
+        $workspace = $this->actingAs($user)->getJson("/api/v1/projects/{$project}/workspace")->assertOk()->json('data');
+        $task = collect($workspace['tasks'])->firstWhere('id', $successor);
+
+        self::assertSame(2, $task['plannedDurationWorkdays']);
+        self::assertSame(2, $task['resolved_duration_workdays']);
+        self::assertNull($task['start']);
+        self::assertSame('2026-08-21', $task['finish']);
+        self::assertSame('2026-08-25', $task['considered_start']);
+        self::assertSame('2026-08-26', $task['considered_deadline']);
+        self::assertSame('violated', $task['schedule_constraint_state']);
+        self::assertNotNull($task['schedule_constraint_reason']);
+        self::assertTrue($workspace['dependencies'][0]['critical']);
+        $this->assertDatabaseHas('project_tasks', [
+            'id' => $successor,
+            'planned_start' => null,
+            'planned_finish' => '2026-08-21',
+            'plannedDurationWorkdays' => 2,
+        ]);
+
+        $indicatorsProject = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Indicadores', 'commandId' => 'duration-indicators'])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$indicatorsProject}/tasks", ['title' => 'Sem estimativa'])->assertCreated();
+        $completed = $this->actingAs($user)->postJson("/api/v1/projects/{$indicatorsProject}/tasks", [
+            'title' => 'Estimativa concluída',
+            'plannedDurationWorkdays' => 6,
+            'actualCompletionDate' => '2026-08-20',
+        ])->assertCreated()->json('data.id');
+        $indicators = $this->actingAs($user)->getJson("/api/v1/projects/{$indicatorsProject}/workspace")->assertOk()->json('data');
+        $completedTask = collect($indicators['tasks'])->firstWhere('id', $completed);
+
+        self::assertSame(6, $completedTask['plannedDurationWorkdays']);
+        self::assertSame(6, $completedTask['resolved_duration_workdays']);
+        self::assertSame(86, $indicators['stats']['progress']);
+        self::assertSame(2, $indicators['stats']['without_dates']);
+        self::assertSame(1, $indicators['stats']['without_duration']);
     }
 
     public function test_task_table_document_limits_and_duplicate_copy_are_preserved(): void
@@ -376,14 +494,14 @@ final class LocalProjectsApiTest extends TestCase
     {
         $user = User::factory()->create();
         $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Produto', 'commandId' => 'duplicate-task'])->json('data.id');
-        $original = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Original', 'description' => 'Detalhes', 'priority' => 3, 'actualCompletionDate' => '2026-08-26'])->json('data.id');
+        $original = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Original', 'description' => 'Detalhes', 'priority' => 3, 'plannedDurationWorkdays' => 8, 'actualCompletionDate' => '2026-08-26'])->json('data.id');
         $other = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks", ['title' => 'Outra'])->json('data.id');
         $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$original}/comments", ['content' => 'Comentário'])->assertCreated();
         $this->actingAs($user)->postJson("/api/v1/projects/{$project}/dependencies", ['from' => $original, 'to' => $other, 'type' => 'FS'])->assertCreated();
 
         $copy = $this->actingAs($user)->postJson("/api/v1/projects/{$project}/tasks/{$original}/duplicate")->assertCreated()->json('data.id');
 
-        $this->assertDatabaseHas('project_tasks', ['id' => $copy, 'title' => 'Original - Copia', 'priority' => 3, 'completed_at' => '2026-08-26']);
+        $this->assertDatabaseHas('project_tasks', ['id' => $copy, 'title' => 'Original - Copia', 'priority' => 3, 'plannedDurationWorkdays' => 8, 'completed_at' => '2026-08-26']);
         $this->assertDatabaseHas('project_task_comments', ['task_id' => $copy, 'content' => 'Comentário']);
         $this->assertDatabaseHas('project_schedule_dependencies', ['predecessor_kind' => 'task', 'predecessor_id' => $copy, 'successor_kind' => 'task', 'successor_id' => $other, 'type' => 'FS']);
     }

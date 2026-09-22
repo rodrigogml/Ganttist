@@ -2473,6 +2473,41 @@ body.resizing-task-column * {
   line-height: 1.45;
 }
 
+.planned-duration-control {
+  display: flex;
+  width: 10rem;
+  max-width: 100%;
+  align-items: center;
+  gap: 7px;
+}
+
+.planned-duration-control input {
+  min-width: 0;
+  flex: 1;
+}
+
+.planned-duration-control span {
+  flex: none;
+  color: #747b89;
+  font-size: var(--editor-helper-font-size);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.planned-duration-field > .field-error:empty {
+  display: none;
+}
+
+.planned-duration-field > .field-error {
+  color: var(--button-danger-text, #b94f4b);
+  font-weight: 700;
+}
+
+.planning-violation {
+  color: var(--button-danger-text, #b94f4b) !important;
+  font-weight: 700;
+}
+
 .drawer .completion-toggle {
   flex-direction: row;
   align-items: center;

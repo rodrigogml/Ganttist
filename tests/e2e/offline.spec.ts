@@ -9,7 +9,7 @@ const pdfSha256 = '3de2b3788e3232e4fcc07525e218a18d7d81a158d452654317a044163dfb7
 
 const workspace = {
   project: { id: projectId, name: 'Projeto preparado', source: 'local', sync_status: 'ready', updated_at: '2026-09-19T12:00:00Z', role: 'owner' },
-  tasks: [{ id: 'offline-task', title: 'Vistoriar pavimento', description: 'Tarefa armazenada no snapshot.', kind: 'task', level: 0, parent_id: null, section_id: null, priority: 2, start: '2026-09-19', finish: '2026-09-20', considered_start: '2026-09-19', considered_deadline: '2026-09-20', completed: false, progress: 0, status: 'opened', critical: false }], dependencies: [], people: [],
+  tasks: [{ id: 'offline-task', title: 'Vistoriar pavimento', description: 'Tarefa armazenada no snapshot.', kind: 'task', level: 0, parent_id: null, section_id: null, priority: 2, start: '2026-09-19', finish: '2026-09-20', plannedDurationWorkdays: 2, resolved_duration_workdays: 2, schedule_constraint_state: 'satisfied', schedule_constraint_reason: null, considered_start: '2026-09-19', considered_deadline: '2026-09-20', completed: false, progress: 0, status: 'opened', critical: false }], dependencies: [], people: [],
   stats: { progress: 50, completed: 1, total: 3, critical: 0, late: 0 },
 }
 
@@ -141,7 +141,200 @@ test('opens a cached task with every editor control read-only', async ({ page, c
   await task.click()
   await expect(page.getByRole('heading', { name: 'Vistoriar pavimento' })).toBeVisible()
   await expect(page.locator('.drawer-edit-fields input').first()).toBeDisabled()
+  await expect(page.getByLabel('Duração planejada')).toBeDisabled()
+  await expect(page.getByText('Duração resolvida')).toBeVisible()
   await expect(page.getByRole('button', { name: 'Salvar alterações' })).toBeDisabled()
+})
+
+test('rejects invalid planned duration through the default keyboard action without losing the draft', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  let taskUpdateRequests = 0
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    if (pathname.endsWith(`/tasks/offline-task`) && route.request().method() === 'PUT') {
+      taskUpdateRequests += 1
+      return route.fulfill({ json: { data: { id: 'offline-task' } } })
+    }
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/tasks`)
+  await page.locator('.task-list-card').filter({ hasText: 'Vistoriar pavimento' }).click()
+  const duration = page.getByLabel('Duração planejada')
+  await duration.fill('0')
+  await duration.press('Control+Enter')
+  await expect(page.getByRole('alert')).toContainText('Informe uma duração inteira entre 1 e 3650 dias úteis')
+  await expect(duration).toBeFocused()
+  await expect(duration).toHaveValue('0')
+  expect(taskUpdateRequests).toBe(0)
+  await context.close()
+})
+
+test('sends duration as the planning driver and reloads the authoritative workspace', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  const requestBodies: Array<Record<string, unknown>> = []
+  let workspaceReads = 0
+  const durationOnlyWorkspace = structuredClone(workspace)
+  durationOnlyWorkspace.tasks[0] = {
+    ...durationOnlyWorkspace.tasks[0],
+    start: null,
+    finish: null,
+    plannedDurationWorkdays: null,
+    considered_start: '2026-09-19',
+    considered_deadline: '2026-09-19',
+  }
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) {
+      workspaceReads += 1
+      return route.fulfill({ json: { data: durationOnlyWorkspace } })
+    }
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    if (pathname.endsWith(`/tasks/offline-task`) && route.request().method() === 'PUT') {
+      requestBodies.push(route.request().postDataJSON())
+      return route.fulfill({ json: { data: { id: 'offline-task' } } })
+    }
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/tasks`)
+  await page.locator('.task-list-card').filter({ hasText: 'Vistoriar pavimento' }).click()
+  await page.getByLabel('Duração planejada').fill('3')
+  await page.getByRole('button', { name: 'Salvar alterações' }).click()
+  await expect.poll(() => requestBodies.length).toBe(1)
+  expect(requestBodies[0]).toMatchObject({ plannedDurationWorkdays: 3, planningDriver: 'duration' })
+  expect(requestBodies[0]).not.toHaveProperty('plannedStart')
+  expect(requestBodies[0]).not.toHaveProperty('plannedFinish')
+  await expect.poll(() => workspaceReads).toBeGreaterThanOrEqual(2)
+  await context.close()
+})
+
+test('uses causal drivers for pointer timeblock resize and cancels with Escape', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  const requestBodies: Array<Record<string, unknown>> = []
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    if (pathname.endsWith(`/tasks/offline-task`) && route.request().method() === 'PUT') {
+      requestBodies.push(route.request().postDataJSON())
+      return route.fulfill({ json: { data: { id: 'offline-task' } } })
+    }
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/gantt`)
+  const startGrip = page.getByRole('button', { name: 'Ajustar início de Vistoriar pavimento' })
+  await startGrip.focus()
+  await startGrip.press('Enter')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(50)
+  expect(requestBodies).toHaveLength(0)
+
+  const finishGrip = page.getByRole('button', { name: 'Ajustar deadline de Vistoriar pavimento' })
+  const finishBox = await finishGrip.boundingBox()
+  if (!finishBox) throw new Error('Grip de deadline não foi posicionado.')
+  await page.mouse.move(finishBox.x + finishBox.width / 2, finishBox.y + finishBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(finishBox.x + finishBox.width / 2 + 30, finishBox.y + finishBox.height / 2)
+  await page.mouse.up()
+  await expect.poll(() => requestBodies.length).toBe(1)
+  expect(requestBodies[0]).toMatchObject({ plannedFinish: '2026-09-21', planningDriver: 'finish' })
+  await context.close()
+})
+
+test('keeps a deadline-anchored task out of timeblock gestures with editor guidance', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  const anchoredWorkspace = structuredClone(workspace)
+  anchoredWorkspace.tasks[0] = {
+    ...anchoredWorkspace.tasks[0], start: null, finish: '2026-09-20', plannedDurationWorkdays: 2,
+    considered_start: '2026-09-19', considered_deadline: '2026-09-20',
+  }
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: anchoredWorkspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/gantt`)
+  await expect(page.getByRole('button', { name: /Ajustar (início|deadline) de Vistoriar pavimento/ })).toHaveCount(0)
+  await expect(page.locator('.task-bar.deadline-anchored')).toHaveAttribute('title', /Ancorada no deadline/)
+  await context.close()
+})
+
+test('restores the timeblock after a remote gesture failure', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith(`/tasks/offline-task`) && route.request().method() === 'PUT') {
+      return route.fulfill({ status: 422, json: { code: 'VALIDATION_ERROR', message: 'A relação impede esta alteração.' } })
+    }
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/gantt`)
+  const finishGrip = page.getByRole('button', { name: 'Ajustar deadline de Vistoriar pavimento' })
+  const finishBox = await finishGrip.boundingBox()
+  if (!finishBox) throw new Error('Grip de deadline não foi posicionado.')
+  await page.mouse.move(finishBox.x + finishBox.width / 2, finishBox.y + finishBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(finishBox.x + finishBox.width / 2 + 30, finishBox.y + finishBox.height / 2)
+  await page.mouse.up()
+  await expect(page.getByText('A relação impede esta alteração.')).toBeVisible()
+  await expect(page.locator('.task-bar.drag-ghost')).toHaveCount(0)
+  await context.close()
+})
+
+test('keeps resize controls available on touch screens', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block', hasTouch: true, isMobile: true, viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/gantt`)
+  await expect(page.getByRole('button', { name: 'Ajustar deadline de Vistoriar pavimento' })).toBeVisible()
+  await context.close()
+})
+
+test('reflows planning controls from desktop to tablet and phone', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 900 } })
+  const page = await context.newPage()
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/tasks`)
+  await page.locator('.task-list-card').filter({ hasText: 'Vistoriar pavimento' }).click()
+  const durationGrid = page.locator('.form-grid').filter({ has: page.locator('.planned-duration-field') })
+  const dateGrid = page.locator('.form-grid').filter({ has: page.getByText('Data inicial planejada', { exact: true }) })
+  const durationControl = page.locator('.planned-duration-control')
+  const columnCount = () => durationGrid.evaluate(element => getComputedStyle(element).gridTemplateColumns.split(' ').filter(Boolean).length)
+  expect(await columnCount()).toBe(1)
+  expect((await durationGrid.boundingBox())!.y).toBeGreaterThan((await dateGrid.boundingBox())!.y)
+  expect(Math.round((await durationControl.boundingBox())!.width)).toBe(160)
+  await expect(page.getByText('Estimativa opcional em dias úteis; pode ser definida sem data inicial.')).toHaveCount(0)
+  await page.setViewportSize({ width: 768, height: 900 })
+  await expect.poll(columnCount).toBe(1)
+  await page.setViewportSize({ width: 390, height: 844 })
+  await expect.poll(columnCount).toBe(1)
+  expect(Math.round((await durationControl.boundingBox())!.width)).toBe(160)
+  await expect(page.getByText('dias úteis').first()).toBeVisible()
+  await context.close()
 })
 
 test('opens a deliberately cached PDF and serves byte ranges without a network', async ({ page, context }) => {

@@ -219,6 +219,13 @@ const timelinePlane = ref<HTMLElement | null>(null),
     undoDependencyId = ref<string | null>(null);
 const taskDraft = ref<Task | null>(null);
 const sectionDraft = ref<Task | null>(null);
+type PlanningDriver = "start" | "finish" | "duration";
+const planningDriver = ref<PlanningDriver | null>(null);
+const plannedDurationDraft = ref("");
+const plannedDurationBaseline = ref("");
+const planningDurationError = ref("");
+const plannedDurationInput = ref<HTMLInputElement | null>(null);
+const saving = ref(false);
 const checklistPreview = ref<{ task: Task; top: number; left: number } | null>(null);
 let checklistPreviewCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const checklistItems = ref<ChecklistItem[]>([]);
@@ -435,6 +442,7 @@ const editableTaskSnapshot = (task: Task) =>
         description: task.description ?? "",
         start: task.start,
         finish: task.finish,
+        plannedDurationWorkdays: task.plannedDurationWorkdays ?? null,
         completed: task.completed ?? task.status === "completed",
         effective_completion: task.effective_completion ?? null,
         priority: task.priority ?? 1,
@@ -447,6 +455,7 @@ const taskDraftDirty = computed(
             taskDraft.value &&
             taskDraftBaseline.value &&
             (editableTaskSnapshot(taskDraft.value) !== taskDraftBaseline.value ||
+                plannedDurationDraft.value !== plannedDurationBaseline.value ||
                 (taskDraft.value.id === "__new-task__" && checklistItems.value.length)),
         ),
 );
@@ -606,6 +615,49 @@ function todayCivil() {
 function ensureCompletionDate() {
     if (activeTask.value?.completed && !activeTask.value.effective_completion)
         activeTask.value.effective_completion = todayCivil();
+}
+function registerPlanningDurationTelemetry(
+    outcome: "success" | "validation_error" | "remote_error",
+    violated = false,
+) {
+    window.dispatchEvent(
+        new CustomEvent("ganttist:planning-duration", {
+            detail: {
+                driver: planningDriver.value,
+                outcome,
+                violated,
+            },
+        }),
+    );
+}
+function updatePlannedDate(driver: Extract<PlanningDriver, "start" | "finish">, value: string | null) {
+    if (!activeTask.value) return;
+    activeTask.value[driver === "start" ? "start" : "finish"] = value;
+    planningDriver.value = driver;
+    planningDurationError.value = "";
+}
+function updatePlannedDuration(event: Event) {
+    if (!activeTask.value || !(event.currentTarget instanceof HTMLInputElement)) return;
+    plannedDurationDraft.value = event.currentTarget.value;
+    planningDriver.value = "duration";
+    planningDurationError.value = "";
+    if (plannedDurationDraft.value === "") {
+        activeTask.value.plannedDurationWorkdays = null;
+        return;
+    }
+    if (/^\d+$/.test(plannedDurationDraft.value))
+        activeTask.value.plannedDurationWorkdays = Number(plannedDurationDraft.value);
+}
+function validPlannedDuration() {
+    if (plannedDurationDraft.value === "") return true;
+    const duration = Number(plannedDurationDraft.value);
+    return Number.isInteger(duration) && duration >= 1 && duration <= 3650;
+}
+function setPlanningDraft(task: Task) {
+    plannedDurationDraft.value = task.plannedDurationWorkdays?.toString() ?? "";
+    plannedDurationBaseline.value = plannedDurationDraft.value;
+    planningDriver.value = null;
+    planningDurationError.value = "";
 }
 function draftChecklistId() {
     return `__draft-checklist-${crypto.randomUUID()}`;
@@ -823,7 +875,16 @@ const canDragTask = (task: Task) =>
     !task.completed &&
     !task.derived &&
     !isExpandable(task);
-const canResizeTask = (task: Task) => canDragTask(task);
+const isDeadlineAnchoredTask = (task: Task) =>
+    task.kind === "task" &&
+    !civilDate(task.start) &&
+    Boolean(civilDate(task.finish)) &&
+    task.plannedDurationWorkdays !== null &&
+    task.plannedDurationWorkdays !== undefined;
+const canResizeTask = (task: Task) =>
+    canDragTask(task) && !isDeadlineAnchoredTask(task);
+const canMoveTask = (task: Task) =>
+    canDragTask(task) && !isDeadlineAnchoredTask(task);
 const canConnectFrom = (task: Task) => canMutateProject.value && (task.kind === "task" || task.kind === "section");
 const canConnectTo = (task: Task) => canMutateProject.value && (task.kind === "task" || task.kind === "section");
 const visibleTasks = computed(() => {
@@ -1453,6 +1514,7 @@ function openCreationDialog(kind: "task" | "section", parentId: string | null = 
     if (kind === "task") {
         collaborators.value = store.workspace?.people ?? [];
         taskDraft.value = { id: "__new-task__", title: "", description: "", kind: "task", level: 0, parent_id: parentId, section_id: parentId, priority: 1, start: null, finish: null, completed: false, progress: 0, status: "opened", critical: false };
+        setPlanningDraft(taskDraft.value);
         checklistItems.value = [];
         taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
         sectionDraft.value = null;
@@ -1992,6 +2054,7 @@ async function loadEditorContext(_taskId: string) {
 function openTaskImmediately(task: Task) {
     const draft = { ...task };
     taskDraft.value = draft;
+    setPlanningDraft(draft);
     checklistItems.value = (task.checklist ?? []).map((item) => ({ ...item }));
     sectionDraft.value = null;
     taskDraftBaseline.value = editableTaskSnapshot(draft);
@@ -2027,6 +2090,10 @@ function openSection(section: Task) {
     if (drawer.value && sectionDraft.value?.id === section.id) return;
     sectionDraft.value = { ...section };
     taskDraft.value = null;
+    plannedDurationDraft.value = "";
+    plannedDurationBaseline.value = "";
+    planningDriver.value = null;
+    planningDurationError.value = "";
     editorReturnTaskId.value = section.id;
     closeConfirmation.value = false;
     deletionPreview.value = null;
@@ -2045,6 +2112,10 @@ function finishTaskEditorClose(returnFocus = true) {
     const returnId = editorReturnTaskId.value;
     drawer.value = false;
     taskDraft.value = null;
+    plannedDurationDraft.value = "";
+    plannedDurationBaseline.value = "";
+    planningDriver.value = null;
+    planningDurationError.value = "";
     checklistItems.value = [];
     editingChecklistItemId.value = null;
     checklistDragItemId.value = null;
@@ -2513,9 +2584,27 @@ function removeGestureListeners() {
     window.removeEventListener("keydown", gestureKeydown, true);
 }
 function cancelTimeblockGesture() {
-    if (timeGesture.value?.committing) return;
+    const gesture = timeGesture.value;
+    if (gesture?.committing) return;
+    if (gesture && gesture.kind !== "connect")
+        registerTimeblockGestureTelemetry(gesture, "cancelled");
     removeGestureListeners();
     cancelGestureState();
+}
+function registerTimeblockGestureTelemetry(
+    gesture: Exclude<NonNullable<typeof timeGesture.value>, ConnectGesture>,
+    outcome: "success" | "cancelled" | "remote_error",
+    violated = false,
+) {
+    const driver: PlanningDriver =
+        gesture.kind === "resize" && gesture.edge === "finish"
+            ? "finish"
+            : "start";
+    window.dispatchEvent(
+        new CustomEvent("ganttist:timeblock-gesture", {
+            detail: { mode: gesture.kind, driver, outcome, violated },
+        }),
+    );
 }
 function autoScrollGesture(event: PointerEvent, allowVertical = false) {
     const timeline = timelineElement.value;
@@ -2628,7 +2717,14 @@ function gestureKeydown(event: KeyboardEvent) {
     }
 }
 function startDrag(task: Task, event: PointerEvent) {
-    if (!canDragTask(task)) return;
+    if (!canMoveTask(task)) {
+        if (isDeadlineAnchoredTask(task))
+            showToast(
+                "Esta tarefa está ancorada no deadline. Use o editor para alterar prazo ou duração.",
+                "info",
+            );
+        return;
+    }
     event.preventDefault();
     const start = visualStart(task),
         finish = visualFinish(task);
@@ -2694,10 +2790,14 @@ async function commitDateGesture() {
     const task = store.workspace?.tasks.find((item) => item.id === gesture.taskId);
     const projectId = store.workspace?.project.id;
     if (!task || !projectId) return finishGestureState();
-    const body = {
-        plannedStart: gesture.kind === "resize" && gesture.edge === "finish" ? task.start : gesture.previewStart,
-        plannedFinish: gesture.kind === "resize" && gesture.edge === "start" ? task.finish : gesture.previewFinish,
-    };
+    const driver: PlanningDriver =
+        gesture.kind === "resize" && gesture.edge === "finish"
+            ? "finish"
+            : "start";
+    const body =
+        driver === "finish"
+            ? { plannedFinish: gesture.previewFinish, planningDriver: driver }
+            : { plannedStart: gesture.previewStart, planningDriver: driver };
     try {
         const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${gesture.taskId}`, {
             method: "PUT",
@@ -2716,8 +2816,15 @@ async function commitDateGesture() {
                 ),
             );
         await store.load();
+        registerTimeblockGestureTelemetry(
+            gesture,
+            "success",
+            store.workspace?.tasks.find((item) => item.id === gesture.taskId)
+                ?.schedule_constraint_state === "violated",
+        );
         showToast("Planejamento atualizado", "success");
     } catch (error) {
+        registerTimeblockGestureTelemetry(gesture, "remote_error");
         showToast(
             error instanceof Error
                 ? error.message
@@ -2914,6 +3021,10 @@ function gesturePreviewFor(task: Task) {
         ? gesture
         : null;
 }
+function gestureIsLimited(task: Task) {
+    const gesture = gesturePreviewFor(task);
+    return gesture?.kind === "resize" && gesture.limited;
+}
 async function persistTask(task: Task) {
     const projectId = store.workspace?.project.id;
     if (!projectId) throw new Error("Projeto não carregado.");
@@ -2986,10 +3097,44 @@ async function deleteTask() {
     }
 }
 async function saveTask() {
-    if (!canMutateProject.value || !activeTask.value) return;
+    if (!canMutateProject.value || !activeTask.value || saving.value) return;
+    if (!validPlannedDuration()) {
+        planningDurationError.value = "Informe uma duração inteira entre 1 e 3650 dias úteis";
+        registerPlanningDurationTelemetry("validation_error");
+        void nextTick(() => plannedDurationInput.value?.focus());
+        return;
+    }
     const task = { ...activeTask.value },
         source = store.workspace?.tasks.find((item) => item.id === task.id),
         pending = pendingTaskToOpen.value;
+    const planningChanged =
+        isCreatingTask.value ||
+        task.start !== source?.start ||
+        task.finish !== source?.finish ||
+        (task.plannedDurationWorkdays ?? null) !==
+            (source?.plannedDurationWorkdays ?? null);
+    const planningPayload: Record<string, string | number | null> = {};
+    if (planningChanged) {
+        const creating = isCreatingTask.value;
+        if ((creating && task.start !== null) || (!creating && task.start !== source?.start))
+            planningPayload.plannedStart = task.start;
+        if ((creating && task.finish !== null) || (!creating && task.finish !== source?.finish))
+            planningPayload.plannedFinish = task.finish;
+        if (
+            (creating && task.plannedDurationWorkdays !== null && task.plannedDurationWorkdays !== undefined) ||
+            (!creating && (task.plannedDurationWorkdays ?? null) !== (source?.plannedDurationWorkdays ?? null))
+        )
+            planningPayload.plannedDurationWorkdays = task.plannedDurationWorkdays ?? null;
+        const driverField =
+            planningDriver.value === "start"
+                ? "plannedStart"
+                : planningDriver.value === "finish"
+                  ? "plannedFinish"
+                  : "plannedDurationWorkdays";
+        if (planningDriver.value && driverField in planningPayload)
+            planningPayload.planningDriver = planningDriver.value;
+    }
+    saving.value = true;
     try {
         if (isCreatingTask.value) {
             const projectId = store.workspace?.project.id;
@@ -2997,11 +3142,16 @@ async function saveTask() {
             const response = await apiFetch(`/api/v1/projects/${projectId}/tasks`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
-                body: JSON.stringify({ title: task.title, description: task.description || null, priority: task.priority ?? 1, sectionId: task.section_id ?? null, assigneePersonId: task.assignee_id ?? null, plannedStart: task.start, plannedFinish: task.finish, actualCompletionDate: task.completed ? task.effective_completion ?? todayCivil() : null }),
+                body: JSON.stringify({ title: task.title, description: task.description || null, priority: task.priority ?? 1, sectionId: task.section_id ?? null, assigneePersonId: task.assignee_id ?? null, ...planningPayload, actualCompletionDate: task.completed ? task.effective_completion ?? todayCivil() : null }),
             });
-            if (!response.ok) throw new Error(await responseError(response, "Não foi possível criar a tarefa."));
+            if (!response.ok) {
+                const message = await responseError(response, "Não foi possível criar a tarefa.");
+                if (response.status === 422 && planningChanged) planningDurationError.value = message;
+                throw new Error(message);
+            }
             await persistDraftChecklist((await response.json()).data.id);
             await store.load();
+            registerPlanningDurationTelemetry("success");
             showToast("Tarefa criada", "success");
             finishTaskEditorClose();
             return;
@@ -3025,14 +3175,37 @@ async function saveTask() {
             completionDate !== sourceCompletionDate ||
             (task.priority ?? 1) !== (source.priority ?? 1) ||
             task.start !== source.start ||
-            task.finish !== source.finish;
-        if (changed) await persistTask(task);
+            task.finish !== source.finish ||
+            (task.plannedDurationWorkdays ?? null) !==
+                (source.plannedDurationWorkdays ?? null);
+        if (changed) {
+            const projectId = store.workspace?.project.id;
+            if (!projectId) throw new Error("Projeto não carregado.");
+            const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+                body: JSON.stringify({ title: task.title, description: task.description ?? "", assigneePersonId: task.assignee_id ?? null, sectionId: task.section_id ?? task.parent_id ?? null, priority: task.priority ?? 1, ...planningPayload, actualCompletionDate: completionDate }),
+            });
+            if (!response.ok) {
+                const message = await responseError(response, "Não foi possível salvar a tarefa.");
+                if (response.status === 422 && planningChanged) planningDurationError.value = message;
+                throw new Error(message);
+            }
+        }
         await store.load();
+        registerPlanningDurationTelemetry(
+            "success",
+            store.workspace?.tasks.find((item) => item.id === task.id)
+                ?.schedule_constraint_state === "violated",
+        );
         showToast("Alterações salvas", "success");
         finishTaskEditorClose(!pending);
         if (pending) openTaskImmediately(pending);
         setTimeout(() => (toast.value = ""), 4500);
     } catch (error) {
+        registerPlanningDurationTelemetry(
+            planningDurationError.value ? "validation_error" : "remote_error",
+        );
         showToast(
             error instanceof Error
                 ? error.message
@@ -3040,6 +3213,8 @@ async function saveTask() {
             "error",
         );
         setTimeout(() => (toast.value = ""), 4500);
+    } finally {
+        saving.value = false;
     }
 }
 async function saveSection() {
@@ -4522,7 +4697,9 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                                 dayWidth,
                                             ) + 'px',
                                     }"
-                                    :aria-label="`${gesturePreviewFor(task)?.kind === 'move' ? 'Movendo' : 'Redimensionando'} ${task.title}: ${gesturePreviewFor(task)?.previewStart} até ${gesturePreviewFor(task)?.previewFinish}`"
+                                    role="status"
+                                    aria-live="polite"
+                                    :aria-label="`${gesturePreviewFor(task)?.kind === 'move' ? 'Movendo' : 'Redimensionando'} ${task.title}: ${gesturePreviewFor(task)?.previewStart} até ${gesturePreviewFor(task)?.previewFinish}${gestureIsLimited(task) ? '. Limite de dependência ou intervalo aplicado.' : ''}`"
                                 ></div>
                                 <div
                                     v-else-if="hasTimelineMark(task)"
@@ -4543,6 +4720,11 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                             'calendar-inconsistent':
                                                 task.calendar_inconsistent &&
                                                 !isExpandable(task),
+                                            'planning-violated':
+                                                task.schedule_constraint_state ===
+                                                'violated',
+                                            'deadline-anchored':
+                                                isDeadlineAnchoredTask(task),
                                             'controls-visible':
                                                 cursorTaskId === task.id ||
                                                 gestureMode === 'connect',
@@ -4556,13 +4738,10 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                         left: px(visualStart(task)) + 'px',
                                         width: width(task) + 'px',
                                     }"
-                                    :aria-label="`${task.title}: ${civilDate(task.start) ?? 'sem data, exibida provisoriamente em hoje'}`"
-                                    :title="task.title"
+                                    :aria-label="`${task.title}: ${civilDate(task.start) ?? 'sem data inicial planejada'}${task.schedule_constraint_state === 'violated' ? `. Violação de planejamento: ${task.schedule_constraint_reason || 'revise prazo, duração ou relações.'}` : ''}${isDeadlineAnchoredTask(task) ? '. Ancorada no deadline; altere pelo editor.' : ''}`"
+                                    :title="isDeadlineAnchoredTask(task) ? 'Ancorada no deadline: altere prazo ou duração pelo editor' : task.schedule_constraint_state === 'violated' ? `Violação de planejamento: ${task.schedule_constraint_reason || 'revise prazo, duração ou relações.'}` : task.title"
                                     @click.stop="moveCursorTo(task)"
-                                    @pointerdown.stop="
-                                        moveCursorTo(task);
-                                        startDrag(task, $event);
-                                    "
+                                    @pointerdown.stop="moveCursorTo(task); startDrag(task, $event)"
                                 >
                                     <template v-if="isExpandable(task)"
                                         ><i class="group-line"></i
@@ -4583,6 +4762,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                             class="timeblock-grip start"
                                             title="Ajustar data inicial"
                                             :aria-label="`Ajustar início de ${task.title}`"
+                                            :aria-valuetext="`${visualStart(task)}; ${task.resolved_duration_workdays ?? 1} dias úteis`"
                                             @pointerdown.stop="
                                                 startResize(
                                                     task,
@@ -4603,6 +4783,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                             class="timeblock-grip finish"
                                             title="Ajustar deadline"
                                             :aria-label="`Ajustar deadline de ${task.title}`"
+                                            :aria-valuetext="`${visualFinish(task)}; ${task.resolved_duration_workdays ?? 1} dias úteis`"
                                             @pointerdown.stop="
                                                 startResize(
                                                     task,
@@ -4858,12 +5039,36 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                     <div class="form-grid">
                         <label
                             >Data inicial planejada<DateInput
-                                v-model="activeTask.start"
+                                :model-value="activeTask.start"
+                                @update:model-value="(value) => updatePlannedDate('start', value)"
                             /></label
                         ><label
                             >Data final planejada<DateInput
-                                v-model="activeTask.finish"
+                                :model-value="activeTask.finish"
+                                @update:model-value="(value) => updatePlannedDate('finish', value)"
                         /></label>
+                    </div>
+                    <div class="form-grid" style="grid-template-columns: 1fr">
+                        <label class="planned-duration-field" for="planned-duration-workdays">
+                            Duração planejada
+                            <span class="planned-duration-control">
+                                <input
+                                    id="planned-duration-workdays"
+                                    ref="plannedDurationInput"
+                                    :value="plannedDurationDraft"
+                                    type="number"
+                                    min="1"
+                                    max="3650"
+                                    step="1"
+                                    inputmode="numeric"
+                                    aria-describedby="planned-duration-error"
+                                    :aria-invalid="Boolean(planningDurationError)"
+                                    @input="updatePlannedDuration"
+                                />
+                                <span aria-hidden="true">dias úteis</span>
+                            </span>
+                            <small id="planned-duration-error" class="field-error" role="alert">{{ planningDurationError }}</small>
+                        </label>
                     </div>
                     <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<DateInput :model-value="activeTask.effective_completion ?? null" required @update:model-value="(value) => { if (activeTask) activeTask.effective_completion = value }" /></label></div>
                     <section
@@ -4889,11 +5094,22 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                             }}</b>
                         </div>
                         <div>
+                            <small>DURAÇÃO RESOLVIDA</small
+                            ><b>{{ activeTask.resolved_duration_workdays ?? "—" }}<template v-if="activeTask.resolved_duration_workdays"> dias úteis</template></b>
+                        </div>
+                        <div>
                             <small>DATA DE DESBLOQUEIO CONSIDERADA</small
                             ><b>{{ activeTask.unlock_date || "—" }}</b>
                         </div>
                         <p>
                             Status calculado a partir do planejamento, das dependências e da conclusão.
+                        </p>
+                        <p
+                            v-if="activeTask.schedule_constraint_state === 'violated'"
+                            class="planning-violation"
+                            role="alert"
+                        >
+                            Violação de planejamento: {{ activeTask.schedule_constraint_reason || 'Revise o prazo, a duração ou as relações da tarefa.' }}
                         </p>
                     </section>
                     <section
@@ -5162,7 +5378,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                     >
                         Cancelar</button
                     ><DefaultSubmitButton
-                        :disabled="deleting || !canMutateProject"
+                        :disabled="deleting || saving || !canMutateProject"
                         @click="saveTask"
                     >
                         {{ isCreatingTask ? 'Criar tarefa' : 'Salvar alterações' }}

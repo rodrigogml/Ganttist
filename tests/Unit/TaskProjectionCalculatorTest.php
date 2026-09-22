@@ -7,6 +7,7 @@ namespace Tests\Unit;
 use App\Domain\Scheduling\Dependency;
 use App\Domain\Scheduling\ProjectedTaskStatus;
 use App\Domain\Scheduling\ProjectionPolicy;
+use App\Domain\Scheduling\ScheduleConstraintState;
 use App\Domain\Scheduling\TaskProjectionCalculator;
 use App\Domain\Scheduling\TaskProjectionInput;
 use App\Domain\Scheduling\WorkCalendar;
@@ -112,6 +113,59 @@ final class TaskProjectionCalculatorTest extends TestCase
         self::assertSame('2026-08-26', $duration->consideredDeadline->format('Y-m-d'));
         self::assertSame('2026-08-25', $deadline->consideredStart->format('Y-m-d'));
         self::assertSame('2026-08-25', $deadline->consideredDeadline->format('Y-m-d'));
+    }
+
+    public function test_explicit_duration_anchors_a_deadline_without_persisting_a_start(): void
+    {
+        $result = $this->calculator()->calculate([
+            new TaskProjectionInput('deadline', null, new DateTimeImmutable('2026-08-21'), false, null, 3),
+            new TaskProjectionInput('duration-only', null, null, false, null, 5),
+            new TaskProjectionInput('completed', null, null, true, new DateTimeImmutable('2026-08-20'), 5),
+        ], [], new DateTimeImmutable('2026-08-20'));
+
+        self::assertSame('2026-08-19', $result['deadline']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-21', $result['deadline']->consideredDeadline->format('Y-m-d'));
+        self::assertSame(3, $result['deadline']->resolvedDurationWorkdays);
+        self::assertSame('2026-08-20', $result['duration-only']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-26', $result['duration-only']->consideredDeadline->format('Y-m-d'));
+        self::assertSame(ProjectedTaskStatus::Opened, $result['duration-only']->status);
+        self::assertSame(ProjectedTaskStatus::Completed, $result['completed']->status);
+        self::assertSame('2026-08-20', $result['completed']->consideredDeadline->format('Y-m-d'));
+    }
+
+    public function test_legacy_task_without_an_explicit_duration_keeps_its_inferred_projection(): void
+    {
+        $result = $this->calculator()->calculate([
+            new TaskProjectionInput('legacy', new DateTimeImmutable('2026-08-20'), new DateTimeImmutable('2026-08-24')),
+        ], [], new DateTimeImmutable('2026-08-20'));
+
+        self::assertSame(3, $result['legacy']->resolvedDurationWorkdays);
+        self::assertSame('2026-08-20', $result['legacy']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-24', $result['legacy']->consideredDeadline->format('Y-m-d'));
+        self::assertSame(ScheduleConstraintState::Satisfied, $result['legacy']->scheduleConstraintState);
+    }
+
+    public function test_explicit_duration_preserves_work_and_reports_a_deadline_constraint_violation(): void
+    {
+        $result = $this->calculator(ProjectionPolicy::PreserveDeadline)->calculate([
+            new TaskProjectionInput('predecessor', new DateTimeImmutable('2026-08-20'), null, false, null, 3),
+            new TaskProjectionInput('successor', new DateTimeImmutable('2026-08-20'), new DateTimeImmutable('2026-08-21'), false, null, 2),
+        ], [new Dependency('predecessor', 'successor', 'FS')], new DateTimeImmutable('2026-08-20'));
+
+        self::assertSame('2026-08-25', $result['successor']->consideredStart->format('Y-m-d'));
+        self::assertSame('2026-08-26', $result['successor']->consideredDeadline->format('Y-m-d'));
+        self::assertSame(ScheduleConstraintState::Violated, $result['successor']->scheduleConstraintState);
+        self::assertNotNull($result['successor']->scheduleConstraintReason);
+    }
+
+    public function test_inconsistent_persisted_start_finish_and_duration_preserves_work_and_reports_violation(): void
+    {
+        $result = $this->calculator()->calculate([
+            new TaskProjectionInput('inconsistent', new DateTimeImmutable('2026-08-20'), new DateTimeImmutable('2026-08-21'), false, null, 3),
+        ], [], new DateTimeImmutable('2026-08-20'));
+
+        self::assertSame('2026-08-24', $result['inconsistent']->consideredDeadline->format('Y-m-d'));
+        self::assertSame(ScheduleConstraintState::Violated, $result['inconsistent']->scheduleConstraintState);
     }
 
     private function calculator(ProjectionPolicy $policy = ProjectionPolicy::PreserveDuration): TaskProjectionCalculator

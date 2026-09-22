@@ -26,7 +26,7 @@ Regras de calendário, duração, precedência FS/SS/FF/SF, estados, criticidade
 
 ### III. Estrutura, dependências e estados preservam integridade
 
-Seções DEVEM formar uma árvore acíclica de profundidade livre. Tarefas DEVEM pertencer diretamente à raiz do projeto ou a uma seção, e nunca a outra tarefa. O grafo de dependências DEVE impedir autodependências, duplicatas, referências entre projetos e ciclos. O status de uma tarefa DEVE ser calculado, sem escolha manual, com `CONCLUÍDA` acima de `ATRASADA`, `BLOQUEADA`, `AGENDADA` e `ABERTA`; ao reabrir uma tarefa, sua data de conclusão real DEVE ser removida e o status recalculado.
+Seções DEVEM formar uma árvore acíclica de profundidade livre. Tarefas DEVEM pertencer diretamente à raiz do projeto ou a uma seção, e nunca a outra tarefa. O grafo de dependências DEVE impedir autodependências, duplicatas, referências entre projetos e ciclos. O status de uma tarefa DEVE ser calculado, sem escolha manual, na precedência `CONCLUÍDA > BLOQUEADA > AGENDADA > ATRASADA > EM_ANDAMENTO > ABERTA`; ao reabrir uma tarefa, sua data de conclusão real DEVE ser removida e o status recalculado.
 
 **Racional**: estrutura e regras explícitas evitam dados contraditórios e cronogramas incoerentes.
 
@@ -58,4 +58,4 @@ Emendas exigem justificativa, análise de impacto nos artefatos afetados e atual
 
 As pendências sobre progresso, colaboração, exclusões, compliance/retenção, SLO/SLA/RPO/RTO, responsáveis operacionais e metas quantitativas de desempenho DEVEM permanecer explícitas nos artefatos seguintes até decisão autorizada. Elas não autorizam inventar requisitos de produto.
 
-**Version**: 2.0.0 | **Ratified**: 2026-08-17 | **Last Amended**: 2026-08-25
+**Version**: 2.0.1 | **Ratified**: 2026-08-17 | **Last Amended**: 2026-09-21

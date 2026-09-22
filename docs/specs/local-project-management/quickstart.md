@@ -12,7 +12,7 @@
 1. Proprietário cria seção `Entrega` e subseção `Interface`.
 2. Cria uma tarefa na raiz e outra em `Interface`; cadastra pessoa sem conta e atribui a segunda tarefa.
 3. Define fim planejado da segunda tarefa no passado e cria predecessora ainda não concluída.
-4. **Expected**: a tarefa é atrasada, não bloqueada, pois atraso tem prioridade; a pessoa não recebe acesso.
+4. **Expected**: a tarefa é bloqueada, não atrasada, pois bloqueio `FS` tem prioridade; a pessoa não recebe acesso.
 
 ## Convite e autorização
 

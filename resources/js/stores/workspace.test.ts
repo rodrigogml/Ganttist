@@ -9,6 +9,28 @@ describe('workspace visibility', () => {
   beforeEach(() => setActivePinia(createPinia()))
   afterEach(() => vi.unstubAllGlobals())
 
+  it('loads legacy, isolated, deadline-anchored and violated duration projections', async () => {
+    const store = useWorkspaceStore()
+    const workspace = {
+      project: { id: 'duration-project', name: 'Durações', source: 'Local', sync_status: 'local', updated_at: '2026-09-21T12:00:00Z' },
+      tasks: [
+        { id: 'legacy', title: 'Legada', kind: 'task', level: 0, start: null, finish: null, plannedDurationWorkdays: null, resolved_duration_workdays: 1, schedule_constraint_state: 'satisfied', schedule_constraint_reason: null, progress: 0, status: 'opened', critical: false },
+        { id: 'isolated', title: 'Estimativa', kind: 'task', level: 0, start: null, finish: null, plannedDurationWorkdays: 5, resolved_duration_workdays: 5, schedule_constraint_state: 'satisfied', schedule_constraint_reason: null, progress: 0, status: 'opened', critical: false },
+        { id: 'anchored', title: 'Prazo', kind: 'task', level: 0, start: null, finish: '2026-09-25', plannedDurationWorkdays: 3, resolved_duration_workdays: 3, schedule_constraint_state: 'satisfied', schedule_constraint_reason: null, progress: 0, status: 'in_progress', critical: true },
+        { id: 'violated', title: 'Restrita', kind: 'task', level: 0, start: null, finish: '2026-09-25', plannedDurationWorkdays: 2, resolved_duration_workdays: 2, schedule_constraint_state: 'violated', schedule_constraint_reason: 'Prazo incompatível.', progress: 0, status: 'blocked', critical: true },
+      ],
+      dependencies: [],
+      stats: { progress: 0, completed: 0, total: 4, critical: 2, without_dates: 2, without_duration: 1 },
+    }
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => workspaceResponse(workspace) }))
+
+    await store.load(workspace.project.id)
+
+    expect(store.workspace?.tasks.map(task => task.plannedDurationWorkdays)).toEqual([null, 5, 3, 2])
+    expect(store.workspace?.tasks[3].schedule_constraint_state).toBe('violated')
+    expect(store.workspace?.stats.without_duration).toBe(1)
+  })
+
   it('reveals a hidden dependency endpoint by opening its ancestors and clearing filters', () => {
     const store = useWorkspaceStore()
     store.workspace = {
@@ -236,7 +258,7 @@ describe('workspace visibility', () => {
     const store = useWorkspaceStore()
     store.workspace = {
       project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-08-17T00:00:00Z' },
-      tasks: [{ id: 'task', title: 'Antes', kind: 'task', level: 0, start: '2026-08-17', finish: '2026-08-17', progress: 0, status: 'opened', critical: false }],
+      tasks: [{ id: 'task', title: 'Antes', kind: 'task', level: 0, start: '2026-08-17', finish: '2026-08-17', plannedDurationWorkdays: 1, resolved_duration_workdays: 1, schedule_constraint_state: 'satisfied', schedule_constraint_reason: null, progress: 0, status: 'opened', critical: false }],
       dependencies: [], stats: { progress: 0, completed: 0, total: 1, critical: 0, opened: 1, blocked: 0, scheduled: 0, late: 0, without_dates: 0 },
     }
     store.selected = ['task']

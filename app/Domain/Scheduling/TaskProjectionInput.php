@@ -14,5 +14,6 @@ final readonly class TaskProjectionInput
         public ?DateTimeImmutable $deadline,
         public bool $completed = false,
         public ?DateTimeImmutable $completionDate = null,
+        public ?int $plannedDurationWorkdays = null,
     ) {}
 }

@@ -23,8 +23,8 @@ final class GroupScheduleCalculator
                 $nested = $visit($childId);
                 if ($nested !== null) {
                     $ranges[] = $nested;
-                } elseif ($child->start !== null) {
-                    $ranges[] = new GroupSchedule($child->start, $child->finish($calendar));
+                } elseif (($start = $child->anchoredStart($calendar)) !== null) {
+                    $ranges[] = new GroupSchedule($start, $child->finish($calendar));
                 }
             }
             if ($ranges === []) {

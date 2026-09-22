@@ -66,9 +66,9 @@ Como proprietário ou editor, quero registrar os dados e datas de uma tarefa e c
 
 **Acceptance Scenarios**:
 
-1. **Given** uma tarefa não concluída cuja data de fim planejada passou, **When** o estado é avaliado, **Then** ela aparece como atrasada, mesmo que também tenha predecessoras incompletas.
-2. **Given** uma tarefa não concluída e não atrasada com qualquer predecessora incompleta, **When** o estado é avaliado, **Then** ela aparece como bloqueada.
-3. **Given** uma tarefa não concluída, não atrasada e sem bloqueio, **When** seu início planejado é futuro, **Then** ela aparece como agendada; quando possui início ou fim planejado e seu período chega, aparece como em andamento; sem nenhuma data planejada, aparece como aberta.
+1. **Given** uma tarefa não concluída com predecessora `FS` incompleta e fim planejado passado, **When** o estado é avaliado, **Then** ela aparece como bloqueada.
+2. **Given** uma tarefa não concluída, desbloqueada e com início planejado futuro, **When** o estado é avaliado, **Then** ela aparece como agendada, ainda que possua fim planejado.
+3. **Given** uma tarefa não concluída, desbloqueada, não agendada e com fim planejado passado, **When** o estado é avaliado, **Then** ela aparece como atrasada; quando possui início ou fim planejado e não está atrasada, aparece como em andamento; sem nenhuma data planejada, aparece como aberta.
 4. **Given** uma tarefa concluída, **When** seu estado é avaliado, **Then** ela aparece como concluída acima de todos os demais estados; se for reaberta, a data de conclusão real é removida e o estado é recalculado.
 
 ---
@@ -108,7 +108,7 @@ Como planejador, quero usar calendário, Gantt, simulação, reagendamento, cami
 ### Edge Cases
 
 - Projetos sem tarefas apresentam total zero, progresso zero e nenhuma tarefa atrasada.
-- Tarefas sem início e fim planejados são consideradas abertas quando não concluídas, atrasadas ou bloqueadas; a ausência de data de fim não caracteriza atraso.
+- Tarefas sem início e fim planejados são consideradas abertas quando não estão concluídas nem bloqueadas; a ausência de data de fim não caracteriza atraso.
 - A data de fim planejada anterior à data de início planejada é rejeitada.
 - Uma tarefa concluída com fim planejado passado permanece concluída e não conta como atrasada.
 - Alterações na estrutura ou em dependências que produziriam ciclo são rejeitadas sem alterar o projeto.
@@ -128,9 +128,9 @@ Como planejador, quero usar calendário, Gantt, simulação, reagendamento, cami
 - **FR-006**: Cada tarefa DEVE ter título, descrição livre, responsável, data de início planejada, data de fim planejada e data de conclusão real; título é obrigatório e a conclusão real é preenchida apenas ao concluir a tarefa.
 - **FR-007**: O sistema DEVE permitir cadastrar pessoa responsável com nome obrigatório e e-mail opcional, independentemente de ela ter conta, convite, associação ou acesso ao projeto.
 - **FR-008**: O sistema DEVE calcular o status da tarefa, sem seleção manual, na seguinte ordem: concluída, bloqueada, agendada, atrasada, em andamento e aberta.
-- **FR-009**: Uma tarefa não concluída DEVE ser atrasada quando sua data de fim planejada for anterior à data corrente.
-- **FR-010**: Uma tarefa não concluída e não atrasada DEVE ser bloqueada quando tiver ao menos uma predecessora não concluída.
-- **FR-011**: Uma tarefa não concluída, não atrasada e não bloqueada DEVE ser agendada quando seu início planejado for posterior à data corrente, em andamento quando possuir início ou fim planejado e seu período já tiver chegado, e aberta quando ambos estiverem ausentes.
+- **FR-009**: Uma tarefa não concluída DEVE ser bloqueada quando tiver ao menos uma predecessora `FS` não concluída.
+- **FR-010**: Uma tarefa não concluída e não bloqueada DEVE ser agendada quando seu início planejado for posterior à data corrente.
+- **FR-011**: Uma tarefa não concluída, não bloqueada e não agendada DEVE ser atrasada quando sua data de fim planejada for anterior à data corrente; caso contrário, fica em andamento quando possuir início ou fim planejado e aberta quando ambos estiverem ausentes.
 - **FR-012**: Concluir uma tarefa DEVE registrar a data de conclusão real; reabri-la DEVE remover essa data e recalcular o status e os indicadores afetados.
 - **FR-013**: O sistema DEVE preservar dependências FS, SS, FF e SF, calendário, Gantt, simulação, reagendamento, caminho crítico e auditoria sobre projetos e tarefas locais.
 - **FR-014**: Dependências DEVEM ser intraprojeto e impedir ciclos, duplicatas e autodependências.

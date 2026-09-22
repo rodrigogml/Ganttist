@@ -16,5 +16,8 @@ final readonly class TaskProjection
         public ?DateTimeImmutable $earliestStart,
         public DateTimeImmutable $effectiveCompletionDate,
         public ProjectedTaskStatus $status,
+        public int $resolvedDurationWorkdays = 1,
+        public ScheduleConstraintState $scheduleConstraintState = ScheduleConstraintState::Satisfied,
+        public ?string $scheduleConstraintReason = null,
     ) {}
 }

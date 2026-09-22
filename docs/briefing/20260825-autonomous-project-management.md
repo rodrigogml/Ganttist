@@ -41,7 +41,7 @@
 2. Criar projeto local vazio com nome obrigatório, sem integração com Todoist.
 3. Criar seções em árvore de profundidade ilimitada e tarefas na raiz do projeto ou em qualquer seção; tarefas não contêm outras tarefas.
 4. Manter em cada tarefa título, descrição, responsável, datas planejadas de início e fim e data de conclusão real.
-5. Calcular o status da tarefa sem seleção manual: concluída, atrasada, bloqueada, agendada ou aberta, na ordem de prioridade definida.
+5. Calcular o status da tarefa sem seleção manual: concluída, bloqueada, agendada, atrasada, em andamento ou aberta, nessa ordem de prioridade.
 6. Manter Gantt, calendário, dependências FS/SS/FF/SF, caminho crítico, simulação, reagendamento e demais capacidades atuais sobre dados locais.
 7. Cadastrar pessoas internas com nome obrigatório e e-mail opcional; atribuí-las sem convite ou uso do sistema.
 8. Gerir acesso por projeto com os papéis proprietário, editor e leitor.

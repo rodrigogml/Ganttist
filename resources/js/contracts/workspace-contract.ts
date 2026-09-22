@@ -26,6 +26,12 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
     if (!['completed', 'blocked', 'scheduled', 'late', 'in_progress', 'opened'].includes(item.status as string)) throw new Error('Contrato de workspace inválido: task.status.')
     if (item.start !== null && typeof item.start !== 'string') throw new Error('Contrato de workspace inválido: task.start.')
     if (item.finish !== null && typeof item.finish !== 'string') throw new Error('Contrato de workspace inválido: task.finish.')
+    if (item.kind === 'task') {
+      if (item.plannedDurationWorkdays !== null && typeof item.plannedDurationWorkdays !== 'number') throw new Error('Contrato de workspace inválido: task.plannedDurationWorkdays.')
+      if (!Number.isInteger(item.resolved_duration_workdays) || (item.resolved_duration_workdays as number) < 1) throw new Error('Contrato de workspace inválido: task.resolved_duration_workdays.')
+      if (!['satisfied', 'violated'].includes(item.schedule_constraint_state as string)) throw new Error('Contrato de workspace inválido: task.schedule_constraint_state.')
+      if (item.schedule_constraint_reason !== null && typeof item.schedule_constraint_reason !== 'string') throw new Error('Contrato de workspace inválido: task.schedule_constraint_reason.')
+    }
     if (item.description !== undefined && item.description !== null && typeof item.description !== 'string') throw new Error('Contrato de workspace inválido: task.description.')
     if (item.assignee_id !== undefined && item.assignee_id !== null && typeof item.assignee_id !== 'string') throw new Error('Contrato de workspace inválido: task.assignee_id.')
     if (item.comment_count !== undefined && (typeof item.comment_count !== 'number' || item.comment_count < 0)) throw new Error('Contrato de workspace inválido: task.comment_count.')

@@ -68,6 +68,19 @@ final class SchedulingEngineTest extends TestCase
         self::assertSame([], $result->changedTaskIds, 'Data virtual não deve ser persistida automaticamente.');
     }
 
+    public function test_deadline_anchored_duration_uses_a_retroactive_virtual_start_without_persisting_it(): void
+    {
+        $calendar = new WorkCalendar;
+        $task = TaskPlan::fromDates('A', 'Prazo', null, new DateTimeImmutable('2026-08-21'), $calendar, plannedDurationWorkdays: 3);
+
+        $result = $this->engine->schedule([$task], [], new DateTimeImmutable('2026-08-16'));
+
+        self::assertNull($result->tasks['A']->start);
+        self::assertSame('2026-08-19', $result->virtualStarts['A']->format('Y-m-d'));
+        self::assertSame(0, $result->totalFloat['A']);
+        self::assertSame(['A'], $result->criticalTaskIds);
+    }
+
     public function test_group_ranges_are_derived_bottom_up_and_ignore_unscheduled_descendants(): void
     {
         $calendar = new WorkCalendar;
@@ -81,6 +94,40 @@ final class SchedulingEngineTest extends TestCase
 
         self::assertSame('2026-08-20', $groups['N']->start->format('Y-m-d'));
         self::assertSame('2026-08-25', $groups['G']->finish->format('Y-m-d'));
+    }
+
+    public function test_group_ranges_include_a_deadline_anchored_duration(): void
+    {
+        $calendar = new WorkCalendar;
+        $groups = (new GroupScheduleCalculator)->calculate([
+            'G' => new TaskPlan('G', 'Grupo', null, 1),
+            'A' => TaskPlan::fromDates('A', 'Entrega', null, new DateTimeImmutable('2026-08-21'), $calendar, parentId: 'G', plannedDurationWorkdays: 3),
+        ], $calendar);
+
+        self::assertSame('2026-08-19', $groups['G']->start->format('Y-m-d'));
+        self::assertSame('2026-08-21', $groups['G']->finish->format('Y-m-d'));
+    }
+
+    #[DataProvider('explicitDurationPrecedenceCases')]
+    public function test_explicit_duration_is_used_by_every_precedence_type(string $type, string $predecessorStart, string $successorStart, string $expectedStart): void
+    {
+        $calendar = new WorkCalendar;
+        $result = $this->engine->schedule([
+            TaskPlan::fromDates('A', 'Predecessora', new DateTimeImmutable($predecessorStart), null, $calendar, plannedDurationWorkdays: 3),
+            TaskPlan::fromDates('B', 'Sucessora', new DateTimeImmutable($successorStart), null, $calendar, plannedDurationWorkdays: 2),
+        ], [new Dependency('A', 'B', $type)], new DateTimeImmutable('2026-08-16'));
+
+        self::assertSame($expectedStart, $result->tasks['B']->start->format('Y-m-d'));
+    }
+
+    public static function explicitDurationPrecedenceCases(): array
+    {
+        return [
+            'finish-to-start' => ['FS', '2026-08-17', '2026-08-17', '2026-08-20'],
+            'start-to-start' => ['SS', '2026-08-17', '2026-08-17', '2026-08-17'],
+            'finish-to-finish' => ['FF', '2026-08-17', '2026-08-17', '2026-08-18'],
+            'start-to-finish' => ['SF', '2026-08-19', '2026-08-17', '2026-08-18'],
+        ];
     }
 
     public function test_invalid_or_non_working_deadline_normalizes_duration(): void
