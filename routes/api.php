@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\Documents\OfflineManifestController;
 use App\Http\Controllers\Api\Documents\ProjectTagController;
 use App\Http\Controllers\Api\ObservabilityController;
 use App\Http\Controllers\Api\ProjectController;
+use App\Http\Controllers\Api\ProjectTaskViewController;
 use App\Http\Controllers\Api\SessionController;
 use Illuminate\Support\Facades\Route;
 
@@ -24,6 +25,11 @@ Route::prefix('v1')->group(function () {
             Route::get('/projects', [ProjectController::class, 'index']);
             Route::post('/projects', [ProjectController::class, 'store']);
             Route::get('/projects/{projectId}/workspace', [ProjectController::class, 'workspace']);
+            Route::get('/projects/{projectId}/views', [ProjectTaskViewController::class, 'index']);
+            Route::post('/projects/{projectId}/views', [ProjectTaskViewController::class, 'store']);
+            Route::post('/projects/{projectId}/views/import', [ProjectTaskViewController::class, 'import']);
+            Route::put('/projects/{projectId}/views/{viewId}', [ProjectTaskViewController::class, 'update']);
+            Route::delete('/projects/{projectId}/views/{viewId}', [ProjectTaskViewController::class, 'destroy']);
             Route::get('/projects/{projectId}/documents', [DocumentController::class, 'index']);
             Route::post('/projects/{projectId}/documents', [DocumentController::class, 'store']);
             Route::get('/projects/{projectId}/documents/{documentId}', [DocumentController::class, 'show']);

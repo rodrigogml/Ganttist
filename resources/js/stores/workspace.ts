@@ -2,15 +2,17 @@ import { computed, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import { useAuthStore } from './auth'
 import { parseWorkspaceResponse } from '../contracts/workspace-contract'
-import type { Dependency, Task, TaskStatus, Workspace } from '../types'
-import { parseTaskQuery } from '../utils/task-query'
+import type { Dependency, Task, Workspace } from '../types'
+import { parseTaskQuery, type TaskQueryTarget } from '../utils/task-query'
 import { preparedManifest, removeProjectOffline } from '../offline/offline-store'
 import { apiFetch } from '../lib/api'
 
-export const workspaceTaskStatuses: readonly TaskStatus[] = ['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed']
-export const unblockedTaskStatuses: readonly TaskStatus[] = ['opened', 'in_progress', 'scheduled', 'late']
+export type WorkspaceSortField = 'manual' | 'title' | 'start' | 'finish' | 'status' | 'priority'
+export type WorkspaceGroupField = 'none' | 'status' | 'assignee' | 'priority'
+
 const activeProjectStorageKey = 'ganttist.active-project-id'
 const activeProjectStorage = () => typeof localStorage === 'undefined' ? null : localStorage
+const normalizeQueryValue = (value: string): string => value.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR').replace(/\s+/g, ' ').trim()
 
 export const useWorkspaceStore = defineStore('workspace', () => {
   const workspace = ref<Workspace | null>(null)
@@ -23,12 +25,14 @@ export const useWorkspaceStore = defineStore('workspace', () => {
   if (!initialTaskQuery.valid) throw new Error('A consulta vazia deve ser válida.')
   const activeTaskQuery = ref(initialTaskQuery)
   const searchError = ref('')
-  const statusFilters = ref<TaskStatus[]>([...workspaceTaskStatuses])
-  const assigneeFilters = ref<string[]>([])
-  const periodStart = ref('')
-  const periodEnd = ref('')
   const selected = ref<string[]>([])
   const zoom = ref<'day' | 'week' | 'month'>('week')
+  const sortBy = ref<WorkspaceSortField>('manual')
+  const sortDirection = ref<'asc' | 'desc'>('asc')
+  const subsortBy = ref<WorkspaceSortField>('manual')
+  const subsortDirection = ref<'asc' | 'desc'>('asc')
+  const groupBy = ref<WorkspaceGroupField>('none')
+  const subgroupBy = ref<WorkspaceGroupField>('none')
   const hiddenGroups = ref(new Set<string>())
   const filterExceptions = ref(new Set<string>())
   const relationshipFocusTaskId = ref<string | null>(null)
@@ -42,26 +46,41 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       searchError.value = query.error.message
     }
   }, { flush: 'sync' })
-  watch([search, statusFilters, assigneeFilters, periodStart, periodEnd], () => {
+  watch(search, () => {
     if (filterExceptions.value.size) filterExceptions.value = new Set()
     if (relationshipFocusTaskId.value) relationshipFocusTaskId.value = null
   }, { flush: 'sync' })
-  const matchesTaskFilters = (task: Task): boolean => {
-    if (!activeTaskQuery.value.matches(task.title)) return false
-    if (task.kind === 'task' && !statusFilters.value.includes(task.status)) return false
-    if (task.kind === 'task' && assigneeFilters.value.length) {
-      const assignee = task.assignee_id ?? '__unassigned__'
-      if (!assigneeFilters.value.includes(assignee)) return false
+  const currentAssigneeId = computed(() => {
+    const userId = useAuthStore().user?.id
+    return workspace.value?.people?.find(person => person.linkedUserId === userId)?.id ?? null
+  })
+  const queryWarnings = computed(() => {
+    if (!activeTaskQuery.value.valid) return []
+    const people = new Set((workspace.value?.people ?? []).map(person => normalizeQueryValue(person.name)))
+    const sections = new Set((workspace.value?.tasks ?? []).filter(task => task.kind === 'section').map(task => normalizeQueryValue(task.title)))
+    return activeTaskQuery.value.predicates.flatMap(predicate => {
+      if (predicate.field === 'responsavel' && !['eu', 'sem', 'outros'].includes(predicate.value) && !people.has(predicate.value)) return [`Responsável “${predicate.label}” não encontrado neste projeto.`]
+      if (predicate.field === 'secao' && predicate.value !== 'sem' && !sections.has(predicate.value)) return [`Seção “${predicate.label}” não encontrada neste projeto.`]
+      return []
+    })
+  })
+  const queryPredicates = computed(() => activeTaskQuery.value.valid ? activeTaskQuery.value.predicates : [])
+  function taskQueryTarget(task: Task, source: readonly Task[]): TaskQueryTarget {
+    const sectionId = task.section_id ?? (task.kind === 'task' ? task.parent_id : null)
+    const section = sectionId ? source.find(candidate => candidate.id === sectionId)?.title ?? null : null
+    return {
+      title: task.title,
+      status: task.status,
+      assigneeId: task.assignee_id,
+      assignee: task.assignee,
+      start: task.start,
+      finish: task.finish,
+      priority: task.priority,
+      section,
     }
-    if (task.kind === 'task' && (periodStart.value || periodEnd.value)) {
-      const today = new Date().toISOString().slice(0, 10)
-      const completed = task.completed ?? task.status === 'completed'
-      const completion = task.effective_completion ?? null
-      const start = task.considered_start ?? task.start ?? (completed ? completion : null) ?? today
-      const finish = task.considered_deadline ?? task.finish ?? (completed ? completion : null) ?? start
-      if (periodStart.value && finish < periodStart.value) return false
-      if (periodEnd.value && start > periodEnd.value) return false
-    }
+  }
+  const matchesTaskFilters = (task: Task, source: readonly Task[]): boolean => {
+    if (!activeTaskQuery.value.matches(taskQueryTarget(task, source), { currentAssigneeId: currentAssigneeId.value })) return false
     return true
   }
   const tasks = computed(() => {
@@ -70,7 +89,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const visibleIds = relationshipFocusTaskId.value
       ? relationshipFocusIds(relationshipFocusTaskId.value, source, workspace.value?.dependencies ?? [])
       : new Set([
-          ...source.filter(matchesTaskFilters).map(task => task.id),
+          ...source.filter(task => matchesTaskFilters(task, source)).map(task => task.id),
           ...filterExceptions.value,
         ])
 
@@ -83,7 +102,12 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       }
     }
 
-    return source.filter(task => visibleIds.has(task.id))
+    const visible = source.filter(task => visibleIds.has(task.id))
+    return sortVisibleHierarchy(visible, sortBy.value, sortDirection.value, subsortBy.value, subsortDirection.value, groupBy.value, subgroupBy.value)
+  })
+  const queryResultCount = computed(() => {
+    const source = workspace.value?.tasks ?? []
+    return source.filter(task => task.kind === 'task' && matchesTaskFilters(task, source)).length
   })
   const empty = computed(() => workspace.value !== null && workspace.value.tasks.length === 0)
   let activeLoad: { projectId: string | undefined; promise: Promise<void> } | null = null
@@ -179,10 +203,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
   function clearTaskFilters(): void {
     search.value = ''
-    statusFilters.value = [...workspaceTaskStatuses]
-    assigneeFilters.value = []
-    periodStart.value = ''
-    periodEnd.value = ''
     filterExceptions.value = new Set()
     relationshipFocusTaskId.value = null
   }
@@ -194,10 +214,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
 
     relationshipFocusTaskId.value = null
     search.value = ''
-    statusFilters.value = [...workspaceTaskStatuses]
-    assigneeFilters.value = []
-    periodStart.value = ''
-    periodEnd.value = ''
     filterExceptions.value = new Set()
     relationshipFocusTaskId.value = id
 
@@ -248,7 +264,7 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     const taskById = new Map(source.map(task => [task.id, task]))
     const next = new Set(hiddenGroups.value)
     for (const task of source) {
-      if (!activeTaskQuery.value.matches(task.title)) continue
+      if (!activeTaskQuery.value.matches(taskQueryTarget(task, source), { currentAssigneeId: currentAssigneeId.value })) continue
       const visited = new Set<string>()
       let parentId = task.parent_id
       while (parentId && !visited.has(parentId)) {
@@ -258,29 +274,6 @@ export const useWorkspaceStore = defineStore('workspace', () => {
       }
     }
     hiddenGroups.value = next
-  }
-
-  function setStatusFilters(statuses: readonly TaskStatus[]): void {
-    statusFilters.value = workspaceTaskStatuses.filter(status => statuses.includes(status))
-  }
-
-  function toggleStatusFilter(status: TaskStatus): void {
-    setStatusFilters(statusFilters.value.includes(status)
-      ? statusFilters.value.filter(current => current !== status)
-      : [...statusFilters.value, status])
-  }
-
-  function toggleUnblockedStatusFilters(): void {
-    const allSelected = unblockedTaskStatuses.every(status => statusFilters.value.includes(status))
-    setStatusFilters(allSelected
-      ? statusFilters.value.filter(status => !unblockedTaskStatuses.includes(status))
-      : [...statusFilters.value, ...unblockedTaskStatuses])
-  }
-
-  function toggleAssigneeFilter(assigneeId: string): void {
-    assigneeFilters.value = assigneeFilters.value.includes(assigneeId)
-      ? assigneeFilters.value.filter(current => current !== assigneeId)
-      : [...assigneeFilters.value, assigneeId]
   }
 
   function updateTask(task: Task): void {
@@ -300,8 +293,40 @@ export const useWorkspaceStore = defineStore('workspace', () => {
     activeProjectStorage()?.removeItem(activeProjectStorageKey)
   }
 
-  return { workspace, loading, refreshing, stale, error, search, searchError, statusFilters, assigneeFilters, periodStart, periodEnd, selected, zoom, hiddenGroups, filterExceptions, relationshipFocusTaskId, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, focusTaskRelations, revealFilterException, toggleSelect, toggleGroup, collapseAllGroups, expandAllGroups, expandIntermediateGroups, revealTask, setStatusFilters, toggleStatusFilter, toggleUnblockedStatusFilters, toggleAssigneeFilter, updateTask, addDependency }
+  return { workspace, loading, refreshing, stale, error, search, searchError, queryPredicates, queryWarnings, queryResultCount, selected, zoom, sortBy, sortDirection, subsortBy, subsortDirection, groupBy, subgroupBy, hiddenGroups, filterExceptions, relationshipFocusTaskId, tasks, empty, load, clearWorkspace, clearTaskFilters, clearFilterExceptions, focusTaskRelations, revealFilterException, toggleSelect, toggleGroup, collapseAllGroups, expandAllGroups, expandIntermediateGroups, revealTask, updateTask, addDependency }
 })
+
+function sortVisibleHierarchy(tasks: readonly Task[], field: WorkspaceSortField, direction: 'asc' | 'desc', subsort: WorkspaceSortField, subsortDirection: 'asc' | 'desc', group: WorkspaceGroupField, subgroup: WorkspaceGroupField): Task[] {
+  if (field === 'manual' && group === 'none' && subgroup === 'none') return [...tasks]
+  const children = new Map<string | null, Task[]>()
+  const known = new Set(tasks.map(task => task.id))
+  for (const task of tasks) {
+    const parent = task.parent_id && known.has(task.parent_id) ? task.parent_id : null
+    children.set(parent, [...(children.get(parent) ?? []), task])
+  }
+  const value = (task: Task): string | number => field === 'title' ? task.title : field === 'start' ? task.start ?? '' : field === 'finish' ? task.finish ?? '' : field === 'status' ? task.status : field === 'priority' ? task.priority ?? 0 : ''
+  const groupValue = (task: Task, grouping: WorkspaceGroupField): string | number => grouping === 'status' ? task.status : grouping === 'assignee' ? task.assignee ?? 'Sem responsável' : grouping === 'priority' ? task.priority ?? 0 : ''
+  const compareValue = (a: string | number, b: string | number) => typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), 'pt-BR')
+  const compare = (left: Task, right: Task) => {
+    if (group !== 'none') { const grouped = compareValue(groupValue(left, group), groupValue(right, group)); if (grouped) return grouped }
+    if (subgroup !== 'none' && subgroup !== group) { const grouped = compareValue(groupValue(left, subgroup), groupValue(right, subgroup)); if (grouped) return grouped }
+    if (field !== 'manual') {
+      const a = value(left), b = value(right)
+      const order = compareValue(a, b)
+      if (order) return direction === 'asc' ? order : -order
+    }
+    if (subsort === 'manual') return 0
+    const subValue = (task: Task): string | number => subsort === 'title' ? task.title : subsort === 'start' ? task.start ?? '' : subsort === 'finish' ? task.finish ?? '' : subsort === 'status' ? task.status : task.priority ?? 0
+    const subOrder = compareValue(subValue(left), subValue(right))
+    return subsortDirection === 'asc' ? subOrder : -subOrder
+  }
+  const ordered: Task[] = []
+  const visit = (parent: string | null): void => {
+    for (const task of [...(children.get(parent) ?? [])].sort(compare)) { ordered.push(task); visit(task.id) }
+  }
+  visit(null)
+  return ordered
+}
 
 function relationshipFocusIds(focusId: string, tasks: readonly Task[], dependencies: readonly Dependency[]): Set<string> {
   const knownIds = new Set(tasks.map(task => task.id))

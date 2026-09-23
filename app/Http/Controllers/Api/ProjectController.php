@@ -206,7 +206,7 @@ final class ProjectController
         }
         unset($row);
         $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_id, 'from_kind' => $edge->predecessor_kind, 'to' => $edge->successor_id, 'to_kind' => $edge->successor_kind, 'type' => $edge->type, 'critical' => isset($criticalIds[$edge->predecessor_id], $criticalIds[$edge->successor_id]), 'constraint_state' => 'active']);
-        $people = DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email']);
+        $people = DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email', 'linked_user_id as linkedUserId']);
         $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
         $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['completed']));
         $totalWeight = array_sum(array_map(fn (array $task): int => $task['resolved_duration_workdays'], $leafTasks));

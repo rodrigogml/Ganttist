@@ -19,11 +19,7 @@ import TaskCommentsWindow from "./TaskCommentsWindow.vue";
 import DateInput from "./DateInput.vue";
 import DefaultSubmitButton from "./components/forms/DefaultSubmitButton.vue";
 import { useAuthStore } from "./stores/auth";
-import {
-    unblockedTaskStatuses,
-    useWorkspaceStore,
-    workspaceTaskStatuses,
-} from "./stores/workspace";
+import { useWorkspaceStore } from "./stores/workspace";
 import type { ChecklistItem, Collaborator, Dependency, Task } from "./types";
 import {
     barWidth,
@@ -45,7 +41,8 @@ import {
 } from "./utils/timeblock-gesture";
 import { dependencyPath, dependencyStub } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
-import { parseTaskQuery } from "./utils/task-query";
+import { parseTaskQuery, replaceTaskQueryField, type TaskQueryField } from "./utils/task-query";
+import { parseSavedTaskView, parseViewsResponse } from "./contracts/task-views-contract";
 import { apiFetch, connectivity } from "./lib/api";
 import { useRouter } from "vue-router";
 import { spacing } from "./composables/useAppearancePreferences";
@@ -86,6 +83,8 @@ watch(
     () => store.workspace?.project.id,
     async (projectId) => {
         if (!projectId) return;
+        activeSavedViewId.value = null;
+        void loadSavedViews();
         if (!routeMatch()) void router.replace(`/projects/${projectId}/${projectView.value}`);
         await nextTick();
         measureGantt();
@@ -112,6 +111,7 @@ onMounted(async () => {
     window.addEventListener("resize", handleViewportResize);
     await auth.bootstrap();
     await initializeWorkspace();
+    await loadSavedViews();
     await nextTick();
     measureGantt();
     observeGanttSize();
@@ -141,7 +141,8 @@ const drawer = ref(false),
     hierarchyMenu = ref(false),
     account = ref(false),
     responsiblePanel = ref(false),
-    historyPanel = ref(false),
+    queryHelpPanel = ref(false),
+    viewsMenu = ref(false),
     creationMenu = ref(false),
     deleting = ref(false),
     preserveContinuity = ref(true),
@@ -164,9 +165,14 @@ const drawer = ref(false),
     hoveredTaskId = ref<string | null>(null),
     cursorTaskId = ref<string | null>(null),
     selectionAnchorId = ref<string | null>(null);
+let toastTimeout: number | null = null;
 function showToast(message: string, kind: ToastKind = "info") {
+    if (toastTimeout) window.clearTimeout(toastTimeout);
     toast.value = message;
     toastKind.value = kind;
+    toastTimeout = window.setTimeout(() => {
+        if (toast.value === message) toast.value = "";
+    }, kind === "error" ? 6000 : 4000);
 }
 function handleNotification(notification: AppNotification) {
     showToast(notification.message, notification.kind);
@@ -272,10 +278,183 @@ const taskColumnWidth = ref(TASK_COLUMN_MIN),
     columnPickerPosition = ref({ top: 0, left: 0 });
 const columnDragId = ref<WorkspaceColumnId | null>(null);
 const columnDropTarget = ref<{ id: WorkspaceColumnId; position: "before" | "after" } | null>(null);
+type SavedTaskView = {
+    id: string;
+    name: string;
+    query: string;
+    visualState: {
+        columns?: { visibility?: Partial<Record<WorkspaceColumnId, boolean>>; order?: WorkspaceColumnId[] };
+        hierarchy?: "expanded" | "collapsed" | "intermediate" | { hiddenGroupIds: string[] };
+        taskColumnWidth?: number;
+        sortBy?: "manual" | "title" | "start" | "finish" | "status" | "priority";
+        sortDirection?: "asc" | "desc";
+        subsortBy?: "manual" | "title" | "start" | "finish" | "status" | "priority";
+        subsortDirection?: "asc" | "desc";
+        groupBy?: "none" | "status" | "assignee" | "priority";
+        subgroupBy?: "none" | "status" | "assignee" | "priority";
+        gantt?: { zoom?: "day" | "week" | "month" };
+    };
+    formatVersion: number;
+};
+const savedViews = ref<SavedTaskView[]>([]);
+const activeSavedViewId = ref<string | null>(null);
+const loadingViews = ref(false);
+const viewDialog = ref<{ mode: "create" | "duplicate" | "rename"; name: string; source: SavedTaskView | null } | null>(null);
+const viewBusy = ref(false);
+const viewImportInput = ref<HTMLInputElement | null>(null);
+type ImportedTaskView = { name: string; query: string; visualState: SavedTaskView["visualState"]; formatVersion: 1 };
+const viewImportDialog = ref<{ file: ImportedTaskView; existing: SavedTaskView | null } | null>(null);
+const querySuggestions = computed(() => [
+    "status:aberta", "status:em-andamento", "status:atrasada", "status:bloqueada", "status:concluida",
+    "responsavel:eu", "responsavel:sem", "responsavel:outros", "data:hoje", "data:amanha", "data:proximos-7-dias",
+    "prioridade:alta", "prioridade:media", "prioridade:baixa", "secao:sem",
+    ...(store.workspace?.people ?? []).map((person) => `responsavel:${JSON.stringify(person.name)}`),
+    ...(store.workspace?.tasks ?? []).filter((task) => task.kind === "section").map((task) => `secao:${JSON.stringify(task.title)}`),
+]);
+const activeSavedView = computed(() => savedViews.value.find((view) => view.id === activeSavedViewId.value) ?? null);
+function currentViewSnapshot() {
+    return {
+        columns: { visibility: columnVisibility.value, order: workspaceColumnOrder.value },
+        hierarchy: { hiddenGroupIds: [...store.hiddenGroups] },
+        taskColumnWidth: taskColumnWidth.value,
+        sortBy: store.sortBy,
+        sortDirection: store.sortDirection,
+        subsortBy: store.subsortBy,
+        subsortDirection: store.subsortDirection,
+        groupBy: store.groupBy,
+        subgroupBy: store.subgroupBy,
+        gantt: { zoom: store.zoom },
+    };
+}
+async function loadSavedViews() {
+    const projectId = store.workspace?.project.id;
+    if (!projectId) return;
+    loadingViews.value = true;
+    try {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/views`);
+        if (!response.ok) throw new Error("Não foi possível carregar as views.");
+        savedViews.value = parseViewsResponse(await response.json()) as SavedTaskView[];
+    } catch { /* Views são auxiliares; a falha não interrompe o workspace. */ }
+    finally { loadingViews.value = false; }
+}
+function useQueryExample(query: string) { store.search = query; queryHelpPanel.value = false; searchInput.value?.focus(); }
+function applySavedView(view: SavedTaskView) {
+    store.search = view.query;
+    const visibility = view.visualState.columns?.visibility;
+    if (visibility) workspaceColumns.forEach((column) => { if (typeof visibility[column.id] === "boolean") columnVisibility.value[column.id] = visibility[column.id]!; });
+    const order = view.visualState.columns?.order;
+    if (order?.length) workspaceColumnOrder.value = [...new Set([...order.filter((id) => workspaceColumns.some((column) => column.id === id)), ...workspaceColumns.map((column) => column.id)])];
+    if (view.visualState.gantt?.zoom) store.zoom = view.visualState.gantt.zoom;
+    if (typeof view.visualState.taskColumnWidth === "number") taskColumnWidth.value = clampTaskColumnWidth(view.visualState.taskColumnWidth);
+    if (view.visualState.sortBy) store.sortBy = view.visualState.sortBy;
+    if (view.visualState.sortDirection) store.sortDirection = view.visualState.sortDirection;
+    if (view.visualState.subsortBy) store.subsortBy = view.visualState.subsortBy;
+    if (view.visualState.subsortDirection) store.subsortDirection = view.visualState.subsortDirection;
+    if (view.visualState.groupBy) store.groupBy = view.visualState.groupBy;
+    if (view.visualState.subgroupBy) store.subgroupBy = view.visualState.subgroupBy;
+    if (typeof view.visualState.hierarchy === "object") store.hiddenGroups = new Set(view.visualState.hierarchy.hiddenGroupIds);
+    else if (view.visualState.hierarchy === "collapsed") store.collapseAllGroups();
+    else if (view.visualState.hierarchy === "intermediate") store.expandIntermediateGroups();
+    else store.expandAllGroups();
+    activeSavedViewId.value = view.id;
+}
+async function overwriteSavedView() {
+    const projectId = store.workspace?.project.id, view = activeSavedView.value;
+    if (!projectId || !view || !confirm(`Sobrescrever a view “${view.name}” com a configuração atual?`)) return;
+    try {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/views/${view.id}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ name: view.name, query: store.search, visualState: currentViewSnapshot(), formatVersion: 1 }) });
+        if (!response.ok) throw new Error("Não foi possível sobrescrever a view.");
+        const updated = parseSavedTaskView((await response.json()).data) as SavedTaskView;
+        savedViews.value = savedViews.value.map((candidate) => candidate.id === updated.id ? updated : candidate);
+        showToast("View atualizada.", "success");
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível sobrescrever a view.", "error"); }
+}
+function openViewDialog(mode: "create" | "duplicate" | "rename") {
+    const source = activeSavedView.value;
+    if ((mode === "duplicate" || mode === "rename") && !source) return;
+    viewDialog.value = { mode, source, name: mode === "create" ? "" : mode === "duplicate" ? `${source!.name} (cópia)` : source!.name };
+}
+async function saveViewDialog() {
+    const projectId = store.workspace?.project.id, dialog = viewDialog.value;
+    if (!projectId || !dialog || !dialog.name.trim()) return;
+    viewBusy.value = true;
+    try {
+        const payload = { name: dialog.name.trim(), query: dialog.mode === "duplicate" ? dialog.source!.query : store.search, visualState: dialog.mode === "duplicate" ? dialog.source!.visualState : currentViewSnapshot(), formatVersion: 1 };
+        const response = dialog.mode === "rename"
+            ? await apiFetch(`/api/v1/projects/${projectId}/views/${dialog.source!.id}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify(payload) })
+            : await apiFetch(`/api/v1/projects/${projectId}/views`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify(payload) });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível salvar a view."));
+        const saved = parseSavedTaskView((await response.json()).data) as SavedTaskView;
+        savedViews.value = dialog.mode === "rename" ? savedViews.value.map((view) => view.id === saved.id ? saved : view) : [...savedViews.value, saved];
+        activeSavedViewId.value = saved.id;
+        viewDialog.value = null;
+        showToast("View salva.", "success");
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível salvar a view.", "error"); }
+    finally { viewBusy.value = false; }
+}
+async function deleteSavedView() {
+    const projectId = store.workspace?.project.id, view = activeSavedView.value;
+    if (!projectId || !view || !confirm(`Excluir a view “${view.name}”?`)) return;
+    try {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/views/${view.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
+        if (!response.ok) throw new Error("Não foi possível excluir a view.");
+        savedViews.value = savedViews.value.filter((candidate) => candidate.id !== view.id);
+        activeSavedViewId.value = null;
+        showToast("View excluída.", "success");
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível excluir a view.", "error"); }
+}
+function exportSavedView() {
+    const view = activeSavedView.value;
+    if (!view) return;
+    const portableVisualState = { ...view.visualState, hierarchy: "expanded" as const };
+    const file = { name: view.name, query: view.query, visualState: portableVisualState, formatVersion: view.formatVersion };
+    const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${view.name.replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "") || "view"}.ganttist-view.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+}
+function chooseViewImport() { viewImportInput.value?.click(); }
+async function persistImportedView(file: ImportedTaskView, conflictStrategy?: "create" | "overwrite") {
+    const projectId = store.workspace?.project.id;
+    if (!projectId) return;
+    const response = await apiFetch(`/api/v1/projects/${projectId}/views/import`, { method: "POST", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ file, conflictStrategy, targetViewId: conflictStrategy === "overwrite" ? savedViews.value.find((view) => view.name === file.name)?.id : undefined }) });
+    if (!response.ok) throw new Error("Não foi possível importar a view.");
+    const payload = await response.json();
+    const result = payload.data === null ? null : parseSavedTaskView(payload.data) as SavedTaskView;
+    if (!result) return;
+    savedViews.value = [...savedViews.value.filter((view) => view.id !== result.id), result];
+    applySavedView(result);
+    showToast("View importada.", "success");
+}
+async function importSavedView(event: Event) {
+    const input = event.target as HTMLInputElement, file = input.files?.[0], projectId = store.workspace?.project.id;
+    input.value = "";
+    if (!file || !projectId) return;
+    try {
+        const imported = JSON.parse(await file.text()) as { name?: unknown; query?: unknown; visualState?: unknown; formatVersion?: unknown };
+        if (typeof imported.name !== "string" || typeof imported.query !== "string" || !imported.visualState || typeof imported.visualState !== "object" || imported.formatVersion !== 1) throw new Error("O arquivo não é uma view compatível.");
+        const importedFile = imported as ImportedTaskView;
+        const existing = savedViews.value.find((view) => view.name === importedFile.name) ?? null;
+        if (existing) viewImportDialog.value = { file: importedFile, existing };
+        else await persistImportedView(importedFile);
+    } catch { showToast("O arquivo não é uma view compatível.", "error"); }
+}
+async function resolveViewImport(strategy: "create" | "overwrite") {
+    const dialog = viewImportDialog.value;
+    if (!dialog) return;
+    try {
+        await persistImportedView(dialog.file, strategy);
+        viewImportDialog.value = null;
+    } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível importar a view.", "error"); }
+}
 const hierarchyButton = ref<HTMLElement | null>(null),
     hierarchyMenuElement = ref<HTMLElement | null>(null),
     filterButton = ref<HTMLElement | null>(null),
     filterMenu = ref<HTMLElement | null>(null),
+    viewsButton = ref<HTMLElement | null>(null),
+    viewsMenuElement = ref<HTMLElement | null>(null),
     searchInput = ref<HTMLInputElement | null>(null),
     quickAssigneeMenuElement = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
@@ -358,8 +537,16 @@ let taskContextLongPress: {
     y: number;
     timer: ReturnType<typeof setTimeout>;
 } | null = null;
-const allStatusesSelected = computed(
-    () => store.statusFilters.length === workspaceTaskStatuses.length,
+const statusFilterOptions = [
+    ["opened", "aberta", "Abertas"],
+    ["in_progress", "em-andamento", "Em andamento"],
+    ["scheduled", "agendada", "Agendadas"],
+    ["late", "atrasada", "Atrasadas"],
+    ["blocked", "bloqueada", "Bloqueadas"],
+    ["completed", "concluida", "Concluídas"],
+] as const;
+const queryPredicates = computed(() =>
+    store.searchError ? [] : store.queryPredicates,
 );
 const assigneeFilterOptions = computed(() => {
     const options = new Map<string, string>();
@@ -378,25 +565,52 @@ const assigneeFilterOptions = computed(() => {
         left.localeCompare(right, "pt-BR"),
     );
 });
+const selectedQueryValues = (field: TaskQueryField) =>
+    computed(() => queryPredicates.value.filter((predicate) => predicate.field === field).map((predicate) => predicate.value));
+const selectedStatusValues = selectedQueryValues("status");
+const selectedAssigneeValues = selectedQueryValues("responsavel");
+const selectedPeriod = computed(() => {
+    const value = selectedQueryValues("data").value.at(-1);
+    const range = value?.match(/^(\d{4}-\d{2}-\d{2})\.\.(\d{4}-\d{2}-\d{2})$/);
+    return range ? { start: range[1], finish: range[2] } : null;
+});
+const allStatusesSelected = computed(() =>
+    statusFilterOptions.every(([, value]) => selectedStatusValues.value.includes(value)),
+);
+function setQueryFieldValues(field: TaskQueryField, values: readonly string[]) {
+    const next = replaceTaskQueryField(store.search, field, values);
+    if (next !== null) store.search = next;
+}
+function toggleQueryFieldValue(field: TaskQueryField, value: string) {
+    const values = selectedQueryValues(field).value;
+    setQueryFieldValues(field, values.includes(value) ? values.filter((current) => current !== value) : [...values, value]);
+}
+function setQueryPeriodBoundary(boundary: "start" | "finish", value: string | null) {
+    if (!value) {
+        setQueryFieldValues("data", []);
+        return;
+    }
+    const current = selectedPeriod.value;
+    const start = boundary === "start" ? value : current?.start ?? value;
+    const finish = boundary === "finish" ? value : current?.finish ?? value;
+    setQueryFieldValues("data", [`${start}..${finish}`]);
+}
 const activeFilterFieldCount = computed(
     () =>
-        Number(!allStatusesSelected.value) +
-        Number(store.assigneeFilters.length > 0) +
-        Number(Boolean(store.periodStart || store.periodEnd)) +
+        Number(selectedStatusValues.value.length > 0) +
+        Number(selectedAssigneeValues.value.length > 0) +
+        Number(Boolean(selectedPeriod.value)) +
         Number(Boolean(store.relationshipFocusTaskId)),
 );
 const filterExceptionCount = computed(() => store.filterExceptions.size);
 const hasActiveTaskFilters = computed(
     () => Boolean(store.search) || activeFilterFieldCount.value > 0,
 );
-const unblockedStatusesSelected = computed(
-    () =>
-        unblockedTaskStatuses.filter((status) =>
-            store.statusFilters.includes(status),
-        ).length,
+const unblockedStatusesSelected = computed(() =>
+    ["aberta", "em-andamento", "agendada", "atrasada"].filter((status) => selectedStatusValues.value.includes(status)).length,
 );
 const unblockedStatusesChecked = computed(
-    () => unblockedStatusesSelected.value === unblockedTaskStatuses.length,
+    () => unblockedStatusesSelected.value === 4,
 );
 const unblockedStatusesIndeterminate = computed(
     () =>
@@ -1281,6 +1495,12 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
     )
         filters.value = false;
     if (
+        viewsMenu.value &&
+        !viewsButton.value?.contains(target) &&
+        !viewsMenuElement.value?.contains(target)
+    )
+        viewsMenu.value = false;
+    if (
         taskContextMenu.value &&
         !taskContextMenuElement.value?.contains(target)
     )
@@ -1575,6 +1795,7 @@ function focusTaskSearchFromShortcut(event: KeyboardEvent) {
         event.altKey ||
         event.metaKey ||
         event.shiftKey ||
+        event.isComposing ||
         isEditableTarget
     )
         return;
@@ -3312,7 +3533,8 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                     >
                 </div>
                 <div class="commands">
-                    <div class="search-control">
+                    <div class="query-search-composite">
+                        <div class="search-control">
                         <label
                             class="search"
                             :class="{ 'search-invalid': store.searchError }"
@@ -3321,16 +3543,91 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 ref="searchInput"
                                 v-model="store.search"
                                 placeholder="Buscar tarefa…"
+                                aria-label="Buscar tarefas"
+                                list="task-query-suggestions"
                                 aria-keyshortcuts="/"
                                 :aria-invalid="Boolean(store.searchError)"
-                                :aria-describedby="store.searchError ? 'task-search-error' : undefined"
+                                :aria-describedby="store.searchError ? 'task-search-error' : store.search ? 'task-search-result' : undefined"
                                 title="Use &, |, !, (), * e \\ para buscas avançadas"
                                 @focus="selectSearchText"
                             /><kbd>/</kbd></label
                         >
+                        <datalist id="task-query-suggestions"><option v-for="suggestion in querySuggestions" :key="suggestion" :value="suggestion" /></datalist>
                         <small v-if="store.searchError" id="task-search-error" class="search-query-error" role="alert">
                             {{ store.searchError }} A busca anterior continua aplicada.
                         </small>
+                        <small v-else-if="store.search" id="task-search-result" class="search-query-error search-query-result" role="status">
+                            {{ store.queryResultCount }} {{ store.queryResultCount === 1 ? "tarefa encontrada" : "tarefas encontradas" }}
+                            <template v-if="store.queryWarnings.length"> · {{ store.queryWarnings.join(" ") }}</template>
+                        </small>
+                        </div>
+                        <div class="query-assistance">
+                        <button type="button" class="soft-btn query-help-trigger" aria-label="Ajuda da sintaxe de busca" title="Ajuda da sintaxe de busca" :aria-expanded="queryHelpPanel" aria-haspopup="dialog" @click="queryHelpPanel = !queryHelpPanel">?</button>
+                        <div v-if="queryHelpPanel" class="hierarchy-menu query-help" role="dialog" aria-label="Ajuda da consulta">
+                            <header><b>Sintaxe da busca</b><small>Combine palavras livres e critérios no mesmo campo.</small></header>
+                            <section aria-labelledby="query-help-fields"><b id="query-help-fields">Campos</b><dl><dt><code>status:</code></dt><dd>aberta, em-andamento, agendada, atrasada, bloqueada, concluida</dd><dt><code>responsavel:</code></dt><dd>eu, sem, outros ou um nome entre aspas</dd><dt><code>data:</code></dt><dd>hoje, amanha, proximos-7-dias, AAAA-MM-DD ou início..fim</dd><dt><code>prioridade:</code></dt><dd>alta, media ou baixa</dd><dt><code>secao:</code></dt><dd>sem ou um nome entre aspas</dd></dl></section>
+                            <section aria-labelledby="query-help-operators"><b id="query-help-operators">Operadores</b><p><code>&amp;</code> e · <code>|</code> ou · <code>!</code> não · <code>()</code> agrupa · <code>*</code> curinga</p></section>
+                            <section aria-labelledby="query-help-examples"><b id="query-help-examples">Exemplos — toque para usar</b><button type="button" @click="useQueryExample('status:aberta & responsavel:eu')"><code>status:aberta &amp; responsavel:eu</code></button><button type="button" @click="useQueryExample('(status:aberta | status:atrasada) & responsavel:outros')"><code>(status:aberta | status:atrasada) &amp; responsavel:outros</code></button><button type="button" @click="useQueryExample('data:proximos-7-dias & !status:concluida')"><code>data:proximos-7-dias &amp; !status:concluida</code></button></section>
+                        </div>
+                        </div>
+                        <div class="filter-control">
+                            <button
+                                ref="filterButton"
+                                class="soft-btn filter-trigger"
+                                :aria-expanded="filters"
+                                aria-haspopup="true"
+                                aria-label="Filtros"
+                                title="Filtros"
+                                @click="filters = !filters"
+                            >
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 5.5h17l-6.7 7.3v4.8l-3.6 1.9v-6.7L3.5 5.5Z" /></svg><span v-if="activeFilterFieldCount" class="count">{{ activeFilterFieldCount }}</span>
+                            </button>
+                            <button
+                                class="soft-btn clear-filter-trigger"
+                                :disabled="!hasActiveTaskFilters"
+                                aria-keyshortcuts="Control+Shift+L"
+                                aria-label="Limpar filtros e busca"
+                                data-tooltip="Limpar filtros e busca (Ctrl + Shift + L)"
+                                @click="clearTaskFilters"
+                            >
+                                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 16 7-7 4 4-7 7H4v-4Z" /><path d="m13 7 1.5-1.5a2.1 2.1 0 0 1 3 3L16 10" /><path d="m3.5 20.5 5-5M6.5 22l5-5" /></svg>
+                            </button>
+                        </div>
+                    </div>
+                    <div class="saved-views-control">
+                        <button ref="viewsButton" type="button" class="soft-btn views-trigger" aria-label="Abrir views" title="Views" :aria-expanded="viewsMenu" aria-haspopup="dialog" @click="viewsMenu = !viewsMenu">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="15.5" rx="2" /><path d="M8 4v15.5M11 8h5.5M11 12h5.5M11 16h3" /></svg>
+                        </button>
+                        <div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" @keydown.esc="viewsMenu = false; viewsButton?.focus()">
+                            <header><b>Views</b><small>Configurações privadas deste projeto.</small></header>
+                            <div class="saved-views-body">
+                                <div class="saved-views-list" role="list">
+                                    <button v-if="!savedViews.length && !loadingViews" type="button" disabled>Nenhuma view salva</button>
+                                    <button v-for="view in savedViews" :key="view.id" type="button" :class="{ active: view.id === activeSavedViewId }" @click="applySavedView(view); viewsMenu = false">{{ view.name }}</button>
+                                </div>
+                                <footer>
+                                    <button type="button" class="soft-btn" @click="openViewDialog('create'); viewsMenu = false">Salvar como nova</button>
+                                    <button type="button" class="soft-btn" @click="chooseViewImport">Importar</button>
+                                    <button type="button" class="soft-btn" :disabled="!activeSavedView" @click="exportSavedView">Exportar</button>
+                                    <template v-if="activeSavedView"><button type="button" class="soft-btn" @click="overwriteSavedView">Salvar alterações</button><button type="button" class="soft-btn" @click="openViewDialog('duplicate'); viewsMenu = false">Duplicar</button><button type="button" class="soft-btn" @click="openViewDialog('rename'); viewsMenu = false">Renomear</button><button type="button" class="danger-btn" @click="deleteSavedView">Excluir</button></template>
+                                </footer>
+                            </div>
+                        </div>
+                        <input ref="viewImportInput" class="sr-only" type="file" accept="application/json,.json" @change="importSavedView" />
+                    </div>
+                    <div class="view-control" aria-label="Ordenação">
+                        <label class="sr-only" for="task-sort">Ordenar tarefas</label>
+                        <select id="task-sort" v-model="store.sortBy">
+                            <option value="manual">Ordem manual</option><option value="title">Título</option><option value="start">Data inicial</option><option value="finish">Data final</option><option value="status">Status</option><option value="priority">Prioridade</option>
+                        </select>
+                        <button type="button" class="soft-btn" :disabled="store.sortBy === 'manual'" :aria-label="store.sortDirection === 'asc' ? 'Ordem crescente' : 'Ordem decrescente'" @click="store.sortDirection = store.sortDirection === 'asc' ? 'desc' : 'asc'">{{ store.sortDirection === "asc" ? "↑" : "↓" }}</button>
+                        <label class="sr-only" for="task-subsort">Subordenação</label><select id="task-subsort" v-model="store.subsortBy"><option value="manual">Sem subordenação</option><option value="title">Subordem: título</option><option value="start">Subordem: início</option><option value="finish">Subordem: fim</option><option value="status">Subordem: status</option><option value="priority">Subordem: prioridade</option></select>
+                    </div>
+                    <div class="view-control" aria-label="Agrupamento">
+                        <label class="sr-only" for="task-group">Agrupar tarefas</label>
+                        <select id="task-group" v-model="store.groupBy"><option value="none">Sem agrupamento</option><option value="status">Agrupar por status</option><option value="assignee">Agrupar por responsável</option><option value="priority">Agrupar por prioridade</option></select>
+                        <label class="sr-only" for="task-subgroup">Subagrupar tarefas</label>
+                        <select id="task-subgroup" v-model="store.subgroupBy"><option value="none">Sem subgrupo</option><option value="status">Subgrupo: status</option><option value="assignee">Subgrupo: responsável</option><option value="priority">Subgrupo: prioridade</option></select>
                     </div>
                     <div v-if="activeView === 'gantt'" class="segmented">
                         <button
@@ -3382,39 +3679,6 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 <span>Expandir nós intermediários</span><kbd>Ctrl + Shift + J</kbd>
                             </button>
                         </div>
-                    </div>
-                    <div class="filter-control">
-                        <button
-                            ref="filterButton"
-                            class="soft-btn filter-trigger"
-                            :aria-expanded="filters"
-                            aria-haspopup="true"
-                            aria-label="Filtros"
-                            title="Filtros"
-                            @click="filters = !filters"
-                        >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path
-                                    d="M3.5 5.5h17l-6.7 7.3v4.8l-3.6 1.9v-6.7L3.5 5.5Z"
-                                /></svg
-                            ><span v-if="activeFilterFieldCount" class="count">{{
-                                activeFilterFieldCount
-                            }}</span>
-                        </button>
-                        <button
-                            class="soft-btn clear-filter-trigger"
-                            :disabled="!hasActiveTaskFilters"
-                            aria-keyshortcuts="Control+Shift+L"
-                            aria-label="Limpar filtros e busca"
-                            data-tooltip="Limpar filtros e busca (Ctrl + Shift + L)"
-                            @click="clearTaskFilters"
-                        >
-                            <svg viewBox="0 0 24 24" aria-hidden="true">
-                                <path d="m4 16 7-7 4 4-7 7H4v-4Z" />
-                                <path d="m13 7 1.5-1.5a2.1 2.1 0 0 1 3 3L16 10" />
-                                <path d="m3.5 20.5 5-5M6.5 22l5-5" />
-                            </svg>
-                        </button>
                     </div>
                     <div class="creation-control">
                         <button ref="creationTrigger" class="primary create-item-trigger" :disabled="!canMutateProject" :aria-expanded="creationMenu" aria-haspopup="menu" aria-label="Criar item" title="Criar tarefa ou seção" @click="creationMenu = !creationMenu">+</button>
@@ -3480,7 +3744,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                             <em>tarefas</em></b
                         >
                     </div>
-                    <button @click="store.setStatusFilters(['blocked'])">
+                    <button @click="setQueryFieldValues('status', ['bloqueada'])">
                         Revisar →
                     </button>
                 </article>
@@ -3500,7 +3764,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                 <header>
                     <b>Filtros</b
                     ><small>Combine critérios para restringir a lista.</small>
-                    ><button
+                    <button
                         v-if="filterExceptionCount"
                         type="button"
                         class="clear-filter-exceptions"
@@ -3518,13 +3782,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         ><input
                             type="checkbox"
                             :checked="allStatusesSelected"
-                            @change="
-                                store.setStatusFilters(
-                                    allStatusesSelected
-                                        ? []
-                                        : workspaceTaskStatuses,
-                                )
-                            "
+                            @change="setQueryFieldValues('status', allStatusesSelected ? [] : statusFilterOptions.map(([, value]) => value))"
                         /><span>Todos</span></label
                     >
                     <section
@@ -3539,41 +3797,31 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 type="checkbox"
                                 :checked="unblockedStatusesChecked"
                                 :indeterminate="unblockedStatusesIndeterminate"
-                                @change="store.toggleUnblockedStatusFilters()"
+                                @change="setQueryFieldValues('status', unblockedStatusesChecked ? selectedStatusValues.filter((value) => !['aberta', 'em-andamento', 'agendada', 'atrasada'].includes(value)) : [...new Set([...selectedStatusValues, 'aberta', 'em-andamento', 'agendada', 'atrasada'])])"
                             /><span>Desbloqueadas</span></label
                         >
                         <div class="filter-status-children">
                             <label
-                                v-for="f in [
-                                    ['opened', 'Abertas'],
-                                    ['in_progress', 'Em andamento'],
-                                    ['scheduled', 'Agendadas'],
-                                    ['late', 'Atrasadas'],
-                                ] as const"
+                                v-for="f in statusFilterOptions.slice(0, 4)"
                                 :key="f[0]"
                                 class="filter-status-option"
                                 ><input
                                     type="checkbox"
-                                    :checked="
-                                        store.statusFilters.includes(f[0])
-                                    "
-                                    @change="store.toggleStatusFilter(f[0])"
-                                /><span>{{ f[1] }}</span></label
+                                    :checked="selectedStatusValues.includes(f[1])"
+                                    @change="toggleQueryFieldValue('status', f[1])"
+                                /><span>{{ f[2] }}</span></label
                             >
                         </div>
                     </section>
                     <label
-                        v-for="f in [
-                            ['blocked', 'Bloqueadas'],
-                            ['completed', 'Concluídas'],
-                        ] as const"
+                        v-for="f in statusFilterOptions.slice(4)"
                         :key="f[0]"
                         class="filter-status-option"
                         ><input
                             type="checkbox"
-                            :checked="store.statusFilters.includes(f[0])"
-                            @change="store.toggleStatusFilter(f[0])"
-                        /><span>{{ f[1] }}</span></label
+                            :checked="selectedStatusValues.includes(f[1])"
+                            @change="toggleQueryFieldValue('status', f[1])"
+                        /><span>{{ f[2] }}</span></label
                     >
                 </section>
                 <section
@@ -3593,8 +3841,8 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         class="filter-status-option"
                         ><input
                             type="checkbox"
-                            :checked="store.assigneeFilters.includes(id)"
-                            @change="store.toggleAssigneeFilter(id)"
+                            :checked="selectedAssigneeValues.includes(id === '__unassigned__' ? 'sem' : name.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR'))"
+                            @change="toggleQueryFieldValue('responsavel', id === '__unassigned__' ? 'sem' : name)"
                         /><span>{{ name }}</span></label
                     >
                 </section>
@@ -3608,12 +3856,14 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         intervalo.</small
                     ><label
                         >De<DateInput
-                            v-model="store.periodStart"
-                            aria-label="Período inicial" /></label
+                            :model-value="selectedPeriod?.start ?? null"
+                            aria-label="Período inicial"
+                            @update:model-value="setQueryPeriodBoundary('start', $event)" /></label
                         ><label
                             >Até<DateInput
-                                v-model="store.periodEnd"
-                                aria-label="Período final"
+                            :model-value="selectedPeriod?.finish ?? null"
+                            aria-label="Período final"
+                            @update:model-value="setQueryPeriodBoundary('finish', $event)"
                     /></label>
                 </section>
             </div>
@@ -5601,7 +5851,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                 @click="undoLastDependency"
             >
                 Desfazer
-            </button>
+            </button><button type="button" class="toast-close" aria-label="Fechar notificação" @click="toast = ''">×</button>
         </div>
     </div>
     <Teleport to="body">
@@ -5617,6 +5867,20 @@ function showTopBarNotice(message: string, kind: ToastKind) {
             <small>{{ structureDrag.drop?.message ?? 'Escolha uma posição na estrutura' }}</small>
         </div>
     </Teleport>
+    <div v-if="viewDialog" class="relation-modal-scrim" @click.self="viewDialog = null">
+        <form v-default-form class="relation-modal" role="dialog" aria-modal="true" aria-labelledby="task-view-dialog-title" @submit.prevent="saveViewDialog">
+            <header><div><b id="task-view-dialog-title">{{ viewDialog.mode === "create" ? "Salvar nova view" : viewDialog.mode === "duplicate" ? "Duplicar view" : "Renomear view" }}</b><small>Views são privadas neste projeto e só são alteradas quando você salva.</small></div></header>
+            <div class="relation-modal-body"><label>Nome da view<input v-model="viewDialog.name" class="view-name-input" maxlength="120" required autofocus /></label></div>
+            <footer><button type="button" class="soft-btn" :disabled="viewBusy" @click="viewDialog = null">Cancelar</button><DefaultSubmitButton type="submit" :disabled="viewBusy || !viewDialog.name.trim()">{{ viewBusy ? "Salvando…" : "Salvar" }}</DefaultSubmitButton></footer>
+        </form>
+    </div>
+    <div v-if="viewImportDialog" class="relation-modal-scrim" @click.self="viewImportDialog = null">
+        <section class="relation-modal" role="alertdialog" aria-modal="true" aria-labelledby="view-import-conflict-title">
+            <header><div><b id="view-import-conflict-title">Nome de view já existente</b><small>A importação não altera tarefas nem pessoas deste projeto.</small></div></header>
+            <div class="relation-modal-body"><p>A view “{{ viewImportDialog.file.name }}” já existe neste projeto.</p><small>A consulta importada pode usar referências que não existam aqui; isto não bloqueia a importação.</small></div>
+            <footer><button type="button" class="soft-btn" @click="viewImportDialog = null">Cancelar</button><button type="button" class="soft-btn" @click="resolveViewImport('create')">Copiar</button><DefaultSubmitButton type="button" @click="resolveViewImport('overwrite')">Sobrescrever</DefaultSubmitButton></footer>
+        </section>
+    </div>
     <AccountPanel
         :open="account"
         :user-id="auth.user!.id"

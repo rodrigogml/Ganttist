@@ -45,16 +45,15 @@ describe('workspace visibility', () => {
     }
     store.hiddenGroups = new Set(['group'])
     store.search = 'sem resultado'
-    store.setStatusFilters(['completed'])
+    store.search = 'status:concluida'
 
     store.revealTask('task')
 
     expect(store.hiddenGroups.has('group')).toBe(false)
     expect(store.search).toBe('')
-    expect(store.statusFilters).toEqual(['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed'])
   })
 
-  it('combines multiple status choices and toggles the unlocked virtual parent', () => {
+  it('combines multiple status predicates in the single task query', () => {
     const store = useWorkspaceStore()
     const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, critical: false }
     store.workspace = {
@@ -70,14 +69,13 @@ describe('workspace visibility', () => {
       dependencies: [], stats: { progress: 0, completed: 1, total: 6, critical: 0, opened: 1, in_progress: 1, blocked: 1, scheduled: 1, late: 1, without_dates: 5 },
     }
 
-    store.setStatusFilters([])
-    store.toggleUnblockedStatusFilters()
+    store.search = 'status:aberta | status:em-andamento | status:agendada | status:atrasada'
     expect(store.tasks.map(task => task.id)).toEqual(['opened', 'in-progress', 'scheduled', 'late'])
 
-    store.toggleStatusFilter('blocked')
+    store.search = 'status:aberta | status:em-andamento | status:agendada | status:atrasada | status:bloqueada'
     expect(store.tasks.map(task => task.id)).toEqual(['opened', 'in-progress', 'scheduled', 'late', 'blocked'])
 
-    store.toggleStatusFilter('opened')
+    store.search = 'status:em-andamento | status:agendada | status:atrasada | status:bloqueada'
     expect(store.tasks.map(task => task.id)).toEqual(['in-progress', 'scheduled', 'late', 'blocked'])
   })
 
@@ -127,22 +125,14 @@ describe('workspace visibility', () => {
     expect(store.tasks.map(task => task.id)).toEqual(['root', 'planning', 'match'])
   })
 
-  it('clears the task search and every task filter', () => {
+  it('clears the single task query and its filter projection', () => {
     const store = useWorkspaceStore()
 
-    store.search = 'protótipo'
-    store.setStatusFilters(['blocked'])
-    store.toggleAssigneeFilter('person-1')
-    store.periodStart = '2026-08-01'
-    store.periodEnd = '2026-08-31'
+    store.search = 'protótipo & status:bloqueada & responsavel:sem & data:2026-08-01..2026-08-31'
 
     store.clearTaskFilters()
 
     expect(store.search).toBe('')
-    expect(store.statusFilters).toEqual(['opened', 'in_progress', 'scheduled', 'late', 'blocked', 'completed'])
-    expect(store.assigneeFilters).toEqual([])
-    expect(store.periodStart).toBe('')
-    expect(store.periodEnd).toBe('')
   })
 
   it('applies all hierarchy display modes without treating task-only groups as intermediate', () => {
@@ -226,6 +216,101 @@ describe('workspace visibility', () => {
 
     expect(store.searchError).toBe('Parêntese de fechamento ausente.')
     expect(store.tasks.map(task => task.id)).toEqual(['kitchen'])
+  })
+
+  it('evaluates structured predicates in the shared task projection and reports unknown references', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 'user-1', name: 'Pessoa atual', email: 'atual@example.test' }
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 1, parent_id: 'section', start: '2026-09-22', finish: '2026-09-24', progress: 0, critical: false }
+    store.workspace = {
+      project: { id: 'p', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-09-22T00:00:00Z' },
+      people: [
+        { id: 'me', name: 'Pessoa atual', linkedUserId: 'user-1' },
+        { id: 'other', name: 'Outra pessoa', linkedUserId: 'user-2' },
+      ],
+      tasks: [
+        { id: 'section', title: 'Entrega', kind: 'section', level: 0, start: null, finish: null, progress: 0, status: 'opened', critical: false },
+        { ...base, id: 'mine', title: 'Preparar entrega', status: 'opened', assignee_id: 'me', assignee: 'Pessoa atual', priority: 4 },
+        { ...base, id: 'other', title: 'Revisar entrega', status: 'late', assignee_id: 'other', assignee: 'Outra pessoa', priority: 3 },
+        { ...base, id: 'unassigned', title: 'Publicar entrega', status: 'completed', assignee_id: null, assignee: null, priority: 1 },
+      ],
+      dependencies: [], stats: { progress: 0, completed: 1, total: 3, critical: 0, opened: 1, late: 1, blocked: 0, scheduled: 0, without_dates: 0 },
+    }
+
+    store.search = '(status:aberta | status:atrasada) & responsavel:eu & prioridade:alta & secao:entrega & data:2026-09-22..2026-09-24'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['section', 'mine'])
+    expect(store.queryResultCount).toBe(1)
+    expect(store.queryWarnings).toEqual([])
+
+    store.search = 'responsavel:"Pessoa inexistente" & secao:"Sem seção conhecida"'
+
+    expect(store.queryResultCount).toBe(0)
+    expect(store.queryWarnings).toEqual([
+      'Responsável “Pessoa inexistente” não encontrado neste projeto.',
+      'Seção “Sem seção conhecida” não encontrada neste projeto.',
+    ])
+  })
+
+  it('updates the unified projection and count for two thousand tasks within one second', () => {
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 0, start: '2026-09-22', finish: '2026-09-22', progress: 0, critical: false }
+    store.workspace = {
+      project: { id: 'performance', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-09-22T00:00:00Z' },
+      tasks: Array.from({ length: 2_000 }, (_, index) => ({ ...base, id: `task-${index}`, title: `Tarefa ${index}`, status: index % 2 ? 'opened' as const : 'completed' as const, priority: index % 3 === 0 ? 4 : 1 })),
+      dependencies: [], stats: { progress: 0, completed: 1_000, total: 2_000, critical: 0, opened: 1_000, blocked: 0, scheduled: 0, late: 0, without_dates: 0 },
+    }
+    const startedAt = performance.now()
+    store.search = 'status:aberta & prioridade:alta'
+    const result = store.queryResultCount
+    const visible = store.tasks.length
+
+    expect(result).toBe(333)
+    expect(visible).toBe(333)
+    expect(performance.now() - startedAt).toBeLessThan(1_000)
+  })
+
+  it('sorts siblings without separating tasks from their hierarchy', () => {
+    const store = useWorkspaceStore()
+    const base = { start: null, finish: null, progress: 0, status: 'opened' as const, critical: false }
+    store.workspace = { project: { id: 'sort', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-09-22T00:00:00Z' }, tasks: [
+      { ...base, id: 'section', title: 'Seção', kind: 'section' as const, level: 0 },
+      { ...base, id: 'z', title: 'Zeta', kind: 'task' as const, level: 1, parent_id: 'section' },
+      { ...base, id: 'a', title: 'Alfa', kind: 'task' as const, level: 1, parent_id: 'section' },
+      { ...base, id: 'root', title: 'Raiz', kind: 'task' as const, level: 0 },
+    ], dependencies: [], stats: { progress: 0, completed: 0, total: 3, critical: 0 } }
+    store.sortBy = 'title'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['root', 'section', 'a', 'z'])
+    store.sortDirection = 'desc'
+    expect(store.tasks.map(task => task.id)).toEqual(['section', 'z', 'a', 'root'])
+  })
+
+  it('groups sibling tasks before applying the configured sort', () => {
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, critical: false }
+    store.workspace = { project: { id: 'group', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-09-22T00:00:00Z' }, tasks: [
+      { ...base, id: 'late', title: 'Alfa', status: 'late' }, { ...base, id: 'opened-z', title: 'Zeta', status: 'opened' }, { ...base, id: 'opened-a', title: 'Beta', status: 'opened' },
+    ], dependencies: [], stats: { progress: 0, completed: 0, total: 3, critical: 0 } }
+    store.groupBy = 'status'
+    store.sortBy = 'title'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['late', 'opened-a', 'opened-z'])
+  })
+
+  it('keeps the manual sibling order inside each group when no sort is selected', () => {
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, critical: false }
+    store.workspace = { project: { id: 'manual-group', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-09-22T00:00:00Z' }, tasks: [
+      { ...base, id: 'opened-first', title: 'Primeira', status: 'opened', priority: 1 },
+      { ...base, id: 'late', title: 'Atrasada', status: 'late', priority: 4 },
+      { ...base, id: 'opened-second', title: 'Segunda', status: 'opened', priority: 4 },
+    ], dependencies: [], stats: { progress: 0, completed: 0, total: 3, critical: 0 } }
+    store.groupBy = 'status'
+    store.sortBy = 'manual'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['late', 'opened-first', 'opened-second'])
   })
 
   it('reveals a filtered dependency endpoint with its ancestors until filters change', () => {

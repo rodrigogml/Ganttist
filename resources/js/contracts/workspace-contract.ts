@@ -53,6 +53,15 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
     for (const field of ['from_kind', 'to_kind']) if (item[field] !== undefined && !['task', 'section'].includes(item[field] as string)) throw new Error('Contrato de workspace inválido: dependency endpoint kind.')
     if (item.constraint_state !== undefined && !['active', 'violated'].includes(item.constraint_state as string)) throw new Error('Contrato de workspace inválido: dependency state.')
   }
+  if (data.people !== undefined) {
+    if (!Array.isArray(data.people)) throw new Error('Contrato de workspace inválido: people.')
+    for (const person of data.people) {
+      const item = record(person, 'person')
+      for (const field of ['id', 'name']) string(item[field], `person.${field}`)
+      if (item.email !== undefined && item.email !== null && typeof item.email !== 'string') throw new Error('Contrato de workspace inválido: person.email.')
+      if (item.linkedUserId !== undefined && item.linkedUserId !== null && typeof item.linkedUserId !== 'string') throw new Error('Contrato de workspace inválido: person.linkedUserId.')
+    }
+  }
 
   return data as unknown as Workspace
 }

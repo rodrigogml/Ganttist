@@ -337,6 +337,145 @@ test('reflows planning controls from desktop to tablet and phone', async ({ brow
   await context.close()
 })
 
+test('applies a private view, exposes query help and preserves it when moving to Gantt', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  const views = [{ id: 'view-mine', name: 'Minhas Tarefas', query: 'status:aberta', visualState: { version: 1, gantt: { zoom: 'week' }, groupBy: 'status' }, formatVersion: 1 }]
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    if (pathname.endsWith('/views')) return route.fulfill({ json: { data: views } })
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/tasks`)
+  await page.locator('body').press('/')
+  await expect(page.getByLabel('Buscar tarefas')).toBeFocused()
+  await page.getByRole('button', { name: 'Abrir views' }).focus()
+  await page.locator('body').evaluate(element => element.dispatchEvent(new KeyboardEvent('keydown', { key: '/', bubbles: true, isComposing: true })))
+  await expect(page.getByRole('button', { name: 'Abrir views' })).toBeFocused()
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Minhas Tarefas', exact: true }).click()
+  await expect(page.getByLabel('Buscar tarefas')).toHaveValue('status:aberta')
+  await expect(page.getByLabel('Agrupar tarefas', { exact: true })).toHaveValue('status')
+  await page.getByRole('button', { name: 'Ajuda da sintaxe de busca' }).click()
+  const help = page.getByRole('dialog', { name: 'Ajuda da consulta' })
+  await expect(help).toBeVisible()
+  await expect(help).toContainText('Campos')
+  await expect(help).toContainText('responsavel:')
+  await expect(help).toContainText('Operadores')
+  await page.getByRole('tab', { name: 'Gantt' }).click()
+  await expect(page.getByLabel('Buscar tarefas')).toHaveValue('status:aberta')
+  await context.close()
+})
+
+test('creates a view with the default keyboard action and cancels an import collision safely', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block' })
+  const page = await context.newPage()
+  const views = [{ id: 'view-mine', name: 'Minhas Tarefas', query: 'status:aberta', visualState: { version: 1 }, formatVersion: 1 }]
+  const created: Array<Record<string, unknown>> = []
+  const imported: Array<Record<string, unknown>> = []
+  const overwritten: Array<Record<string, unknown>> = []
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    if (pathname.endsWith('/views') && route.request().method() === 'GET') return route.fulfill({ json: { data: views } })
+    if (pathname.endsWith('/views') && route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      if (created.some(view => view.name === body.name)) return route.fulfill({ status: 409, json: { message: 'Já existe uma view com este nome.' } })
+      created.push(body)
+      return route.fulfill({ status: 201, json: { data: { id: 'view-new', ...body } } })
+    }
+    if (pathname.endsWith('/views/import') && route.request().method() === 'POST') {
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      imported.push(body)
+      return route.fulfill({ status: 201, json: { data: { id: 'view-copy', name: 'Minhas Tarefas (cópia)', query: 'status:aberta', visualState: { version: 1 }, formatVersion: 1 } } })
+    }
+    if (/\/views\/view-(mine|copy)$/.test(pathname) && route.request().method() === 'PUT') {
+      const body = route.request().postDataJSON() as Record<string, unknown>
+      overwritten.push(body)
+      return route.fulfill({ json: { data: { id: pathname.endsWith('view-copy') ? 'view-copy' : 'view-mine', ...body } } })
+    }
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/tasks`)
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Salvar como nova' }).click()
+  const dialog = page.getByRole('dialog', { name: 'Salvar nova view' })
+  await expect(dialog.getByLabel('Nome da view')).toHaveCSS('height', '40px')
+  await dialog.getByLabel('Nome da view').fill('Próximas entregas')
+  await dialog.getByLabel('Nome da view').press('Control+Enter')
+  await expect.poll(() => created.length).toBe(1)
+  expect(created[0]).toMatchObject({ name: 'Próximas entregas', query: '', formatVersion: 1 })
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Salvar como nova' }).click()
+  await page.getByRole('dialog', { name: 'Salvar nova view' }).getByLabel('Nome da view').fill('Próximas entregas')
+  await page.getByRole('dialog', { name: 'Salvar nova view' }).getByLabel('Nome da view').press('Control+Enter')
+  await expect(page.getByRole('alert')).toContainText('Já existe uma view com este nome.')
+  await page.getByRole('button', { name: 'Fechar notificação' }).click()
+  await expect(page.getByRole('alert')).toHaveCount(0)
+  await page.getByRole('dialog', { name: 'Salvar nova view' }).getByRole('button', { name: 'Cancelar' }).click()
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  await page.locator('input[type=file]').setInputFiles({ name: 'view.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(views[0])) })
+  const conflict = page.getByRole('alertdialog', { name: 'Nome de view já existente' })
+  await expect(conflict).toBeVisible()
+  await conflict.getByRole('button', { name: 'Cancelar' }).click()
+  await expect(conflict).toHaveCount(0)
+  await page.locator('input[type=file]').setInputFiles({ name: 'view.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(views[0])) })
+  await page.getByRole('alertdialog', { name: 'Nome de view já existente' }).getByRole('button', { name: 'Copiar' }).click()
+  await expect.poll(() => imported.length).toBe(1)
+  expect(imported[0]).toMatchObject({ conflictStrategy: 'create', file: { name: 'Minhas Tarefas' } })
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Minhas Tarefas', exact: true }).click()
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  const download = page.waitForEvent('download')
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Exportar' }).click()
+  const exported = await download
+  expect(exported.suggestedFilename()).toMatch(/\.ganttist-view\.json$/)
+  page.once('dialog', prompt => prompt.accept())
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Salvar alterações' }).click()
+  await expect.poll(() => overwritten.length).toBe(1)
+  await context.setOffline(true)
+  page.once('dialog', prompt => prompt.accept())
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Salvar alterações' }).click()
+  await expect(page.getByRole('alert')).toContainText('Você está offline. Alterações exigem conexão com o servidor.')
+  await context.setOffline(false)
+  await page.locator('input[type=file]').setInputFiles({ name: 'inválida.json', mimeType: 'application/json', buffer: Buffer.from('{') })
+  await expect(page.getByRole('alert')).toContainText('não é uma view compatível')
+  await context.close()
+})
+
+test('keeps query, funnel and view controls usable by touch', async ({ browser }) => {
+  const context = await browser.newContext({ serviceWorkers: 'block', hasTouch: true, viewport: { width: 390, height: 844 } })
+  const page = await context.newPage()
+  await page.route('**/api/v1/**', async route => {
+    const pathname = new URL(route.request().url()).pathname
+    if (pathname === '/api/v1/me') return route.fulfill({ json: { user } })
+    if (pathname.endsWith('/workspace')) return route.fulfill({ json: { data: workspace } })
+    if (pathname.endsWith('/context')) return route.fulfill({ json: { data: { collaborators: [] } } })
+    if (pathname.endsWith('/views')) return route.fulfill({ json: { data: [{ id: 'view-mine', name: 'Minhas Tarefas', query: 'status:aberta', visualState: { version: 1 }, formatVersion: 1 }] } })
+    return route.fulfill({ status: 404, json: {} })
+  })
+  await page.goto(`/projects/${projectId}/tasks`)
+  await expect(page.getByRole('button', { name: 'Abrir views' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Filtros', exact: true })).toBeVisible()
+  expect(await page.locator('.commands').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await page.getByRole('button', { name: 'Abrir views' }).click()
+  await page.getByRole('dialog', { name: 'Views salvas' }).getByRole('button', { name: 'Minhas Tarefas', exact: true }).tap()
+  await page.getByRole('button', { name: 'Filtros', exact: true }).tap()
+  await expect(page.getByRole('group', { name: 'Filtros de tarefas' })).toBeVisible()
+  await page.getByRole('group', { name: 'Filtros de tarefas' }).getByText('Bloqueadas', { exact: true }).click()
+  await expect(page.getByLabel('Buscar tarefas')).toHaveValue(/status:/)
+  await page.setViewportSize({ width: 768, height: 900 })
+  expect(await page.locator('.commands').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  expect(await page.locator('.commands').evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
+  await context.close()
+})
+
 test('opens a deliberately cached PDF and serves byte ranges without a network', async ({ page, context }) => {
   await waitForControlledPage(page)
   await seedPreparedProject(page, true)
