@@ -2003,16 +2003,27 @@ body.resizing-task-column * {
 .saved-views-control { position: relative; }
 .views-trigger { display: inline-grid; width: 38px; place-items: center; padding: 0; }
 .views-trigger svg { width: 18px; height: 18px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.7; }
-.saved-views-menu { right: 0; left: auto; display: flex; width: min(500px, calc(100vw - 24px)); max-height: min(560px, calc(100dvh - 32px)); flex-direction: column; overflow: hidden; }
-.saved-views-menu header { padding: 10px 12px; border-bottom: 1px solid var(--line, #e6e8ef); }
+.hierarchy-menu.saved-views-menu { right: 0; left: auto; display: flex; width: min(400px, calc(100vw - 24px)); max-height: min(560px, calc(100dvh - 32px)); flex-direction: column; overflow: hidden; }
+.saved-views-menu header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border-bottom: 1px solid var(--line, #e6e8ef); }
 .saved-views-menu header b, .saved-views-menu header small { display: block; }
 .saved-views-menu header small { margin-top: 3px; color: var(--text-muted, #5f6878); font-size: 10px; }
-.saved-views-body { display: grid; min-height: 0; grid-template-columns: minmax(0, 1fr) 158px; flex: 1 1 auto; }
+.saved-views-header-actions { display: flex; gap: 5px; }
+.saved-views-menu .saved-views-icon-action { display: flex; width: 30px; min-height: 30px; height: 30px; align-items: center; justify-content: center; padding: 0; line-height: 0; }
+.saved-views-icon-action svg { display: block; width: 16px; height: 16px; flex: none; margin: 0; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.saved-views-body { display: flex; min-height: 0; flex: 1 1 auto; }
 .saved-views-list { display: flex; min-height: 0; flex-direction: column; overflow: auto; padding: 5px; }
-.saved-views-list button { min-height: 40px; padding: 8px 10px; font-weight: 700; text-align: left; }
-.saved-views-list button.active { background: var(--button-accent-bg, #efedff); color: var(--button-accent-text, #5145b8); }
-.saved-views-menu footer { display: flex; flex-direction: column; gap: 5px; padding: 9px; border-left: 1px solid var(--line, #e6e8ef); }
-.saved-views-menu footer .soft-btn, .saved-views-menu footer .danger-btn { width: 100%; height: 32px; padding: 0 9px; }
+.saved-views-list { width: 100%; }
+.saved-view-row { position: relative; display: flex; min-height: 40px; align-items: stretch; border-radius: 7px; }
+.saved-views-menu .saved-view-apply { width: auto; min-width: 0; min-height: 40px; flex: 1; justify-content: flex-start; border: 0; border-radius: 7px; padding: 8px 10px; background: transparent; color: inherit; font: inherit; font-weight: 700; text-align: left; }
+.saved-view-row.active { background: var(--button-accent-bg, #efedff); color: var(--button-accent-text, #5145b8); }
+.saved-view-apply:hover, .saved-view-apply:focus-visible, .saved-view-actions-trigger:hover, .saved-view-actions-trigger:focus-visible { background: var(--button-accent-surface-hover, #edeaff); outline: none; }
+.saved-views-menu .saved-view-actions-trigger { width: 32px; min-height: 40px; flex: none; justify-content: center; border: 0; border-radius: 7px; padding: 0; background: transparent; color: inherit; cursor: pointer; }
+.saved-view-actions-trigger svg { width: 16px; height: 16px; fill: currentColor; }
+.saved-view-actions-menu { position: fixed; z-index: 140; display: flex; width: 164px; max-height: calc(100dvh - 16px); flex-direction: column; overflow: auto; padding: 5px; border: 1px solid var(--line, #e6e8ef); border-radius: 8px; background: #fff; box-shadow: 0 12px 28px #1d254026; color: var(--text, #252b3a); }
+.saved-views-menu .saved-view-actions-menu button { width: 100%; min-height: 30px; justify-content: flex-start; border: 0; border-radius: 5px; padding: 6px 8px; background: transparent; color: inherit; font: inherit; font-size: 11px; font-weight: 650; text-align: left; }
+.saved-view-actions-menu button:hover, .saved-view-actions-menu button:focus-visible { background: var(--button-accent-surface-hover, #edeaff); outline: none; }
+.saved-view-actions-menu button.danger { color: var(--button-danger-text, #b64e49); }
+.saved-view-actions-menu button.danger:hover, .saved-view-actions-menu button.danger:focus-visible { background: var(--button-danger-background, #fff4f3); }
 
 .hierarchy-trigger {
   display: grid;

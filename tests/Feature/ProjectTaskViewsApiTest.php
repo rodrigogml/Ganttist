@@ -40,6 +40,30 @@ final class ProjectTaskViewsApiTest extends TestCase
         $this->actingAs($user)->postJson("/api/v1/projects/{$project}/views", $this->payload('Aberto'))->assertConflict();
     }
 
+    public function test_initial_views_are_not_recreated_after_being_deleted(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Obra', 'commandId' => 'view-initialization'])->json('data.id');
+
+        $initial = $this->actingAs($user)->getJson("/api/v1/projects/{$project}/views")->assertOk()->json('data');
+        foreach ($initial as $view) {
+            $this->actingAs($user)->deleteJson("/api/v1/projects/{$project}/views/{$view['id']}")->assertNoContent();
+        }
+
+        $this->actingAs($user)->getJson("/api/v1/projects/{$project}/views")->assertOk()->assertJsonCount(0, 'data');
+        $this->assertDatabaseHas('project_task_view_initializations', ['project_id' => $project, 'owner_user_id' => $user->id]);
+    }
+
+    public function test_initialization_keeps_existing_legacy_default_views(): void
+    {
+        $user = User::factory()->create();
+        $project = $this->actingAs($user)->postJson('/api/v1/projects', ['name' => 'Obra', 'commandId' => 'view-legacy-initialization'])->json('data.id');
+        $this->actingAs($user)->postJson("/api/v1/projects/{$project}/views", $this->payload('Minhas Tarefas'))->assertCreated();
+
+        $views = $this->actingAs($user)->getJson("/api/v1/projects/{$project}/views")->assertOk()->assertJsonCount(2, 'data')->json('data');
+        $this->assertSame(['Minhas Tarefas', 'Tarefas Equipe'], array_column($views, 'name'));
+    }
+
     public function test_import_allows_a_copy_or_explicit_overwrite_without_resolving_textual_references(): void
     {
         $user = User::factory()->create();

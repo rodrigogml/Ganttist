@@ -82,14 +82,30 @@ final class ProjectTaskViewController
 
     private function provisionInitialViews(string $projectId, string $userId): void
     {
-        foreach ([
-            ['name' => 'Minhas Tarefas', 'query' => '(status:aberta | status:atrasada) & (responsavel:eu | responsavel:sem)'],
-            ['name' => 'Tarefas Equipe', 'query' => '(status:aberta | status:atrasada) & (responsavel:outros | responsavel:sem)'],
-        ] as $preset) {
-            if (! DB::table('project_task_views')->where('project_id', $projectId)->where('owner_user_id', $userId)->where('name', $preset['name'])->exists()) {
-                $this->insertView($projectId, $userId, [...$preset, 'visualState' => $this->defaultVisualState(), 'formatVersion' => 1]);
+        DB::transaction(function () use ($projectId, $userId): void {
+            $initialized = DB::table('project_task_view_initializations')->insertOrIgnore([
+                'id' => (string) Str::ulid(),
+                'project_id' => $projectId,
+                'owner_user_id' => $userId,
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+            if ($initialized === 0) return;
+
+            foreach ([
+                ['name' => 'Minhas Tarefas', 'query' => '(status:aberta | status:atrasada) & (responsavel:eu | responsavel:sem)'],
+                ['name' => 'Tarefas Equipe', 'query' => '(status:aberta | status:atrasada) & (responsavel:outros | responsavel:sem)'],
+            ] as $preset) {
+                $exists = DB::table('project_task_views')
+                    ->where('project_id', $projectId)
+                    ->where('owner_user_id', $userId)
+                    ->where('name', $preset['name'])
+                    ->exists();
+                if (! $exists) {
+                    $this->insertView($projectId, $userId, [...$preset, 'visualState' => $this->defaultVisualState(), 'formatVersion' => 1]);
+                }
             }
-        }
+        });
     }
 
     private function insertView(string $projectId, string $userId, array $data): object

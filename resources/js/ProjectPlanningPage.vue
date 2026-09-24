@@ -166,13 +166,18 @@ const drawer = ref(false),
     cursorTaskId = ref<string | null>(null),
     selectionAnchorId = ref<string | null>(null);
 let toastTimeout: number | null = null;
+function dismissToast() {
+    if (toastTimeout) window.clearTimeout(toastTimeout);
+    toastTimeout = null;
+    toast.value = "";
+}
 function showToast(message: string, kind: ToastKind = "info") {
     if (toastTimeout) window.clearTimeout(toastTimeout);
     toast.value = message;
     toastKind.value = kind;
     toastTimeout = window.setTimeout(() => {
-        if (toast.value === message) toast.value = "";
-    }, kind === "error" ? 6000 : 4000);
+        if (toast.value === message) dismissToast();
+    }, kind === "error" ? 6000 : kind === "success" ? 3000 : 4000);
 }
 function handleNotification(notification: AppNotification) {
     showToast(notification.message, notification.kind);
@@ -298,10 +303,12 @@ type SavedTaskView = {
 };
 const savedViews = ref<SavedTaskView[]>([]);
 const activeSavedViewId = ref<string | null>(null);
+const viewActionsMenu = ref<{ view: SavedTaskView; top: number; left: number } | null>(null);
 const loadingViews = ref(false);
 const viewDialog = ref<{ mode: "create" | "duplicate" | "rename"; name: string; source: SavedTaskView | null } | null>(null);
 const viewBusy = ref(false);
 const viewImportInput = ref<HTMLInputElement | null>(null);
+const viewNameInput = ref<HTMLInputElement | null>(null);
 type ImportedTaskView = { name: string; query: string; visualState: SavedTaskView["visualState"]; formatVersion: 1 };
 const viewImportDialog = ref<{ file: ImportedTaskView; existing: SavedTaskView | null } | null>(null);
 const querySuggestions = computed(() => [
@@ -338,6 +345,20 @@ async function loadSavedViews() {
     finally { loadingViews.value = false; }
 }
 function useQueryExample(query: string) { store.search = query; queryHelpPanel.value = false; searchInput.value?.focus(); }
+function toggleViewActions(event: MouseEvent, view: SavedTaskView) {
+    if (viewActionsMenu.value?.view.id === view.id) {
+        viewActionsMenu.value = null;
+        return;
+    }
+    const trigger = event.currentTarget as HTMLElement;
+    const bounds = trigger.getBoundingClientRect();
+    const width = 164;
+    viewActionsMenu.value = {
+        view,
+        top: Math.min(bounds.bottom + 4, window.innerHeight - 196),
+        left: Math.max(8, Math.min(bounds.right - width, window.innerWidth - width - 8)),
+    };
+}
 function applySavedView(view: SavedTaskView) {
     store.search = view.query;
     const visibility = view.visualState.columns?.visibility;
@@ -358,8 +379,8 @@ function applySavedView(view: SavedTaskView) {
     else store.expandAllGroups();
     activeSavedViewId.value = view.id;
 }
-async function overwriteSavedView() {
-    const projectId = store.workspace?.project.id, view = activeSavedView.value;
+async function overwriteSavedView(view = activeSavedView.value) {
+    const projectId = store.workspace?.project.id;
     if (!projectId || !view || !confirm(`Sobrescrever a view “${view.name}” com a configuração atual?`)) return;
     try {
         const response = await apiFetch(`/api/v1/projects/${projectId}/views/${view.id}`, { method: "PUT", headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() }, body: JSON.stringify({ name: view.name, query: store.search, visualState: currentViewSnapshot(), formatVersion: 1 }) });
@@ -369,10 +390,12 @@ async function overwriteSavedView() {
         showToast("View atualizada.", "success");
     } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível sobrescrever a view.", "error"); }
 }
-function openViewDialog(mode: "create" | "duplicate" | "rename") {
-    const source = activeSavedView.value;
+async function openViewDialog(mode: "create" | "duplicate" | "rename", selectedView = activeSavedView.value) {
+    const source = selectedView;
     if ((mode === "duplicate" || mode === "rename") && !source) return;
     viewDialog.value = { mode, source, name: mode === "create" ? "" : mode === "duplicate" ? `${source!.name} (cópia)` : source!.name };
+    await nextTick();
+    viewNameInput.value?.focus();
 }
 async function saveViewDialog() {
     const projectId = store.workspace?.project.id, dialog = viewDialog.value;
@@ -392,8 +415,8 @@ async function saveViewDialog() {
     } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível salvar a view.", "error"); }
     finally { viewBusy.value = false; }
 }
-async function deleteSavedView() {
-    const projectId = store.workspace?.project.id, view = activeSavedView.value;
+async function deleteSavedView(view = activeSavedView.value) {
+    const projectId = store.workspace?.project.id;
     if (!projectId || !view || !confirm(`Excluir a view “${view.name}”?`)) return;
     try {
         const response = await apiFetch(`/api/v1/projects/${projectId}/views/${view.id}`, { method: "DELETE", headers: { Accept: "application/json", ...csrfHeaders() } });
@@ -403,8 +426,7 @@ async function deleteSavedView() {
         showToast("View excluída.", "success");
     } catch (error) { showToast(error instanceof Error ? error.message : "Não foi possível excluir a view.", "error"); }
 }
-function exportSavedView() {
-    const view = activeSavedView.value;
+function exportSavedView(view = activeSavedView.value) {
     if (!view) return;
     const portableVisualState = { ...view.visualState, hierarchy: "expanded" as const };
     const file = { name: view.name, query: view.query, visualState: portableVisualState, formatVersion: view.formatVersion };
@@ -455,6 +477,7 @@ const hierarchyButton = ref<HTMLElement | null>(null),
     filterMenu = ref<HTMLElement | null>(null),
     viewsButton = ref<HTMLElement | null>(null),
     viewsMenuElement = ref<HTMLElement | null>(null),
+    viewActionsMenuElement = ref<HTMLElement | null>(null),
     searchInput = ref<HTMLInputElement | null>(null),
     quickAssigneeMenuElement = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
@@ -545,9 +568,10 @@ const statusFilterOptions = [
     ["blocked", "bloqueada", "Bloqueadas"],
     ["completed", "concluida", "Concluídas"],
 ] as const;
-const queryPredicates = computed(() =>
-    store.searchError ? [] : store.queryPredicates,
-);
+const queryPredicates = computed(() => {
+    const query = parseTaskQuery(store.search);
+    return query.valid ? query.predicates : [];
+});
 const assigneeFilterOptions = computed(() => {
     const options = new Map<string, string>();
     for (const task of store.workspace?.tasks ?? []) {
@@ -581,9 +605,13 @@ function setQueryFieldValues(field: TaskQueryField, values: readonly string[]) {
     const next = replaceTaskQueryField(store.search, field, values);
     if (next !== null) store.search = next;
 }
+function normalizeQueryFieldValue(value: string): string {
+    return value.normalize("NFD").replace(/\p{Diacritic}/gu, "").toLocaleLowerCase("pt-BR").replace(/\s+/g, " ").trim();
+}
 function toggleQueryFieldValue(field: TaskQueryField, value: string) {
     const values = selectedQueryValues(field).value;
-    setQueryFieldValues(field, values.includes(value) ? values.filter((current) => current !== value) : [...values, value]);
+    const normalizedValue = normalizeQueryFieldValue(value);
+    setQueryFieldValues(field, values.includes(normalizedValue) ? values.filter((current) => current !== normalizedValue) : [...values, value]);
 }
 function setQueryPeriodBoundary(boundary: "start" | "finish", value: string | null) {
     if (!value) {
@@ -1497,9 +1525,13 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
     if (
         viewsMenu.value &&
         !viewsButton.value?.contains(target) &&
-        !viewsMenuElement.value?.contains(target)
+        !viewsMenuElement.value?.contains(target) &&
+        !viewActionsMenuElement.value?.contains(target)
     )
+    {
         viewsMenu.value = false;
+        viewActionsMenu.value = null;
+    }
     if (
         taskContextMenu.value &&
         !taskContextMenuElement.value?.contains(target)
@@ -3595,24 +3627,42 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         </div>
                     </div>
                     <div class="saved-views-control">
-                        <button ref="viewsButton" type="button" class="soft-btn views-trigger" aria-label="Abrir views" title="Views" :aria-expanded="viewsMenu" aria-haspopup="dialog" @click="viewsMenu = !viewsMenu">
+                        <button ref="viewsButton" type="button" class="soft-btn views-trigger" aria-label="Abrir views" title="Views" :aria-expanded="viewsMenu" aria-haspopup="dialog" @click="viewsMenu = !viewsMenu; viewActionsMenu = null">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="15.5" rx="2" /><path d="M8 4v15.5M11 8h5.5M11 12h5.5M11 16h3" /></svg>
                         </button>
-                        <div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" @keydown.esc="viewsMenu = false; viewsButton?.focus()">
-                            <header><b>Views</b><small>Configurações privadas deste projeto.</small></header>
+                        <div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" @keydown.esc="viewsMenu = false; viewActionsMenu = null; viewsButton?.focus()">
+                            <header>
+                                <div><b>Views</b><small>Configurações privadas deste projeto.</small></div>
+                                <div class="saved-views-header-actions">
+                                    <button type="button" class="soft-btn saved-views-icon-action" aria-label="Salvar nova view" title="Salvar nova view" @click="openViewDialog('create'); viewsMenu = false">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h12.5L20.5 6v14.5H3.5v-17H5Z" /><path d="M7 3.5v6h9v-6M7.5 20.5v-7h9v7M10 6.5h3" /></svg>
+                                    </button>
+                                    <button type="button" class="soft-btn saved-views-icon-action" aria-label="Importar view JSON" title="Importar view JSON" @click="chooseViewImport">
+                                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3.5h9l5 5v12H5z" /><path d="M14 3.5v5h5M12 18V10m0 0-3 3m3-3 3 3" /></svg>
+                                    </button>
+                                </div>
+                            </header>
                             <div class="saved-views-body">
                                 <div class="saved-views-list" role="list">
                                     <button v-if="!savedViews.length && !loadingViews" type="button" disabled>Nenhuma view salva</button>
-                                    <button v-for="view in savedViews" :key="view.id" type="button" :class="{ active: view.id === activeSavedViewId }" @click="applySavedView(view); viewsMenu = false">{{ view.name }}</button>
+                                    <div v-for="view in savedViews" :key="view.id" class="saved-view-row" :class="{ active: view.id === activeSavedViewId }">
+                                        <button type="button" class="saved-view-apply" @click="applySavedView(view); viewsMenu = false; viewActionsMenu = null">{{ view.name }}</button>
+                                        <button type="button" class="saved-view-actions-trigger" :aria-label="`Ações para ${view.name}`" :aria-expanded="viewActionsMenu?.view.id === view.id" aria-haspopup="menu" title="Ações da view" @click.stop="toggleViewActions($event, view)">
+                                            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="5" r="1.35" /><circle cx="12" cy="12" r="1.35" /><circle cx="12" cy="19" r="1.35" /></svg>
+                                        </button>
+                                    </div>
                                 </div>
-                                <footer>
-                                    <button type="button" class="soft-btn" @click="openViewDialog('create'); viewsMenu = false">Salvar como nova</button>
-                                    <button type="button" class="soft-btn" @click="chooseViewImport">Importar</button>
-                                    <button type="button" class="soft-btn" :disabled="!activeSavedView" @click="exportSavedView">Exportar</button>
-                                    <template v-if="activeSavedView"><button type="button" class="soft-btn" @click="overwriteSavedView">Salvar alterações</button><button type="button" class="soft-btn" @click="openViewDialog('duplicate'); viewsMenu = false">Duplicar</button><button type="button" class="soft-btn" @click="openViewDialog('rename'); viewsMenu = false">Renomear</button><button type="button" class="danger-btn" @click="deleteSavedView">Excluir</button></template>
-                                </footer>
                             </div>
                         </div>
+                        <Teleport to="body">
+                            <div v-if="viewActionsMenu" ref="viewActionsMenuElement" class="saved-view-actions-menu" role="menu" :aria-label="`Ações da view ${viewActionsMenu.view.name}`" :style="{ top: `${viewActionsMenu.top}px`, left: `${viewActionsMenu.left}px` }" @keydown.esc="viewActionsMenu = null">
+                                <button type="button" role="menuitem" @click="overwriteSavedView(viewActionsMenu.view); viewActionsMenu = null">Salvar alterações</button>
+                                <button type="button" role="menuitem" @click="exportSavedView(viewActionsMenu.view); viewActionsMenu = null">Exportar</button>
+                                <button type="button" role="menuitem" @click="openViewDialog('duplicate', viewActionsMenu.view); viewActionsMenu = null; viewsMenu = false">Duplicar</button>
+                                <button type="button" role="menuitem" @click="openViewDialog('rename', viewActionsMenu.view); viewActionsMenu = null; viewsMenu = false">Renomear</button>
+                                <button type="button" role="menuitem" class="danger" @click="deleteSavedView(viewActionsMenu.view); viewActionsMenu = null">Excluir</button>
+                            </div>
+                        </Teleport>
                         <input ref="viewImportInput" class="sr-only" type="file" accept="application/json,.json" @change="importSavedView" />
                     </div>
                     <div class="view-control" aria-label="Ordenação">
@@ -3841,7 +3891,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         class="filter-status-option"
                         ><input
                             type="checkbox"
-                            :checked="selectedAssigneeValues.includes(id === '__unassigned__' ? 'sem' : name.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLocaleLowerCase('pt-BR'))"
+                            :checked="selectedAssigneeValues.includes(id === '__unassigned__' ? 'sem' : normalizeQueryFieldValue(name))"
                             @change="toggleQueryFieldValue('responsavel', id === '__unassigned__' ? 'sem' : name)"
                         /><span>{{ name }}</span></label
                     >
@@ -5836,6 +5886,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
             :class="toastKind"
             :role="toastKind === 'error' ? 'alert' : 'status'"
             :aria-live="toastKind === 'error' ? 'assertive' : 'polite'"
+            @click="toastKind === 'success' && dismissToast()"
         >
             <span>{{
                 toastKind === "success"
@@ -5848,10 +5899,10 @@ function showTopBarNotice(message: string, kind: ToastKind) {
             }}<button
                 v-if="undoDependencyId"
                 type="button"
-                @click="undoLastDependency"
+                @click.stop="undoLastDependency"
             >
                 Desfazer
-            </button><button type="button" class="toast-close" aria-label="Fechar notificação" @click="toast = ''">×</button>
+            </button><button v-if="toastKind !== 'success'" type="button" class="toast-close" aria-label="Fechar notificação" @click="dismissToast">×</button>
         </div>
     </div>
     <Teleport to="body">
@@ -5870,7 +5921,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
     <div v-if="viewDialog" class="relation-modal-scrim" @click.self="viewDialog = null">
         <form v-default-form class="relation-modal" role="dialog" aria-modal="true" aria-labelledby="task-view-dialog-title" @submit.prevent="saveViewDialog">
             <header><div><b id="task-view-dialog-title">{{ viewDialog.mode === "create" ? "Salvar nova view" : viewDialog.mode === "duplicate" ? "Duplicar view" : "Renomear view" }}</b><small>Views são privadas neste projeto e só são alteradas quando você salva.</small></div></header>
-            <div class="relation-modal-body"><label>Nome da view<input v-model="viewDialog.name" class="view-name-input" maxlength="120" required autofocus /></label></div>
+            <div class="relation-modal-body"><label>Nome da view<input ref="viewNameInput" v-model="viewDialog.name" class="view-name-input" maxlength="120" required /></label></div>
             <footer><button type="button" class="soft-btn" :disabled="viewBusy" @click="viewDialog = null">Cancelar</button><DefaultSubmitButton type="submit" :disabled="viewBusy || !viewDialog.name.trim()">{{ viewBusy ? "Salvando…" : "Salvar" }}</DefaultSubmitButton></footer>
         </form>
     </div>
