@@ -93,7 +93,10 @@ final class SchedulingEngine
             }
         }
 
-        [$float, $critical] = $this->calculateFloat($byId, $dependencies, $order);
+        $finiteTasks = array_filter($byId, static fn (TaskPlan $task): bool => $task->participatesInFiniteNetwork);
+        $finiteDependencies = array_values(array_filter($dependencies, static fn (Dependency $dependency): bool => isset($finiteTasks[$dependency->predecessorId], $finiteTasks[$dependency->successorId])));
+        $finiteOrder = array_values(array_filter($order, static fn (string $id): bool => isset($finiteTasks[$id])));
+        [$float, $critical] = $this->calculateFloat($finiteTasks, $finiteDependencies, $finiteOrder);
 
         $virtualStarts = [];
         $publicTasks = $byId;

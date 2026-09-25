@@ -57,6 +57,14 @@ Route::prefix('v1')->group(function () {
             Route::post('/projects/{projectId}/tasks', [ProjectController::class, 'createTask']);
             Route::post('/projects/{projectId}/tasks/{taskId}/duplicate', [ProjectController::class, 'duplicateTask']);
             Route::put('/projects/{projectId}/tasks/{taskId}', [ProjectController::class, 'updateTask']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/recurrence/interpret', [ProjectController::class, 'interpretRecurrence']);
+            Route::put('/projects/{projectId}/tasks/{taskId}/recurrence', [ProjectController::class, 'saveRecurrence']);
+            Route::delete('/projects/{projectId}/tasks/{taskId}/recurrence', [ProjectController::class, 'removeRecurrence']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/recurrence/complete-forever', [ProjectController::class, 'completeRecurrenceForever']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/occurrence/snooze-preview', [ProjectController::class, 'previewSnooze']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/occurrence/snooze', [ProjectController::class, 'snoozeOccurrence']);
+            Route::post('/projects/{projectId}/tasks/{taskId}/occurrence/complete', [ProjectController::class, 'completeOccurrence']);
+            Route::get('/projects/{projectId}/tasks/{taskId}/occurrences', [ProjectController::class, 'occurrenceHistory']);
             Route::patch('/projects/{projectId}/tasks/{taskId}/completion', [ProjectController::class, 'setTaskCompletion']);
             Route::post('/projects/{projectId}/tasks/{taskId}/checklist', [ProjectController::class, 'createChecklistItem']);
             Route::put('/projects/{projectId}/tasks/{taskId}/checklist/{itemId}', [ProjectController::class, 'updateChecklistItem']);

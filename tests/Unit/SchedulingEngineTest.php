@@ -180,6 +180,19 @@ final class SchedulingEngineTest extends TestCase
         self::assertSame(['A', 'B'], $result->criticalTaskIds);
     }
 
+    public function test_operational_successor_is_projected_but_excluded_from_finite_float_and_critical_path(): void
+    {
+        $result = $this->engine->schedule([
+            new TaskPlan('A', 'Predecessora finita', new DateTimeImmutable('2026-08-17'), 3),
+            new TaskPlan('R', 'Rotina', new DateTimeImmutable('2026-08-17'), 1, participatesInFiniteNetwork: false),
+        ], [new Dependency('A', 'R', 'FS')], new DateTimeImmutable('2026-08-16'));
+
+        self::assertSame('2026-08-20', $result->tasks['R']->start?->format('Y-m-d'));
+        self::assertSame(0, $result->totalFloat['A']);
+        self::assertArrayNotHasKey('R', $result->totalFloat);
+        self::assertSame(['A'], $result->criticalTaskIds);
+    }
+
     public function test_completed_task_without_a_planned_start_uses_its_effective_completion_date_in_critical_path(): void
     {
         $result = $this->engine->schedule([

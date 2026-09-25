@@ -32,6 +32,17 @@ describe("defaultForm", () => {
         expect(cancelClick).not.toHaveBeenCalled();
     });
 
+    it("uses the final declared action when a panel contains auxiliary default-styled commands", () => {
+        const scope = mountScope('<input><button data-default-submit type="button">Auxiliar</button><footer><button data-default-submit type="button">Salvar painel</button></footer>');
+        const [auxiliary, submit] = scope.querySelectorAll<HTMLButtonElement>("[data-default-submit]");
+        const auxiliaryClick = vi.fn(), submitClick = vi.fn();
+        auxiliary.addEventListener("click", auxiliaryClick);
+        submit.addEventListener("click", submitClick);
+        shortcut(scope.querySelector("input")!);
+        expect(auxiliaryClick).not.toHaveBeenCalled();
+        expect(submitClick).toHaveBeenCalledOnce();
+    });
+
     it("accepts Command+Enter and ignores disabled or composing input", () => {
         const scope = mountScope('<input><button data-default-submit type="button" disabled>Salvar</button>');
         const input = scope.querySelector("input")!;

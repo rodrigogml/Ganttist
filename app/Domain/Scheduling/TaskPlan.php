@@ -18,6 +18,7 @@ final readonly class TaskPlan
         public ?string $parentId = null,
         public ?DateTimeImmutable $deadline = null,
         public ?int $plannedDurationWorkdays = null,
+        public bool $participatesInFiniteNetwork = true,
     ) {}
 
     public static function fromDates(
@@ -30,10 +31,11 @@ final readonly class TaskPlan
         ?DateTimeImmutable $effectiveCompletionDate = null,
         ?string $parentId = null,
         ?int $plannedDurationWorkdays = null,
+        bool $participatesInFiniteNetwork = true,
     ): self {
         $duration = (new TaskDurationResolver($calendar))->resolve($start, $deadline, $plannedDurationWorkdays);
 
-        return new self($id, $title, $start, $duration, $completed, $effectiveCompletionDate, $parentId, $deadline, $plannedDurationWorkdays);
+        return new self($id, $title, $start, $duration, $completed, $effectiveCompletionDate, $parentId, $deadline, $plannedDurationWorkdays, $participatesInFiniteNetwork);
     }
 
     public function anchoredStart(WorkCalendar $calendar): ?DateTimeImmutable
@@ -62,6 +64,6 @@ final readonly class TaskPlan
 
     public function withStart(DateTimeImmutable $start): self
     {
-        return new self($this->id, $this->title, $start, $this->duration, $this->completed, $this->effectiveCompletionDate, $this->parentId, $this->deadline, $this->plannedDurationWorkdays);
+        return new self($this->id, $this->title, $start, $this->duration, $this->completed, $this->effectiveCompletionDate, $this->parentId, $this->deadline, $this->plannedDurationWorkdays, $this->participatesInFiniteNetwork);
     }
 }

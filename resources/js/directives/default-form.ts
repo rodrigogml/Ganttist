@@ -10,7 +10,9 @@ function isDefaultFormShortcut(event: KeyboardEvent): boolean {
 function triggerDefaultAction(scope: HTMLElement, event: KeyboardEvent): void {
     if (event.defaultPrevented || !isDefaultFormShortcut(event) || (event.target instanceof Element && event.target.closest(ignoredShortcutSelector))) return;
 
-    const action = scope.querySelector<HTMLButtonElement>(defaultActionSelector);
+    // A panel can contain auxiliary actions; its declared confirmation is
+    // conventionally the final submit button in the scope footer.
+    const action = Array.from(scope.querySelectorAll<HTMLButtonElement>(defaultActionSelector)).at(-1);
     if (!action || action.disabled || action.getAttribute("aria-disabled") === "true") return;
 
     event.preventDefault();

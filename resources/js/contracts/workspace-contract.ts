@@ -11,6 +11,10 @@ function string(value: unknown, label: string): void {
   if (typeof value !== 'string') throw new Error(`Contrato de workspace inválido: ${label}.`)
 }
 
+function nullableString(value: unknown, label: string): void {
+  if (value !== null && typeof value !== 'string') throw new Error(`Contrato de workspace inválido: ${label}.`)
+}
+
 export function parseWorkspaceResponse(payload: unknown): Workspace {
   const root = record(payload, 'resposta')
   const data = record(root.data, 'data')
@@ -45,6 +49,23 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
     }
     for (const field of ['considered_start', 'considered_deadline', 'unlock_date', 'earliest_start']) if (item[field] !== undefined && item[field] !== null && typeof item[field] !== 'string') throw new Error(`Contrato de workspace inválido: task.${field}.`)
     if (item.completed !== undefined && typeof item.completed !== 'boolean') throw new Error('Contrato de workspace inválido: task.completed.')
+    if (item.participatesInFiniteNetwork !== undefined && typeof item.participatesInFiniteNetwork !== 'boolean') throw new Error('Contrato de workspace inválido: task.participatesInFiniteNetwork.')
+    if (item.occurrenceHistoryCount !== undefined && (!Number.isInteger(item.occurrenceHistoryCount) || (item.occurrenceHistoryCount as number) < 0)) throw new Error('Contrato de workspace inválido: task.occurrenceHistoryCount.')
+    if (item.recurrence !== undefined && item.recurrence !== null) {
+      const recurrence = record(item.recurrence, 'task.recurrence')
+      string(recurrence.expression, 'task.recurrence.expression')
+      if (!Number.isInteger(recurrence.version) || (recurrence.version as number) < 0) throw new Error('Contrato de workspace inválido: task.recurrence.version.')
+      nullableString(recurrence.endsOn, 'task.recurrence.endsOn')
+      const rule = record(recurrence.rule, 'task.recurrence.rule')
+      if (!['fixed', 'interval'].includes(rule.basis as string) || !['daily', 'weekly', 'monthly', 'yearly'].includes(rule.frequency as string) || !Number.isInteger(rule.interval) || (rule.interval as number) < 1) throw new Error('Contrato de workspace inválido: task.recurrence.rule.')
+      for (const field of ['weekdays', 'monthDays', 'annualDates']) if (!Array.isArray(rule[field])) throw new Error(`Contrato de workspace inválido: task.recurrence.rule.${field}.`)
+    }
+    if (item.occurrence !== undefined && item.occurrence !== null) {
+      const occurrence = record(item.occurrence, 'task.occurrence')
+      for (const field of ['logicalDate', 'consideredStart', 'consideredDeadline']) string(occurrence[field], `task.occurrence.${field}`)
+      for (const field of ['scheduledStart', 'scheduledFinish']) nullableString(occurrence[field], `task.occurrence.${field}`)
+      if (typeof occurrence.snoozed !== 'boolean') throw new Error('Contrato de workspace inválido: task.occurrence.snoozed.')
+    }
   }
   for (const dependency of data.dependencies) {
     const item = record(dependency, 'dependency')
@@ -61,6 +82,15 @@ export function parseWorkspaceResponse(payload: unknown): Workspace {
       if (item.email !== undefined && item.email !== null && typeof item.email !== 'string') throw new Error('Contrato de workspace inválido: person.email.')
       if (item.linkedUserId !== undefined && item.linkedUserId !== null && typeof item.linkedUserId !== 'string') throw new Error('Contrato de workspace inválido: person.linkedUserId.')
     }
+  }
+  if (stats.finite !== undefined) {
+    const finite = record(stats.finite, 'stats.finite')
+    for (const field of ['totalTasks', 'completedTasks', 'progressPercent', 'criticalTaskCount']) if (!Number.isInteger(finite[field]) || (finite[field] as number) < 0) throw new Error(`Contrato de workspace inválido: stats.finite.${field}.`)
+    nullableString(finite.projectFinish, 'stats.finite.projectFinish')
+  }
+  if (stats.operational !== undefined) {
+    const operational = record(stats.operational, 'stats.operational')
+    for (const field of ['recurringTaskCount', 'openRecurringOccurrenceCount', 'overdueRecurringOccurrenceCount', 'snoozedRecurringOccurrenceCount']) if (!Number.isInteger(operational[field]) || (operational[field] as number) < 0) throw new Error(`Contrato de workspace inválido: stats.operational.${field}.`)
   }
 
   return data as unknown as Workspace

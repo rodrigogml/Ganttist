@@ -42,6 +42,7 @@ import {
 import { dependencyPath, dependencyStub } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
 import { parseTaskQuery, replaceTaskQueryField, type TaskQueryField } from "./utils/task-query";
+import { apiErrorMessage } from "./utils/api-error";
 import { parseSavedTaskView, parseViewsResponse } from "./contracts/task-views-contract";
 import { apiFetch, connectivity } from "./lib/api";
 import { useRouter } from "vue-router";
@@ -237,6 +238,27 @@ const plannedDurationBaseline = ref("");
 const planningDurationError = ref("");
 const plannedDurationInput = ref<HTMLInputElement | null>(null);
 const saving = ref(false);
+const recurrenceExpressionDraft = ref("");
+const recurrenceSaving = ref(false);
+const recurrenceError = ref("");
+type SnoozeOption = "nextWorkday" | "nextWeek" | "workdays";
+type SnoozePreview = {
+    option: SnoozeOption;
+    workdays?: number;
+    normalizedTargetDate: string;
+    impact: { affectedTasks: string[]; projectFinishBefore: string | null; projectFinishAfter: string | null; severity: "informational" | "warning" | "critical" };
+    previewToken: string;
+};
+const snoozePreview = ref<SnoozePreview | null>(null);
+const snoozeLoading = ref(false);
+const snoozeError = ref("");
+const occurrenceCompletionLoading = ref(false);
+const occurrenceCompletionError = ref("");
+type OccurrenceHistoryItem = { id: string; logicalDate: string; scheduledStart: string | null; completedAt: string };
+const occurrenceHistory = ref<OccurrenceHistoryItem[]>([]);
+const occurrenceHistoryCursor = ref<string | null>(null);
+const occurrenceHistoryLoading = ref(false);
+const occurrenceHistoryError = ref("");
 const checklistPreview = ref<{ task: Task; top: number; left: number } | null>(null);
 let checklistPreviewCloseTimer: ReturnType<typeof setTimeout> | null = null;
 const checklistItems = ref<ChecklistItem[]>([]);
@@ -2311,6 +2333,13 @@ function openTaskImmediately(task: Task) {
     checklistItems.value = (task.checklist ?? []).map((item) => ({ ...item }));
     sectionDraft.value = null;
     taskDraftBaseline.value = editableTaskSnapshot(draft);
+    recurrenceExpressionDraft.value = task.recurrence?.expression ?? "";
+    recurrenceError.value = "";
+    snoozePreview.value = null;
+    snoozeError.value = "";
+    occurrenceHistory.value = [];
+    occurrenceHistoryCursor.value = null;
+    occurrenceHistoryError.value = "";
     editorReturnTaskId.value = task.id;
     pendingTaskToOpen.value = null;
     closeConfirmation.value = false;
@@ -2319,6 +2348,203 @@ function openTaskImmediately(task: Task) {
     drawer.value = true;
     void loadEditorContext(task.id);
     focusTaskTitle();
+}
+
+async function saveRecurrence() {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    const expression = recurrenceExpressionDraft.value.trim();
+    if (!task || !projectId || !canMutateProject.value || recurrenceSaving.value) return;
+    if (!expression) {
+        recurrenceError.value = "Informe uma expressão, por exemplo: toda segunda.";
+        return;
+    }
+    recurrenceSaving.value = true;
+    recurrenceError.value = "";
+    try {
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/recurrence", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({
+                source: "expression",
+                expression,
+                expectedRecurrenceVersion: task.recurrence?.version ?? 0,
+            }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível salvar a recorrência."));
+        await store.load();
+        const refreshed = store.workspace?.tasks.find((item) => item.id === task.id);
+        if (refreshed?.kind === "task") {
+            taskDraft.value = { ...refreshed };
+            recurrenceExpressionDraft.value = refreshed.recurrence?.expression ?? expression;
+            setPlanningDraft(taskDraft.value);
+            taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
+        }
+        showToast("Recorrência salva", "success");
+    } catch (error) {
+        recurrenceError.value = error instanceof Error ? error.message : "Não foi possível salvar a recorrência.";
+    } finally {
+        recurrenceSaving.value = false;
+    }
+}
+
+async function removeRecurrence() {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    if (!task?.recurrence || !projectId || !canMutateProject.value || recurrenceSaving.value) return;
+    recurrenceSaving.value = true;
+    recurrenceError.value = "";
+    try {
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/recurrence?expectedRecurrenceVersion=" + task.recurrence.version, {
+            method: "DELETE",
+            headers: { Accept: "application/json", ...csrfHeaders() },
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível remover a recorrência."));
+        await store.load();
+        const refreshed = store.workspace?.tasks.find((item) => item.id === task.id);
+        if (refreshed?.kind === "task") {
+            taskDraft.value = { ...refreshed };
+            recurrenceExpressionDraft.value = "";
+            setPlanningDraft(taskDraft.value);
+            taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
+        }
+        showToast("Recorrência removida", "success");
+    } catch (error) {
+        recurrenceError.value = error instanceof Error ? error.message : "Não foi possível remover a recorrência.";
+    } finally {
+        recurrenceSaving.value = false;
+    }
+}
+
+async function completeRecurrenceForever() {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    if (!task?.recurrence || !projectId || !canMutateProject.value || recurrenceSaving.value) return;
+    recurrenceSaving.value = true;
+    recurrenceError.value = "";
+    try {
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/recurrence/complete-forever", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({ expectedRecurrenceVersion: task.recurrence.version }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível concluir definitivamente."));
+        await store.load();
+        finishTaskEditorClose();
+        showToast("Série concluída definitivamente", "success");
+    } catch (error) {
+        recurrenceError.value = error instanceof Error ? error.message : "Não foi possível concluir definitivamente.";
+    } finally {
+        recurrenceSaving.value = false;
+    }
+}
+
+async function previewSnooze(option: SnoozeOption, workdays?: number) {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    if (!task?.occurrence || !projectId || !canMutateProject.value || snoozeLoading.value) return;
+    snoozeLoading.value = true;
+    snoozeError.value = "";
+    snoozePreview.value = null;
+    try {
+        const body = { expectedLogicalDate: task.occurrence.logicalDate, option, ...(workdays ? { workdays } : {}) };
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/occurrence/snooze-preview", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify(body),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível calcular o impacto da soneca."));
+        const data = (await response.json()).data;
+        snoozePreview.value = { option, ...(workdays ? { workdays } : {}), normalizedTargetDate: data.normalizedTargetDate, impact: data.impact, previewToken: data.previewToken };
+    } catch (error) {
+        snoozeError.value = error instanceof Error ? error.message : "Não foi possível calcular o impacto da soneca.";
+    } finally {
+        snoozeLoading.value = false;
+    }
+}
+
+async function confirmSnooze() {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    const preview = snoozePreview.value;
+    if (!task?.occurrence || !projectId || !preview || snoozeLoading.value) return;
+    snoozeLoading.value = true;
+    snoozeError.value = "";
+    try {
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/occurrence/snooze", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({ expectedLogicalDate: task.occurrence.logicalDate, option: preview.option, ...(preview.workdays ? { workdays: preview.workdays } : {}), previewToken: preview.previewToken }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível adiar a ocorrência."));
+        await store.load();
+        const refreshed = store.workspace?.tasks.find((item) => item.id === task.id);
+        if (refreshed?.kind === "task") {
+            taskDraft.value = { ...refreshed };
+            setPlanningDraft(taskDraft.value);
+            taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
+        }
+        snoozePreview.value = null;
+        showToast("Ocorrência adiada", "success");
+    } catch (error) {
+        snoozeError.value = error instanceof Error ? error.message : "Não foi possível adiar a ocorrência.";
+    } finally {
+        snoozeLoading.value = false;
+    }
+}
+
+async function completeCurrentOccurrence() {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    if (!task?.occurrence || !projectId || !canMutateProject.value || occurrenceCompletionLoading.value) return;
+    occurrenceCompletionLoading.value = true;
+    occurrenceCompletionError.value = "";
+    try {
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/occurrence/complete", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({
+                expectedLogicalDate: task.occurrence.logicalDate,
+                completionCommandId: crypto.randomUUID(),
+                actualCompletionDate: todayCivil(),
+            }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível concluir a ocorrência."));
+        const result = (await response.json()).data;
+        await store.load();
+        const refreshed = store.workspace?.tasks.find((item) => item.id === task.id);
+        if (refreshed?.kind === "task") {
+            taskDraft.value = { ...refreshed };
+            recurrenceExpressionDraft.value = refreshed.recurrence?.expression ?? "";
+            setPlanningDraft(taskDraft.value);
+            taskDraftBaseline.value = editableTaskSnapshot(taskDraft.value);
+        }
+        showToast(result.taskCompleted ? "Série concluída definitivamente" : "Ocorrência concluída", "success");
+    } catch (error) {
+        occurrenceCompletionError.value = error instanceof Error ? error.message : "Não foi possível concluir a ocorrência.";
+    } finally {
+        occurrenceCompletionLoading.value = false;
+    }
+}
+
+async function loadOccurrenceHistory(more = false) {
+    const task = activeTask.value;
+    const projectId = store.workspace?.project.id;
+    if (!task?.recurrence || !projectId || occurrenceHistoryLoading.value || (more && !occurrenceHistoryCursor.value)) return;
+    occurrenceHistoryLoading.value = true;
+    occurrenceHistoryError.value = "";
+    try {
+        const query = more ? "&cursor=" + encodeURIComponent(occurrenceHistoryCursor.value!) : "";
+        const response = await apiFetch("/api/v1/projects/" + projectId + "/tasks/" + task.id + "/occurrences?limit=10" + query);
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível carregar o histórico."));
+        const data = (await response.json()).data;
+        occurrenceHistory.value = more ? [...occurrenceHistory.value, ...data.items] : data.items;
+        occurrenceHistoryCursor.value = data.nextCursor;
+    } catch (error) {
+        occurrenceHistoryError.value = error instanceof Error ? error.message : "Não foi possível carregar o histórico.";
+    } finally {
+        occurrenceHistoryLoading.value = false;
+    }
 }
 function openTask(task: Task) {
     if (task.kind !== "task") return;
@@ -2615,9 +2841,7 @@ function taskTitle(id: string) {
 async function responseError(response: Response, fallback: string) {
     try {
         const payload = await response.json();
-        return typeof payload?.message === "string"
-            ? payload.message
-            : fallback;
+        return apiErrorMessage(payload, fallback);
     } catch {
         return fallback;
     }
@@ -4791,6 +5015,13 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                             <div class="task-title-line">
                                                 <b>{{ task.title }}</b
                                                 ><span
+                                                    v-if="task.recurrence"
+                                                    class="recurrence-row-marker"
+                                                    :title="task.recurrence.expression"
+                                                    :aria-label="'Recorrente: ' + task.recurrence.expression"
+                                                    >↻</span
+                                                >
+                                                ><span
                                                     v-if="store.filterExceptions.has(task.id)"
                                                     class="filter-exception-badge"
                                                     title="Exibida por uma dependência, apesar do filtro atual"
@@ -5370,7 +5601,68 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                             <small id="planned-duration-error" class="field-error" role="alert">{{ planningDurationError }}</small>
                         </label>
                     </div>
-                    <div class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<DateInput :model-value="activeTask.effective_completion ?? null" required @update:model-value="(value) => { if (activeTask) activeTask.effective_completion = value }" /></label></div>
+                    <!-- The enclosing drawer owns Ctrl/Cmd+Enter for the task draft. -->
+                    <section v-if="!isCreatingTask" class="recurrence-editor" aria-labelledby="recurrence-editor-title">
+                        <div class="recurrence-editor-heading">
+                            <div>
+                                <b id="recurrence-editor-title">Recorrência</b>
+                                <small>{{ activeTask.recurrence ? "A ocorrência lógica permanece fixa; a soneca muda apenas o agendamento." : "Transforme esta tarefa em uma rotina." }}</small>
+                            </div>
+                            <span v-if="activeTask.recurrence" class="recurrence-active">Ativa</span>
+                        </div>
+                        <label>
+                            Expressão em português
+                            <input v-model="recurrenceExpressionDraft" placeholder="Ex.: toda segunda" :disabled="recurrenceSaving" />
+                        </label>
+                        <small class="recurrence-help">Exemplos: “toda segunda”, “a cada 4 dias”, “todo último dia útil”.</small>
+                        <p v-if="activeTask.recurrence" class="recurrence-summary">
+                            <b>{{ activeTask.recurrence.expression }}</b>
+                            <span v-if="activeTask.occurrence">Ocorrência: {{ activeTask.occurrence.logicalDate }}<template v-if="activeTask.occurrence.snoozed"> · agendada para {{ activeTask.occurrence.scheduledStart }}</template></span>
+                        </p>
+                        <p v-if="recurrenceError" class="field-error" role="alert">{{ recurrenceError }}</p>
+                        <div class="recurrence-actions">
+                            <DefaultSubmitButton type="button" :default-action="false" :disabled="recurrenceSaving || !canMutateProject" @click="saveRecurrence">{{ activeTask.recurrence ? "Atualizar recorrência" : "Ativar recorrência" }}</DefaultSubmitButton>
+                            <button v-if="activeTask.recurrence" type="button" class="soft-btn" :disabled="recurrenceSaving" @click="removeRecurrence">Remover recorrência</button>
+                            <button v-if="activeTask.recurrence" type="button" class="soft-btn" :disabled="recurrenceSaving" @click="completeRecurrenceForever">Concluir definitivamente</button>
+                        </div>
+                    </section>
+                    <section v-if="!isCreatingTask && activeTask.recurrence && activeTask.occurrence" class="snooze-editor" aria-labelledby="snooze-editor-title">
+                        <div class="recurrence-editor-heading">
+                            <div>
+                                <b id="snooze-editor-title">Adiar ocorrência</b>
+                                <small>Agende somente a ocorrência atual em um dia útil.</small>
+                            </div>
+                        </div>
+                        <div v-if="!snoozePreview" class="snooze-options">
+                            <button type="button" class="soft-btn" :disabled="snoozeLoading || !canMutateProject" @click="previewSnooze('nextWorkday')">Amanhã útil</button>
+                            <button type="button" class="soft-btn" :disabled="snoozeLoading || !canMutateProject" @click="previewSnooze('nextWeek')">Próxima semana</button>
+                            <button type="button" class="soft-btn" :disabled="snoozeLoading || !canMutateProject" @click="previewSnooze('workdays', 3)">3 dias úteis</button>
+                            <button type="button" class="soft-btn" :disabled="snoozeLoading || !canMutateProject" @click="previewSnooze('workdays', 7)">7 dias úteis</button>
+                        </div>
+                        <div v-else class="snooze-preview" :class="snoozePreview.impact.severity">
+                            <b>Agendar para {{ snoozePreview.normalizedTargetDate }}</b>
+                            <span>{{ snoozePreview.impact.affectedTasks.length }} tarefa(s) afetada(s).</span>
+                            <span v-if="snoozePreview.impact.projectFinishBefore !== snoozePreview.impact.projectFinishAfter">Término finito: {{ snoozePreview.impact.projectFinishBefore ?? "—" }} → {{ snoozePreview.impact.projectFinishAfter ?? "—" }}</span>
+                            <div class="recurrence-actions">
+                                <button type="button" class="soft-btn" :disabled="snoozeLoading" @click="snoozePreview = null">Cancelar</button>
+                                <DefaultSubmitButton type="button" :default-action="false" :disabled="snoozeLoading || !canMutateProject" @click="confirmSnooze">{{ snoozeLoading ? "Aplicando…" : "Confirmar adiamento" }}</DefaultSubmitButton>
+                            </div>
+                        </div>
+                        <p v-if="snoozeError" class="field-error" role="alert">{{ snoozeError }}</p>
+                    </section>
+                    <section v-if="activeTask.recurrence && activeTask.occurrence" class="occurrence-completion" aria-labelledby="occurrence-completion-title">
+                        <div><b id="occurrence-completion-title">Concluir ocorrência</b><small>Registra {{ activeTask.occurrence.logicalDate }} no histórico e avança a série.</small></div>
+                        <DefaultSubmitButton type="button" :default-action="false" :disabled="occurrenceCompletionLoading || !canMutateProject" @click="completeCurrentOccurrence">{{ occurrenceCompletionLoading ? "Concluindo…" : "Concluir ocorrência" }}</DefaultSubmitButton>
+                        <p v-if="occurrenceCompletionError" class="field-error" role="alert">{{ occurrenceCompletionError }}</p>
+                    </section>
+                    <section v-if="activeTask.recurrence" class="occurrence-history" aria-labelledby="occurrence-history-title">
+                        <div class="recurrence-editor-heading"><b id="occurrence-history-title">Histórico de ocorrências</b><button type="button" class="soft-btn" :disabled="occurrenceHistoryLoading" @click="loadOccurrenceHistory()">{{ occurrenceHistoryLoading ? "Carregando…" : "Carregar histórico" }}</button></div>
+                        <p v-if="!occurrenceHistory.length && !occurrenceHistoryLoading" class="recurrence-help">Ainda não há ocorrências concluídas.</p>
+                        <ol v-else class="occurrence-history-list"><li v-for="item in occurrenceHistory" :key="item.id"><b>{{ item.logicalDate }}</b><span>Agendada: {{ item.scheduledStart ?? "—" }} · concluída: {{ item.completedAt }}</span></li></ol>
+                        <button v-if="occurrenceHistoryCursor" type="button" class="soft-btn" :disabled="occurrenceHistoryLoading" @click="loadOccurrenceHistory(true)">Carregar mais</button>
+                        <p v-if="occurrenceHistoryError" class="field-error" role="alert">{{ occurrenceHistoryError }}</p>
+                    </section>
+                    <div v-if="!activeTask.recurrence" class="form-grid"><label class="completion-toggle"><input v-model="activeTask.completed" type="checkbox" @change="ensureCompletionDate" />Concluída</label><label v-if="activeTask.completed">Data efetiva de conclusão<DateInput :model-value="activeTask.effective_completion ?? null" required @update:model-value="(value) => { if (activeTask) activeTask.effective_completion = value }" /></label></div>
                     <section
                         class="projection-summary"
                         aria-label="Projeção calculada"

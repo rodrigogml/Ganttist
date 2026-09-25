@@ -2,9 +2,16 @@
 
 namespace App\Http\Controllers\Api;
 
+use App\Domain\Recurrence\LogicalOccurrence;
+use App\Domain\Recurrence\RecurrenceCalculator;
+use App\Domain\Recurrence\RecurrenceFormatter;
+use App\Domain\Recurrence\RecurrenceLifecycle;
+use App\Domain\Recurrence\RecurrenceParser;
+use App\Domain\Recurrence\RecurrenceRule;
+use App\Domain\Recurrence\RecurrenceValidationException;
+use App\Domain\Recurrence\SnoozeTargetResolver;
 use App\Domain\Scheduling\PlanningDriver;
 use App\Domain\Scheduling\ScheduleDependency;
-use App\Domain\Scheduling\SchedulingEngine;
 use App\Domain\Scheduling\SectionDependencyNormalizer;
 use App\Domain\Scheduling\TaskPlan;
 use App\Domain\Scheduling\TaskPlanningNormalizer;
@@ -14,6 +21,7 @@ use App\Domain\Scheduling\TaskProjectionInput;
 use App\Domain\Scheduling\WorkCalendar;
 use App\Jobs\Documents\PurgeProjectDocumentFiles;
 use App\Mail\ProjectInvitation;
+use App\Services\ProjectWorkspaceProjectionService;
 use App\Services\TaskTableDocument;
 use App\Services\TaskTableLock;
 use App\Services\TaskTableLockConflict;
@@ -97,41 +105,20 @@ final class ProjectController
                 'position' => (int) $item->position,
             ])->values()->all())
             ->all();
+        $occurrenceHistoryCounts = DB::table('projectTaskOccurrence')
+            ->where('projectId', $projectId)
+            ->groupBy('taskId')
+            ->selectRaw('taskId, count(*) as occurrence_count')
+            ->pluck('occurrence_count', 'taskId')
+            ->all();
         $dependencyRows = DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get();
         $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
         $calendar = new WorkCalendar;
-        $sectionParents = $sections->pluck('parent_section_id', 'id')->all();
-        $taskSections = $tasks->pluck('section_id', 'id')->all();
-        $scheduleDependencies = $dependencyRows->map(fn (object $edge): ScheduleDependency => new ScheduleDependency(
-            $edge->predecessor_kind, $edge->predecessor_id, $edge->successor_kind, $edge->successor_id, $edge->type,
-        ))->all();
-        $projectionInputs = $tasks->map(fn (object $task): TaskProjectionInput => new TaskProjectionInput(
-            $task->id,
-            $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
-            $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
-            $task->completed_at !== null,
-            $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
-            $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
-        ))->all();
-        $sectionCalculation = (new SectionDependencyNormalizer($calendar))->calculate($projectionInputs, $taskSections, $sectionParents, $scheduleDependencies, $today);
-        $domainDependencies = $sectionCalculation['dependencies'];
-        $calculation = (new SchedulingEngine($calendar))->schedule(
-            $tasks->map(fn (object $task): TaskPlan => TaskPlan::fromDates(
-                $task->id,
-                $task->title,
-                $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
-                $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
-                $calendar,
-                $task->completed_at !== null,
-                $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
-                null,
-                $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
-            ))->all(),
-            $domainDependencies,
-            $today,
-        );
+        $workspaceProjection = (new ProjectWorkspaceProjectionService)->calculate($tasks, $sections, $dependencyRows, $today, $calendar);
+        $sectionParents = $workspaceProjection['sectionParents'];
+        $calculation = $workspaceProjection['calculation'];
         $criticalIds = array_fill_keys($calculation->criticalTaskIds, true);
-        $projections = $sectionCalculation['projections'];
+        $projections = $workspaceProjection['projections'];
         $criticalSections = [];
         foreach ($tasks as $task) {
             if (! isset($criticalIds[$task->id])) {
@@ -165,7 +152,7 @@ final class ProjectController
         }
         $childrenByParent = $childrenByParent->groupBy(fn (object $child): string => $child->parent_id ?? '__root__')->map(fn ($children) => $children->sortBy('position')->values());
         $appendChildren = null;
-        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts, $tableCounts, $checklistByTask): void {
+        $appendChildren = function (?string $parentId) use (&$appendChildren, &$rows, $childrenByParent, $sections, $tasks, $levelFor, &$sectionLevels, $projections, $criticalIds, $criticalSections, $calculation, $commentCounts, $tableCounts, $checklistByTask, $occurrenceHistoryCounts, $calendar): void {
             foreach ($childrenByParent->get($parentId ?? '__root__', collect()) as $child) {
                 if ($child->kind === 'section') {
                     $section = $child->item;
@@ -176,7 +163,8 @@ final class ProjectController
                 }
                 $task = $child->item;
                 $projection = $projections[$task->id];
-                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'plannedDurationWorkdays' => $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays, 'resolved_duration_workdays' => $projection->resolvedDurationWorkdays, 'schedule_constraint_state' => $projection->scheduleConstraintState->value, 'schedule_constraint_reason' => $projection->scheduleConstraintReason, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0) + (int) ($tableCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? []];
+                $recurrence = $this->workspaceRecurrence($task, $calendar);
+                $rows[] = ['id' => $task->id, 'title' => $task->title, 'description' => $task->description, 'kind' => 'task', 'parent_id' => $task->section_id, 'section_id' => $task->section_id, 'level' => $task->section_id && isset($sectionLevels[$task->section_id]) ? $sectionLevels[$task->section_id] + 1 : 0, 'has_children' => false, 'start' => $task->planned_start, 'finish' => $task->planned_finish, 'plannedDurationWorkdays' => $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays, 'resolved_duration_workdays' => $projection->resolvedDurationWorkdays, 'schedule_constraint_state' => $projection->scheduleConstraintState->value, 'schedule_constraint_reason' => $projection->scheduleConstraintReason, 'considered_start' => $projection->consideredStart->format('Y-m-d'), 'considered_deadline' => $projection->consideredDeadline->format('Y-m-d'), 'unlock_date' => $projection->unlockDate?->format('Y-m-d'), 'earliest_start' => $projection->earliestStart?->format('Y-m-d'), 'completed' => $task->completed_at !== null, 'effective_completion' => $task->completed_at, 'progress' => $task->completed_at ? 100 : 0, 'status' => $projection->status->value, 'critical' => isset($criticalIds[$task->id]), 'total_float' => $calculation->totalFloat[$task->id] ?? null, 'priority' => $task->priority, 'assignee_id' => $task->assignee_person_id, 'assignee' => $task->assignee, 'comment_count' => (int) ($commentCounts[$task->id] ?? 0) + (int) ($tableCounts[$task->id] ?? 0), 'checklist' => $checklistByTask[$task->id] ?? [], 'recurrence' => $recurrence, 'occurrence' => $this->workspaceOccurrence($task, $recurrence, $calendar), 'participatesInFiniteNetwork' => $recurrence === null, 'occurrenceHistoryCount' => (int) ($occurrenceHistoryCounts[$task->id] ?? 0)];
             }
         };
         $appendChildren(null);
@@ -208,22 +196,32 @@ final class ProjectController
         $dependencies = $dependencyRows->map(fn (object $edge) => ['id' => $edge->id, 'from' => $edge->predecessor_id, 'from_kind' => $edge->predecessor_kind, 'to' => $edge->successor_id, 'to_kind' => $edge->successor_kind, 'type' => $edge->type, 'critical' => isset($criticalIds[$edge->predecessor_id], $criticalIds[$edge->successor_id]), 'constraint_state' => 'active']);
         $people = DB::table('project_people')->where('project_id', $projectId)->whereNull('blocked_at')->orderBy('name')->get(['id', 'name', 'email', 'linked_user_id as linkedUserId']);
         $leafTasks = array_values(array_filter($rows, fn (array $task): bool => $task['kind'] === 'task'));
-        $completed = count(array_filter($leafTasks, fn (array $task): bool => $task['completed']));
-        $totalWeight = array_sum(array_map(fn (array $task): int => $task['resolved_duration_workdays'], $leafTasks));
-        $completedWeight = array_sum(array_map(fn (array $task): int => $task['completed'] ? $task['resolved_duration_workdays'] : 0, $leafTasks));
-        $statusCount = fn (string $status): int => count(array_filter($leafTasks, fn (array $task): bool => $task['status'] === $status));
+        $finiteLeafTasks = array_values(array_filter($leafTasks, fn (array $task): bool => $task['participatesInFiniteNetwork']));
+        $completed = count(array_filter($finiteLeafTasks, fn (array $task): bool => $task['completed']));
+        $totalWeight = array_sum(array_map(fn (array $task): int => $task['resolved_duration_workdays'], $finiteLeafTasks));
+        $completedWeight = array_sum(array_map(fn (array $task): int => $task['completed'] ? $task['resolved_duration_workdays'] : 0, $finiteLeafTasks));
+        $statusCount = fn (string $status): int => count(array_filter($finiteLeafTasks, fn (array $task): bool => $task['status'] === $status));
+        $recurringLeafTasks = array_values(array_filter($leafTasks, fn (array $task): bool => ! $task['participatesInFiniteNetwork']));
+        $operational = [
+            'recurringTaskCount' => count($recurringLeafTasks),
+            'openRecurringOccurrenceCount' => count(array_filter($recurringLeafTasks, fn (array $task): bool => ! $task['completed'])),
+            'overdueRecurringOccurrenceCount' => count(array_filter($recurringLeafTasks, fn (array $task): bool => ! $task['completed'] && $task['finish'] !== null && $task['finish'] < $today->format('Y-m-d'))),
+            'snoozedRecurringOccurrenceCount' => count(array_filter($recurringLeafTasks, fn (array $task): bool => $task['occurrence']['snoozed'] ?? false)),
+        ];
         $stats = [
             'progress' => $totalWeight === 0 ? 0 : (int) round($completedWeight / $totalWeight * 100),
             'completed' => $completed,
-            'total' => count($leafTasks),
+            'total' => count($finiteLeafTasks),
             'critical' => count($calculation->criticalTaskIds),
             'opened' => $statusCount('opened'),
             'blocked' => $statusCount('blocked'),
             'scheduled' => $statusCount('scheduled'),
             'late' => $statusCount('late'),
             'in_progress' => $statusCount('in_progress'),
-            'without_dates' => count(array_filter($leafTasks, fn (array $task): bool => $task['start'] === null && $task['finish'] === null)),
-            'without_duration' => count(array_filter($leafTasks, fn (array $task): bool => $task['plannedDurationWorkdays'] === null)),
+            'without_dates' => count(array_filter($finiteLeafTasks, fn (array $task): bool => $task['start'] === null && $task['finish'] === null)),
+            'without_duration' => count(array_filter($finiteLeafTasks, fn (array $task): bool => $task['plannedDurationWorkdays'] === null)),
+            'finite' => ['totalTasks' => count($finiteLeafTasks), 'completedTasks' => $completed, 'progressPercent' => $totalWeight === 0 ? 0 : (int) round($completedWeight / $totalWeight * 100), 'projectFinish' => $workspaceProjection['projectFinish'], 'criticalTaskCount' => count($calculation->criticalTaskIds)],
+            'operational' => $operational,
         ];
 
         return response()->json(['data' => ['project' => ['id' => $project->id, 'name' => $project->name, 'source' => 'Local', 'sync_status' => 'local', 'updated_at' => $project->updated_at, 'role' => $member->role], 'tasks' => $rows, 'people' => $people, 'dependencies' => $dependencies, 'stats' => $stats]]);
@@ -338,6 +336,7 @@ final class ProjectController
                 DB::table($siblingTable)->where('id', $sibling['id'])->where('project_id', $projectId)->update($changes);
             }
             abort_if($this->hasForbiddenScheduleDependencies($projectId), 422, 'A nova hierarquia tornaria uma dependência inválida.');
+            abort_if($this->hasRecurringSchedulePredecessor($projectId), 422, 'RECURRENCE_DEPENDENCY_FORBIDDEN');
             DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
         });
 
@@ -348,11 +347,433 @@ final class ProjectController
     {
         $this->editable($request, $projectId);
         $data = $request->validate(['completed' => ['required', 'boolean'], 'actualCompletionDate' => ['sometimes', 'nullable', 'date']]);
-        $updated = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->update(['completed_at' => $data['completed'] ? ($data['actualCompletionDate'] ?? now()->toDateString()) : null, 'updated_at' => now()]);
-        abort_unless($updated || DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->exists(), 404, 'Tarefa não encontrada.');
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        abort_unless($task, 404, 'Tarefa não encontrada.');
+        abort_if($data['completed'] && $task->recurrenceRule !== null, 422, 'Use a conclusão de ocorrência para uma tarefa recorrente.');
+        DB::table('project_tasks')->where('id', $taskId)->update(['completed_at' => $data['completed'] ? ($data['actualCompletionDate'] ?? now()->toDateString()) : null, 'updated_at' => now()]);
         DB::table('projects')->where('id', $projectId)->update(['updated_at' => now()]);
 
         return response()->json(['data' => ['id' => $taskId, 'completed' => $data['completed']]]);
+    }
+
+    public function interpretRecurrence(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->member($request, $projectId);
+        $this->checklistTask($projectId, $taskId);
+        $data = $request->validate(['expression' => ['required', 'string', 'max:255']]);
+        try {
+            $rule = (new RecurrenceParser)->parse($data['expression'], now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable());
+        } catch (RecurrenceValidationException $exception) {
+            return response()->json(['code' => 'RECURRENCE_EXPRESSION_INVALID', 'message' => $exception->getMessage(), 'token' => $exception->token], 422);
+        }
+
+        return response()->json(['data' => ['canonicalExpression' => (new RecurrenceFormatter)->format($rule), 'rule' => $rule->toArray()]]);
+    }
+
+    public function saveRecurrence(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['source' => ['required', 'in:expression,editor'], 'expression' => ['nullable', 'string', 'max:255'], 'rule' => ['nullable', 'array'], 'expectedRecurrenceVersion' => ['nullable', 'integer', 'min:0']]);
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        abort_unless($task, 404, 'Tarefa não encontrada.');
+        abort_if(isset($data['expectedRecurrenceVersion']) && (int) $data['expectedRecurrenceVersion'] !== (int) $task->recurrenceVersion, 409, 'RECURRENCE_VERSION_CONFLICT');
+        abort_if($this->isRecurrencePredecessor($projectId, $taskId), 422, 'RECURRENCE_DEPENDENCY_FORBIDDEN');
+        try {
+            $rule = $data['source'] === 'expression'
+                ? (new RecurrenceParser)->parse((string) ($data['expression'] ?? ''), now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable())
+                : RecurrenceRule::fromArray($data['rule'] ?? []);
+        } catch (RecurrenceValidationException|\ValueError $exception) {
+            return response()->json(['code' => 'RECURRENCE_EXPRESSION_INVALID', 'message' => $exception->getMessage()], 422);
+        }
+        $calendar = new WorkCalendar;
+        $first = (new RecurrenceCalculator)->first($rule, now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable(), $calendar);
+        if ($first === null) {
+            return response()->json(['code' => 'RECURRENCE_EXPRESSION_INVALID', 'message' => 'A regra não possui uma ocorrência futura dentro do período configurado.'], 422);
+        }
+        $planning = (new TaskPlanningNormalizer($calendar))->normalize(
+            $this->taskPlanningState($task),
+            new TaskPlanningPatch(hasStart: true, start: $calendar->onOrAfter($first->date)),
+            PlanningDriver::Start,
+        );
+        $version = (int) $task->recurrenceVersion + 1;
+        DB::table('project_tasks')->where('id', $taskId)->update(['recurrenceRule' => json_encode($rule->toArray(), JSON_THROW_ON_ERROR), 'recurrenceCursor' => $first->dateString(), 'recurrenceVersion' => $version, 'planned_start' => $planning->start?->format('Y-m-d'), 'planned_finish' => $planning->finish?->format('Y-m-d'), 'plannedDurationWorkdays' => $planning->durationWorkdays, 'completed_at' => null, 'updated_at' => now()]);
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => ['taskId' => $taskId, 'recurrence' => ['rule' => $rule->toArray(), 'expression' => (new RecurrenceFormatter)->format($rule)], 'occurrence' => ['logicalDate' => $first->dateString(), 'scheduledStart' => $planning->start?->format('Y-m-d'), 'scheduledFinish' => $planning->finish?->format('Y-m-d')], 'recurrenceVersion' => $version]]);
+    }
+
+    public function removeRecurrence(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['expectedRecurrenceVersion' => ['nullable', 'integer', 'min:0']]);
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        abort_unless($task, 404, 'Tarefa não encontrada.');
+        abort_if(isset($data['expectedRecurrenceVersion']) && (int) $data['expectedRecurrenceVersion'] !== (int) $task->recurrenceVersion, 409, 'RECURRENCE_VERSION_CONFLICT');
+        $version = (int) $task->recurrenceVersion + 1;
+        DB::table('project_tasks')->where('id', $taskId)->update(['recurrenceRule' => null, 'recurrenceCursor' => null, 'recurrenceVersion' => $version, 'completed_at' => null, 'updated_at' => now()]);
+
+        return response()->json(['data' => ['taskId' => $taskId, 'recurrence' => null, 'recurrenceVersion' => $version]]);
+    }
+
+    public function completeRecurrenceForever(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['expectedRecurrenceVersion' => ['nullable', 'integer', 'min:0']]);
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        abort_unless($task, 404, 'Tarefa não encontrada.');
+        abort_if(isset($data['expectedRecurrenceVersion']) && (int) $data['expectedRecurrenceVersion'] !== (int) $task->recurrenceVersion, 409, 'RECURRENCE_VERSION_CONFLICT');
+        $version = (int) $task->recurrenceVersion + 1;
+        DB::table('project_tasks')->where('id', $taskId)->update(['recurrenceRule' => null, 'recurrenceCursor' => null, 'recurrenceVersion' => $version, 'completed_at' => now('America/Sao_Paulo')->toDateString(), 'updated_at' => now()]);
+        $this->touchProject($projectId);
+
+        return response()->json(['data' => ['taskId' => $taskId, 'taskCompleted' => true, 'recurrenceVersion' => $version]]);
+    }
+
+    public function previewSnooze(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['expectedLogicalDate' => ['required', 'date'], 'option' => ['required', 'in:nextWorkday,nextWeek,workdays,date'], 'workdays' => ['nullable', 'integer'], 'targetDate' => ['nullable', 'date']]);
+        $task = $this->snoozeTask($projectId, $taskId, $data['expectedLogicalDate']);
+        $project = DB::table('projects')->where('id', $projectId)->firstOrFail();
+        $target = $this->snoozeTarget($data);
+        $calendar = new WorkCalendar;
+        $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
+        $tasks = DB::table('project_tasks')->where('project_id', $projectId)->get();
+        $sections = DB::table('project_sections')->where('project_id', $projectId)->get();
+        $dependencies = DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get();
+        $service = new ProjectWorkspaceProjectionService;
+        $before = $service->calculate($tasks, $sections, $dependencies, $today, $calendar);
+        $state = (new TaskPlanningNormalizer($calendar))->normalize(
+            $this->taskPlanningState($task),
+            new TaskPlanningPatch(hasStart: true, start: $target),
+            PlanningDriver::Start,
+        );
+        $after = $service->calculate($tasks, $sections, $dependencies, $today, $calendar, [$taskId => $state]);
+        $impact = $service->compare($before, $after);
+        $token = encrypt(json_encode(['taskId' => $taskId, 'cursor' => $task->recurrenceCursor, 'target' => $target->format('Y-m-d'), 'updatedAt' => $task->updated_at, 'workspaceRevision' => $project->updated_at], JSON_THROW_ON_ERROR));
+
+        return response()->json(['data' => ['normalizedTargetDate' => $target->format('Y-m-d'), 'occurrenceBefore' => ['logicalDate' => $task->recurrenceCursor, 'scheduledStart' => $task->planned_start], 'occurrenceAfter' => ['logicalDate' => $task->recurrenceCursor, 'scheduledStart' => $target->format('Y-m-d')], 'impact' => $impact, 'previewToken' => $token, 'workspaceRevision' => $project->updated_at]]);
+    }
+
+    public function snoozeOccurrence(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate(['expectedLogicalDate' => ['required', 'date'], 'option' => ['required', 'in:nextWorkday,nextWeek,workdays,date'], 'workdays' => ['nullable', 'integer'], 'targetDate' => ['nullable', 'date'], 'previewToken' => ['required', 'string']]);
+        $target = $this->snoozeTarget($data);
+        try {
+            $preview = json_decode(decrypt($data['previewToken']), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
+            abort(409, 'O preview não é mais válido.');
+        }
+        $scheduledStart = DB::transaction(function () use ($data, $preview, $projectId, $taskId, $target): ?string {
+            $project = DB::table('projects')->where('id', $projectId)->lockForUpdate()->firstOrFail();
+            $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->lockForUpdate()->first();
+            abort_unless($task, 404, 'Tarefa não encontrada.');
+            abort_if($task->recurrenceRule === null || $task->recurrenceCursor !== $data['expectedLogicalDate'], 409, 'O cursor da ocorrência está desatualizado.');
+            abort_if($preview['taskId'] !== $taskId || $preview['cursor'] !== $task->recurrenceCursor || $preview['target'] !== $target->format('Y-m-d') || ($preview['updatedAt'] ?? null) !== $task->updated_at || ($preview['workspaceRevision'] ?? null) !== $project->updated_at, 409, 'O preview não é mais válido.');
+            $state = (new TaskPlanningNormalizer(new WorkCalendar))->normalize(
+                $this->taskPlanningState($task),
+                new TaskPlanningPatch(hasStart: true, start: $target),
+                PlanningDriver::Start,
+            );
+            DB::table('project_tasks')->where('id', $taskId)->update([
+                'planned_start' => $state->start?->format('Y-m-d'),
+                'planned_finish' => $state->finish?->format('Y-m-d'),
+                'plannedDurationWorkdays' => $state->durationWorkdays,
+                'updated_at' => now(),
+            ]);
+
+            return $state->start?->format('Y-m-d');
+        });
+        $this->touchProject($projectId);
+        $workspaceRevision = DB::table('projects')->where('id', $projectId)->value('updated_at');
+
+        return response()->json(['data' => ['taskId' => $taskId, 'occurrence' => ['logicalDate' => $data['expectedLogicalDate'], 'scheduledStart' => $scheduledStart], 'workspaceRevision' => $workspaceRevision]]);
+    }
+
+    public function completeOccurrence(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->editable($request, $projectId);
+        $data = $request->validate([
+            'expectedLogicalDate' => ['required', 'date'],
+            'completionCommandId' => ['required', 'uuid'],
+            'actualCompletionDate' => ['sometimes', 'nullable', 'date'],
+        ]);
+
+        $result = DB::transaction(function () use ($request, $data, $projectId, $taskId): array {
+            $existing = DB::table('projectTaskOccurrence')
+                ->where('completionCommandId', $data['completionCommandId'])
+                ->first();
+            if ($existing !== null) {
+                abort_if($existing->projectId !== $projectId || $existing->taskId !== $taskId, 409, 'O comando de conclusão já foi usado.');
+
+                return ['idempotent' => true, 'occurrence' => $existing, 'nextOccurrence' => $this->currentOccurrence($projectId, $taskId)];
+            }
+
+            $task = DB::table('project_tasks')
+                ->where('id', $taskId)
+                ->where('project_id', $projectId)
+                ->lockForUpdate()
+                ->first();
+            abort_unless($task, 404, 'Tarefa não encontrada.');
+
+            // Recheck after locking: another request for the same task may have
+            // committed the command while this request waited on the row lock.
+            $existing = DB::table('projectTaskOccurrence')
+                ->where('completionCommandId', $data['completionCommandId'])
+                ->first();
+            if ($existing !== null) {
+                abort_if($existing->projectId !== $projectId || $existing->taskId !== $taskId, 409, 'O comando de conclusão já foi usado.');
+
+                return ['idempotent' => true, 'occurrence' => $existing, 'nextOccurrence' => $this->currentOccurrence($projectId, $taskId)];
+            }
+
+            abort_if($task->recurrenceRule === null || $task->recurrenceCursor !== $data['expectedLogicalDate'], 409, 'O cursor da ocorrência está desatualizado.');
+            try {
+                $rule = RecurrenceRule::fromArray(json_decode($task->recurrenceRule, true, 512, JSON_THROW_ON_ERROR));
+            } catch (RecurrenceValidationException|\JsonException|\ValueError $exception) {
+                abort(422, 'A regra de recorrência persistida é inválida.');
+            }
+
+            $calendar = new WorkCalendar;
+            $cursor = new LogicalOccurrence(new DateTimeImmutable($task->recurrenceCursor));
+            $scheduledStart = $task->planned_start === null
+                ? $calendar->onOrAfter($cursor->date)
+                : new DateTimeImmutable($task->planned_start);
+            $completedAt = new DateTimeImmutable($data['actualCompletionDate'] ?? now('America/Sao_Paulo')->toDateString());
+            $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
+            $transition = (new RecurrenceLifecycle)->afterCompletion($rule, $cursor, $scheduledStart, $completedAt, $today, $calendar);
+            $now = now();
+            $occurrence = [
+                'id' => (string) Str::ulid(),
+                'projectId' => $projectId,
+                'taskId' => $taskId,
+                'logicalDate' => $cursor->dateString(),
+                'scheduledStart' => $scheduledStart->format('Y-m-d'),
+                'scheduledFinish' => $task->planned_finish,
+                'completedAt' => $completedAt->format('Y-m-d'),
+                'completedByUserId' => $request->user()->id,
+                'recurrenceVersion' => (int) $task->recurrenceVersion,
+                'recurrenceRuleSnapshot' => $task->recurrenceRule,
+                'completionCommandId' => $data['completionCommandId'],
+                'createdAt' => $now,
+                'updatedAt' => $now,
+            ];
+            DB::table('projectTaskOccurrence')->insert($occurrence);
+
+            if ($transition->taskCompleted) {
+                DB::table('project_tasks')->where('id', $taskId)->update([
+                    'recurrenceRule' => null,
+                    'recurrenceCursor' => null,
+                    'recurrenceVersion' => (int) $task->recurrenceVersion + 1,
+                    'completed_at' => $completedAt->format('Y-m-d'),
+                    'updated_at' => $now,
+                ]);
+
+                return ['idempotent' => false, 'occurrence' => (object) $occurrence, 'nextOccurrence' => null];
+            }
+
+            $nextLogicalDate = $transition->occurrence->date;
+            $nextStart = $calendar->onOrAfter($nextLogicalDate);
+            $planning = (new TaskPlanningNormalizer($calendar))->normalize(
+                $this->taskPlanningState($task),
+                new TaskPlanningPatch(hasStart: true, start: $nextStart),
+                PlanningDriver::Start,
+            );
+            DB::table('project_tasks')->where('id', $taskId)->update([
+                'recurrenceCursor' => $transition->occurrence->dateString(),
+                'planned_start' => $planning->start?->format('Y-m-d'),
+                'planned_finish' => $planning->finish?->format('Y-m-d'),
+                'plannedDurationWorkdays' => $planning->durationWorkdays,
+                'completed_at' => null,
+                'updated_at' => $now,
+            ]);
+
+            return [
+                'idempotent' => false,
+                'occurrence' => (object) $occurrence,
+                'nextOccurrence' => [
+                    'logicalDate' => $transition->occurrence->dateString(),
+                    'scheduledStart' => $planning->start?->format('Y-m-d'),
+                    'scheduledFinish' => $planning->finish?->format('Y-m-d'),
+                ],
+            ];
+        });
+        if (! $result['idempotent']) {
+            $this->touchProject($projectId);
+        }
+
+        return response()->json(['data' => [
+            'taskId' => $taskId,
+            'idempotent' => $result['idempotent'],
+            'completedOccurrence' => $this->occurrencePayload($result['occurrence']),
+            'nextOccurrence' => $result['nextOccurrence'],
+            'taskCompleted' => $result['nextOccurrence'] === null,
+        ]]);
+    }
+
+    public function occurrenceHistory(Request $request, string $projectId, string $taskId): JsonResponse
+    {
+        $this->member($request, $projectId);
+        $this->checklistTask($projectId, $taskId);
+        $data = $request->validate(['limit' => ['sometimes', 'integer', 'min:1', 'max:100'], 'cursor' => ['sometimes', 'string', 'max:512']]);
+        $query = DB::table('projectTaskOccurrence')
+            ->where('projectId', $projectId)
+            ->where('taskId', $taskId)
+            ->orderByDesc('completedAt')
+            ->orderByDesc('id');
+        if (isset($data['cursor'])) {
+            $cursor = $this->decodeOccurrenceCursor($data['cursor']);
+            $query->where(function ($query) use ($cursor): void {
+                $query->where('completedAt', '<', $cursor['completedAt'])
+                    ->orWhere(function ($query) use ($cursor): void {
+                        $query->where('completedAt', $cursor['completedAt'])->where('id', '<', $cursor['id']);
+                    });
+            });
+        }
+        $rows = $query->limit(($data['limit'] ?? 20) + 1)->get();
+        $hasMore = $rows->count() > ($data['limit'] ?? 20);
+        $items = $rows->take($data['limit'] ?? 20)->map(fn (object $row): array => $this->occurrencePayload($row))->values();
+        $last = $items->last();
+
+        return response()->json(['data' => [
+            'items' => $items,
+            'nextCursor' => $hasMore && $last !== null
+                ? base64_encode(json_encode(['completedAt' => $last['completedAt'], 'id' => $last['id']], JSON_THROW_ON_ERROR))
+                : null,
+        ]]);
+    }
+
+    private function snoozeTask(string $projectId, string $taskId, string $expectedLogicalDate): object
+    {
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        abort_unless($task, 404, 'Tarefa não encontrada.');
+        abort_if($task->recurrenceRule === null || $task->recurrenceCursor !== $expectedLogicalDate, 409, 'O cursor da ocorrência está desatualizado.');
+
+        return $task;
+    }
+
+    private function currentOccurrence(string $projectId, string $taskId): ?array
+    {
+        $task = DB::table('project_tasks')->where('id', $taskId)->where('project_id', $projectId)->first();
+        if ($task === null || $task->recurrenceCursor === null) {
+            return null;
+        }
+
+        return [
+            'logicalDate' => $task->recurrenceCursor,
+            'scheduledStart' => $task->planned_start,
+            'scheduledFinish' => $task->planned_finish,
+        ];
+    }
+
+    /** @return array{id: string, logicalDate: string, scheduledStart: ?string, scheduledFinish: ?string, completedAt: string, recurrenceVersion: int} */
+    private function occurrencePayload(object $occurrence): array
+    {
+        return [
+            'id' => $occurrence->id,
+            'logicalDate' => $occurrence->logicalDate,
+            'scheduledStart' => $occurrence->scheduledStart,
+            'scheduledFinish' => $occurrence->scheduledFinish,
+            'completedAt' => $occurrence->completedAt,
+            'recurrenceVersion' => (int) $occurrence->recurrenceVersion,
+        ];
+    }
+
+    /** @return array{rule: array<string, mixed>, expression: string, version: int, endsOn: ?string}|null */
+    private function workspaceRecurrence(object $task, WorkCalendar $calendar): ?array
+    {
+        if ($task->recurrenceRule === null) {
+            return null;
+        }
+        try {
+            $rule = RecurrenceRule::fromArray(json_decode($task->recurrenceRule, true, 512, JSON_THROW_ON_ERROR));
+        } catch (RecurrenceValidationException|\JsonException|\ValueError) {
+            // A malformed persisted rule must not be silently projected as a
+            // normal task. It remains operationally recurring but is omitted
+            // from presentation until corrected by an authorized edit.
+            return ['rule' => [], 'expression' => 'Regra inválida', 'version' => (int) $task->recurrenceVersion, 'endsOn' => null];
+        }
+
+        return [
+            'rule' => $rule->toArray(),
+            'expression' => (new RecurrenceFormatter)->format($rule),
+            'version' => (int) $task->recurrenceVersion,
+            'endsOn' => $rule->endsOn?->format('Y-m-d'),
+        ];
+    }
+
+    /** @param array{rule: array<string, mixed>, expression: string, version: int, endsOn: ?string}|null $recurrence
+     * @return array{logicalDate: string, scheduledStart: ?string, scheduledFinish: ?string, consideredStart: string, consideredDeadline: string, snoozed: bool}|null
+     */
+    private function workspaceOccurrence(object $task, ?array $recurrence, WorkCalendar $calendar): ?array
+    {
+        if ($recurrence === null || $task->recurrenceCursor === null) {
+            return null;
+        }
+        $logicalDate = new DateTimeImmutable($task->recurrenceCursor);
+        $normalStart = $calendar->onOrAfter($logicalDate)->format('Y-m-d');
+
+        return [
+            'logicalDate' => $task->recurrenceCursor,
+            'scheduledStart' => $task->planned_start,
+            'scheduledFinish' => $task->planned_finish,
+            'consideredStart' => $task->planned_start ?? $normalStart,
+            'consideredDeadline' => $task->planned_finish ?? $task->planned_start ?? $normalStart,
+            'snoozed' => $task->planned_start !== null && $task->planned_start !== $normalStart,
+        ];
+    }
+
+    /** @return array{completedAt: string, id: string} */
+    private function decodeOccurrenceCursor(string $encoded): array
+    {
+        try {
+            $cursor = json_decode(base64_decode($encoded, true) ?: '', true, 512, JSON_THROW_ON_ERROR);
+            if (! is_array($cursor) || ! isset($cursor['completedAt'], $cursor['id']) || ! is_string($cursor['completedAt']) || ! is_string($cursor['id'])) {
+                throw new \UnexpectedValueException;
+            }
+
+            return ['completedAt' => $cursor['completedAt'], 'id' => $cursor['id']];
+        } catch (\Throwable) {
+            abort(422, 'Cursor de histórico inválido.');
+        }
+    }
+
+    /** @param array<string, mixed> $data */
+    private function snoozeTarget(array $data): DateTimeImmutable
+    {
+        try {
+            return (new SnoozeTargetResolver(new WorkCalendar))->resolve($data['option'], now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable(), $data['workdays'] ?? null, isset($data['targetDate']) ? new DateTimeImmutable($data['targetDate']) : null);
+        } catch (RecurrenceValidationException $exception) {
+            abort(422, $exception->getMessage());
+        }
+    }
+
+    private function isRecurrencePredecessor(string $projectId, string $taskId): bool
+    {
+        foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get() as $dependency) {
+            if (in_array($taskId, $this->scheduleEndpointLeaves($projectId, $dependency->predecessor_kind, $dependency->predecessor_id), true)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function endpointContainsRecurringTask(string $projectId, string $kind, string $id): bool
+    {
+        return DB::table('project_tasks')->where('project_id', $projectId)->whereIn('id', $this->scheduleEndpointLeaves($projectId, $kind, $id))->whereNotNull('recurrenceRule')->exists();
+    }
+
+    private function hasRecurringSchedulePredecessor(string $projectId): bool
+    {
+        foreach (DB::table('project_schedule_dependencies')->where('project_id', $projectId)->get() as $dependency) {
+            if ($this->endpointContainsRecurringTask($projectId, $dependency->predecessor_kind, $dependency->predecessor_id)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function updateTask(Request $request, string $projectId, string $taskId): JsonResponse
@@ -746,6 +1167,7 @@ final class ProjectController
         $toKind = $data['toKind'] ?? 'task';
         abort_if($fromKind === $toKind && $data['from'] === $data['to'], 422, 'Um item não pode depender de si mesmo.');
         abort_unless($this->scheduleEndpointExists($projectId, $fromKind, $data['from']) && $this->scheduleEndpointExists($projectId, $toKind, $data['to']), 422, 'Ponta de dependência inválida.');
+        abort_if($this->endpointContainsRecurringTask($projectId, $fromKind, $data['from']), 422, 'RECURRENCE_DEPENDENCY_FORBIDDEN');
         abort_if(($fromKind === 'section' && $this->scheduleEndpointLeaves($projectId, $fromKind, $data['from']) === []) || ($toKind === 'section' && $this->scheduleEndpointLeaves($projectId, $toKind, $data['to']) === []), 422, 'Uma seção sem tarefas não pode participar de dependência temporal.');
         abort_if($this->forbiddenScheduleRelation($projectId, $fromKind, $data['from'], $toKind, $data['to']), 422, 'Uma seção não pode se relacionar com ela própria, suas descendentes ou tarefas internas.');
         abort_if(DB::table('project_schedule_dependencies')->where('project_id', $projectId)->where('predecessor_kind', $fromKind)->where('predecessor_id', $data['from'])->where('successor_kind', $toKind)->where('successor_id', $data['to'])->where('type', $data['type'])->exists(), 422, 'Dependência duplicada.');
@@ -1298,11 +1720,12 @@ final class ProjectController
 
     private function summary(object $project): array
     {
-        $tasks = DB::table('project_tasks')->where('project_id', $project->id)->get(['title', 'planned_start', 'planned_finish', 'plannedDurationWorkdays', 'completed_at']);
+        $tasks = DB::table('project_tasks')->where('project_id', $project->id)->get(['id', 'section_id', 'title', 'planned_start', 'planned_finish', 'plannedDurationWorkdays', 'completed_at', 'recurrenceRule']);
+        $finiteTasks = $tasks->filter(fn (object $task): bool => $task->recurrenceRule === null);
         $totalWeight = 0;
         $completedWeight = 0;
         $overdue = 0;
-        foreach ($tasks as $task) {
+        foreach ($finiteTasks as $task) {
             $weight = TaskPlan::fromDates(
                 '',
                 $task->title,
@@ -1317,14 +1740,36 @@ final class ProjectController
         }
 
         $statusCounts = ['opened' => 0, 'blocked' => 0, 'scheduled' => 0, 'late' => 0, 'in_progress' => 0];
-        $incompletePredecessors = DB::table('project_task_dependencies')->join('project_tasks as predecessor', 'predecessor.id', '=', 'project_task_dependencies.predecessor_task_id')->where('project_task_dependencies.project_id', $project->id)->whereNull('predecessor.completed_at')->pluck('project_task_dependencies.successor_task_id')->all();
-        foreach (DB::table('project_tasks')->where('project_id', $project->id)->get() as $task) {
-            $status = $this->status($task, $incompletePredecessors);
+        $calendar = new WorkCalendar;
+        $today = now('America/Sao_Paulo')->startOfDay()->toDateTimeImmutable();
+        $sectionParents = DB::table('project_sections')->where('project_id', $project->id)->pluck('parent_section_id', 'id')->all();
+        $taskSections = $tasks->pluck('section_id', 'id')->all();
+        $scheduleDependencies = DB::table('project_schedule_dependencies')->where('project_id', $project->id)->get()->map(fn (object $edge): ScheduleDependency => new ScheduleDependency(
+            $edge->predecessor_kind, $edge->predecessor_id, $edge->successor_kind, $edge->successor_id, $edge->type,
+        ))->all();
+        $projectionInputs = $tasks->map(fn (object $task): TaskProjectionInput => new TaskProjectionInput(
+            $task->id,
+            $task->planned_start ? new DateTimeImmutable($task->planned_start) : null,
+            $task->planned_finish ? new DateTimeImmutable($task->planned_finish) : null,
+            $task->completed_at !== null,
+            $task->completed_at ? new DateTimeImmutable($task->completed_at) : null,
+            $task->plannedDurationWorkdays === null ? null : (int) $task->plannedDurationWorkdays,
+        ))->all();
+        $normalizedDependencies = (new SectionDependencyNormalizer($calendar))->calculate($projectionInputs, $taskSections, $sectionParents, $scheduleDependencies, $today)['dependencies'];
+        $completedById = $tasks->mapWithKeys(fn (object $task): array => [$task->id => $task->completed_at !== null])->all();
+        $incompletePredecessors = [];
+        foreach ($normalizedDependencies as $dependency) {
+            if (! ($completedById[$dependency->predecessorId] ?? false)) {
+                $incompletePredecessors[$dependency->successorId] = true;
+            }
+        }
+        foreach ($tasks as $task) {
+            $status = $this->status($task, array_keys($incompletePredecessors));
             if (isset($statusCounts[$status])) {
                 $statusCounts[$status]++;
             }
         }
 
-        return ['id' => $project->id, 'name' => $project->name, 'taskCount' => $tasks->count(), 'progress' => $totalWeight ? (int) round($completedWeight / $totalWeight * 100) : 0, 'overdueTaskCount' => $overdue, 'role' => $project->role, 'updatedAt' => $project->updated_at, 'completed' => $tasks->whereNotNull('completed_at')->count(), 'total' => $tasks->count(), 'critical' => 0, 'opened' => $statusCounts['opened'], 'blocked' => $statusCounts['blocked'], 'scheduled' => $statusCounts['scheduled'], 'late' => $statusCounts['late'], 'in_progress' => $statusCounts['in_progress'], 'without_dates' => $tasks->filter(fn (object $task): bool => ! $task->planned_start && ! $task->planned_finish)->count(), 'without_duration' => $tasks->whereNull('plannedDurationWorkdays')->count()];
+        return ['id' => $project->id, 'name' => $project->name, 'taskCount' => $tasks->count(), 'progress' => $totalWeight ? (int) round($completedWeight / $totalWeight * 100) : 0, 'overdueTaskCount' => $overdue, 'role' => $project->role, 'updatedAt' => $project->updated_at, 'completed' => $finiteTasks->whereNotNull('completed_at')->count(), 'total' => $finiteTasks->count(), 'critical' => 0, 'opened' => $statusCounts['opened'], 'blocked' => $statusCounts['blocked'], 'scheduled' => $statusCounts['scheduled'], 'late' => $statusCounts['late'], 'in_progress' => $statusCounts['in_progress'], 'without_dates' => $finiteTasks->filter(fn (object $task): bool => ! $task->planned_start && ! $task->planned_finish)->count(), 'without_duration' => $finiteTasks->whereNull('plannedDurationWorkdays')->count()];
     }
 }
