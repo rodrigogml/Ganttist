@@ -241,7 +241,7 @@ const saving = ref(false);
 const recurrenceExpressionDraft = ref("");
 const recurrenceSaving = ref(false);
 const recurrenceError = ref("");
-type SnoozeOption = "nextWorkday" | "nextWeek" | "workdays";
+type SnoozeOption = "nextWorkday" | "nextWeek" | "workdays" | "date";
 type SnoozePreview = {
     option: SnoozeOption;
     workdays?: number;
@@ -1878,10 +1878,11 @@ function isRowContextTarget(target: EventTarget | null) {
     );
 }
 function openTaskContextMenu(task: Task, x: number, y: number) {
+    const recurringOccurrence = task.kind === "task" && task.recurrence && task.occurrence;
     taskContextMenu.value = {
         task,
         x: Math.max(8, Math.min(x, globalThis.innerWidth - 228)),
-        y: Math.max(8, Math.min(y, globalThis.innerHeight - 124)),
+        y: Math.max(8, Math.min(y, globalThis.innerHeight - (recurringOccurrence ? 270 : 188))),
     };
 }
 function openTaskContextMenuFromMouse(task: Task, event: MouseEvent) {
@@ -1975,6 +1976,130 @@ async function toggleTaskCompletionFromContext() {
         taskContextBusy.value = false;
         setTimeout(() => (toast.value = ""), 4000);
     }
+}
+async function completeOccurrenceFromContext() {
+    const menu = taskContextMenu.value,
+        projectId = store.workspace?.project.id;
+    if (!canMutateProject.value || !menu?.task.occurrence || !projectId || taskContextBusy.value) return;
+    taskContextMenu.value = null;
+    taskContextBusy.value = true;
+    try {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}/occurrence/complete`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({
+                expectedLogicalDate: menu.task.occurrence.logicalDate,
+                completionCommandId: crypto.randomUUID(),
+                actualCompletionDate: todayCivil(),
+            }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível concluir a ocorrência."));
+        const result = (await response.json()).data;
+        await store.load();
+        showToast(result.taskCompleted ? "Série concluída definitivamente" : "Ocorrência concluída; recorrência avançada", "success");
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível concluir a ocorrência.", "error");
+    } finally {
+        taskContextBusy.value = false;
+        setTimeout(() => (toast.value = ""), 4000);
+    }
+}
+async function snoozeOccurrenceFromContext(option: SnoozeOption, workdays?: number, targetDate?: string) {
+    const menu = taskContextMenu.value,
+        projectId = store.workspace?.project.id;
+    if (!canMutateProject.value || !menu?.task.occurrence || !projectId || taskContextBusy.value) return;
+    const task = menu.task;
+    const payload = {
+        expectedLogicalDate: task.occurrence.logicalDate,
+        option,
+        ...(workdays ? { workdays } : {}),
+        ...(targetDate ? { targetDate } : {}),
+    };
+    taskContextMenu.value = null;
+    taskContextBusy.value = true;
+    try {
+        const previewResponse = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}/occurrence/snooze-preview`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify(payload),
+        });
+        if (!previewResponse.ok) throw new Error(await responseError(previewResponse, "Não foi possível calcular o adiamento."));
+        const preview = (await previewResponse.json()).data;
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${task.id}/occurrence/snooze`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({ ...payload, previewToken: preview.previewToken }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível adiar a ocorrência."));
+        await store.load();
+        showToast(`Ocorrência adiada para ${preview.normalizedTargetDate}`, "success");
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível adiar a ocorrência.", "error");
+    } finally {
+        taskContextBusy.value = false;
+        setTimeout(() => (toast.value = ""), 4000);
+    }
+}
+function configuredWorkday(value: string) {
+    const weekday = new Date(value + "T12:00:00").getDay() || 7;
+    return (store.workspace?.calendar?.working_days ?? [1, 2, 3, 4, 5]).includes(weekday);
+}
+function nextConfiguredWorkday(value: string) {
+    let candidate = value;
+    for (let guard = 0; guard < 14; guard += 1) {
+        if (configuredWorkday(candidate)) return candidate;
+        candidate = shiftCivilDate(candidate, 1);
+    }
+    return value;
+}
+function addConfiguredWorkdays(value: string, days: number) {
+    let candidate = nextConfiguredWorkday(value);
+    for (let count = 0; count < days; count += 1) {
+        candidate = nextConfiguredWorkday(shiftCivilDate(candidate, 1));
+    }
+    return candidate;
+}
+function postponedStartDate(option: SnoozeOption, workdays?: number, targetDate?: string) {
+    if (targetDate) return targetDate;
+    const today = todayCivil();
+    if (option === "nextWeek") {
+        const weekday = new Date(today + "T12:00:00").getDay();
+        return nextConfiguredWorkday(shiftCivilDate(today, weekday === 0 ? 1 : 8 - weekday));
+    }
+    return option === "workdays"
+        ? addConfiguredWorkdays(today, workdays ?? 0)
+        : shiftCivilDate(today, 1);
+}
+async function scheduleTaskFromContext(targetDate: string) {
+    const menu = taskContextMenu.value,
+        projectId = store.workspace?.project.id;
+    if (!canMutateProject.value || !menu || !projectId || taskContextBusy.value) return;
+    taskContextMenu.value = null;
+    taskContextBusy.value = true;
+    try {
+        const response = await apiFetch(`/api/v1/projects/${projectId}/tasks/${menu.task.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json", Accept: "application/json", ...csrfHeaders() },
+            body: JSON.stringify({ plannedStart: targetDate, planningDriver: "start" }),
+        });
+        if (!response.ok) throw new Error(await responseError(response, "Não foi possível programar a tarefa."));
+        await store.load();
+        showToast(`Tarefa programada para ${targetDate}`, "success");
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível programar a tarefa.", "error");
+    } finally {
+        taskContextBusy.value = false;
+        setTimeout(() => (toast.value = ""), 4000);
+    }
+}
+async function postponeTaskFromContext(option: SnoozeOption, workdays?: number, targetDate?: string) {
+    const task = taskContextMenu.value?.task;
+    if (!task) return;
+    if (task.recurrence && task.occurrence) {
+        await snoozeOccurrenceFromContext(option, workdays, targetDate);
+        return;
+    }
+    await scheduleTaskFromContext(postponedStartDate(option, workdays, targetDate));
 }
 async function setTaskPriorityFromContext(priority: 1 | 2 | 3 | 4) {
     const menu = taskContextMenu.value;
@@ -4248,7 +4373,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         type="button"
                         role="menuitem"
                         :disabled="taskContextBusy"
-                        @click="toggleTaskCompletionFromContext"
+                        @click="taskContextMenu.task.recurrence && taskContextMenu.task.occurrence && !(taskContextMenu.task.completed ?? taskContextMenu.task.status === 'completed') ? completeOccurrenceFromContext() : toggleTaskCompletionFromContext()"
                     >
                         <svg
                             v-if="
@@ -4268,7 +4393,9 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                             (taskContextMenu.task.completed ??
                             taskContextMenu.task.status === "completed")
                                 ? "Desfazer conclusão"
-                                : "Concluir tarefa"
+                                : taskContextMenu.task.recurrence && taskContextMenu.task.occurrence
+                                  ? "Concluir e avançar recorrência"
+                                  : "Concluir tarefa"
                         }}</span>
                     </button>
                     <button
@@ -4283,6 +4410,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         <span>Filtrar esta tarefa</span>
                     </button>
                     <div v-if="taskContextMenu.task.kind === 'task' && canMutateProject" class="task-context-priorities" role="group" aria-label="Definir prioridade"><button v-for="option in taskPriorityOptions" :key="option.priority" type="button" class="task-context-priority" :class="[option.flag, { active: (taskContextMenu.task.priority ?? 1) === option.priority }]" :disabled="taskContextBusy" :aria-label="option.label" :title="option.label" @click="setTaskPriorityFromContext(option.priority)"><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button></div>
+                    <div v-if="taskContextMenu.task.kind === 'task' && canMutateProject" class="task-context-postpones" role="group" aria-label="Adiar ou programar tarefa"><button type="button" :disabled="taskContextBusy" aria-label="Programar para hoje" title="Hoje" @click="postponeTaskFromContext('date', undefined, todayCivil())"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="5.5" width="16" height="14" rx="2"></rect><path d="M8 3.5v4M16 3.5v4M4 10h16M12 13v3M10.5 14.5h3"></path></svg></button><button type="button" :disabled="taskContextBusy" aria-label="Programar para amanhã" title="Amanhã" @click="postponeTaskFromContext('date', undefined, shiftCivilDate(todayCivil(), 1))"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.5"></circle><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6 7 7M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"></path></svg></button><button type="button" :disabled="taskContextBusy" aria-label="Programar para a próxima semana" title="Próxima semana" @click="postponeTaskFromContext('nextWeek')"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="5.5" width="17" height="14" rx="2"></rect><path d="M7.5 3.5v4M16.5 3.5v4M3.5 10h17M9 14h6M13 11.5l2.5 2.5-2.5 2.5"></path></svg></button><button type="button" :disabled="taskContextBusy" aria-label="Programar para 3 dias úteis" title="3 dias úteis" @click="postponeTaskFromContext('workdays', 3)"><span aria-hidden="true">+3</span></button><button type="button" :disabled="taskContextBusy" aria-label="Programar para 7 dias úteis" title="7 dias úteis" @click="postponeTaskFromContext('workdays', 7)"><span aria-hidden="true">+7</span></button></div>
                     <template v-if="taskContextMenu.task.kind === 'task' && canMutateProject"><button type="button" role="menuitem" @click="duplicateTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="1.5"></rect><path d="M16 8V5.5A1.5 1.5 0 0 0 14.5 4h-9A1.5 1.5 0 0 0 4 5.5v9A1.5 1.5 0 0 0 5.5 16H8"></path></svg>Duplicar tarefa</button><button type="button" role="menuitem" class="context-danger" @click="deleteTaskFromContext"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"></path></svg>Excluir tarefa</button></template>
                     <template v-else-if="taskContextMenu.task.kind === 'section'"><div v-if="canMutateProject" class="task-context-section-create"><button type="button" role="menuitem" @click="createBelowSection('task')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>Tarefa</button><button type="button" role="menuitem" @click="createBelowSection('section')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v10H4zM12 13v4M10 15h4"></path></svg>Seção</button></div><div class="task-context-section-create"><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, false)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 9 4 4 4-4M5 5h14M5 19h14"></path></svg>Collapse all</button><button type="button" role="menuitem" @click="setBranchExpanded(taskContextMenu.task, true)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 15 4-4 4 4M5 5h14M5 19h14"></path></svg>Expand all</button></div></template>
                     <button
@@ -5013,20 +5141,18 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                         ></span>
                                         <div class="task-title">
                                             <div class="task-title-line">
-                                                <b>{{ task.title }}</b
-                                                ><span
+                                                <span
                                                     v-if="task.recurrence"
                                                     class="recurrence-row-marker"
                                                     :title="task.recurrence.expression"
                                                     :aria-label="'Recorrente: ' + task.recurrence.expression"
-                                                    >↻</span
-                                                >
-                                                ><span
+                                                >↻</span>
+                                                <b>{{ task.title }}</b>
+                                                <span
                                                     v-if="store.filterExceptions.has(task.id)"
                                                     class="filter-exception-badge"
                                                     title="Exibida por uma dependência, apesar do filtro atual"
-                                                    >Exceção de filtro</span
-                                                >
+                                                >Exceção de filtro</span>
                                             </div>
                                             <small
                                                 v-if="
