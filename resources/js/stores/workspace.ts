@@ -8,7 +8,7 @@ import { preparedManifest, removeProjectOffline } from '../offline/offline-store
 import { apiFetch } from '../lib/api'
 
 export type WorkspaceSortField = 'manual' | 'title' | 'start' | 'finish' | 'status' | 'priority'
-export type WorkspaceGroupField = 'none' | 'status' | 'assignee' | 'priority'
+export type WorkspaceGroupField = 'none' | 'status' | 'assignee' | 'priority' | 'date'
 
 const activeProjectStorageKey = 'ganttist.active-project-id'
 const activeProjectStorage = () => typeof localStorage === 'undefined' ? null : localStorage
@@ -305,7 +305,7 @@ function sortVisibleHierarchy(tasks: readonly Task[], field: WorkspaceSortField,
     children.set(parent, [...(children.get(parent) ?? []), task])
   }
   const value = (task: Task): string | number => field === 'title' ? task.title : field === 'start' ? task.start ?? '' : field === 'finish' ? task.finish ?? '' : field === 'status' ? task.status : field === 'priority' ? task.priority ?? 0 : ''
-  const groupValue = (task: Task, grouping: WorkspaceGroupField): string | number => grouping === 'status' ? task.status : grouping === 'assignee' ? task.assignee ?? 'Sem responsável' : grouping === 'priority' ? task.priority ?? 0 : ''
+  const groupValue = (task: Task, grouping: WorkspaceGroupField): string | number => grouping === 'status' ? task.status : grouping === 'assignee' ? task.assignee ?? 'Sem responsável' : grouping === 'priority' ? task.priority ?? 0 : grouping === 'date' ? task.start ?? 'Sem data' : ''
   const compareValue = (a: string | number, b: string | number) => typeof a === 'number' && typeof b === 'number' ? a - b : String(a).localeCompare(String(b), 'pt-BR')
   const compare = (left: Task, right: Task) => {
     if (group !== 'none') { const grouped = compareValue(groupValue(left, group), groupValue(right, group)); if (grouped) return grouped }

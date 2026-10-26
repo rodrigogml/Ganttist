@@ -299,6 +299,17 @@ describe('workspace visibility', () => {
     expect(store.tasks.map(task => task.id)).toEqual(['late', 'opened-a', 'opened-z'])
   })
 
+  it('groups sibling tasks by their planned start date', () => {
+    const store = useWorkspaceStore()
+    const base = { kind: 'task' as const, level: 0, finish: null, progress: 0, critical: false, status: 'opened' as const }
+    store.workspace = { project: { id: 'date-group', name: 'Projeto', source: 'Local', sync_status: 'local', updated_at: '2026-09-22T00:00:00Z' }, tasks: [
+      { ...base, id: 'later', title: 'Depois', start: '2026-10-12' }, { ...base, id: 'earlier', title: 'Antes', start: '2026-10-03' }, { ...base, id: 'unscheduled', title: 'Sem data', start: null },
+    ], dependencies: [], stats: { progress: 0, completed: 0, total: 3, critical: 0 } }
+    store.groupBy = 'date'
+
+    expect(store.tasks.map(task => task.id)).toEqual(['earlier', 'later', 'unscheduled'])
+  })
+
   it('keeps the manual sibling order inside each group when no sort is selected', () => {
     const store = useWorkspaceStore()
     const base = { kind: 'task' as const, level: 0, start: null, finish: null, progress: 0, critical: false }

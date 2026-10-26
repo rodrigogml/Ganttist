@@ -318,14 +318,15 @@ type SavedTaskView = {
         sortDirection?: "asc" | "desc";
         subsortBy?: "manual" | "title" | "start" | "finish" | "status" | "priority";
         subsortDirection?: "asc" | "desc";
-        groupBy?: "none" | "status" | "assignee" | "priority";
-        subgroupBy?: "none" | "status" | "assignee" | "priority";
+        groupBy?: "none" | "status" | "assignee" | "priority" | "date";
+        subgroupBy?: "none" | "status" | "assignee" | "priority" | "date";
         gantt?: { zoom?: "day" | "week" | "month" };
     };
     formatVersion: number;
 };
 const savedViews = ref<SavedTaskView[]>([]);
 const activeSavedViewId = ref<string | null>(null);
+const viewsMenuPosition = ref({ top: 0, left: 0 });
 const viewActionsMenu = ref<{ view: SavedTaskView; top: number; left: number } | null>(null);
 const loadingViews = ref(false);
 const viewDialog = ref<{ mode: "create" | "duplicate" | "rename"; name: string; source: SavedTaskView | null } | null>(null);
@@ -398,6 +399,17 @@ function toggleViewActions(event: MouseEvent, view: SavedTaskView) {
         if (!viewActionsMenu.value) return;
         const position = positionedMenu(viewActionsMenuElement.value, bounds, "bottom-end");
         viewActionsMenu.value = { ...viewActionsMenu.value, ...position };
+    });
+}
+function toggleViewsMenu() {
+    viewsMenu.value = !viewsMenu.value;
+    viewActionsMenu.value = null;
+    if (!viewsMenu.value) return;
+    const anchor = viewsButton.value?.getBoundingClientRect();
+    if (!anchor) return;
+    void nextTick(() => {
+        if (!viewsMenu.value) return;
+        viewsMenuPosition.value = positionedMenu(viewsMenuElement.value, anchor, "bottom-end");
     });
 }
 function applySavedView(view: SavedTaskView) {
@@ -514,6 +526,12 @@ async function resolveViewImport(strategy: "create" | "overwrite") {
 }
 const hierarchyButton = ref<HTMLElement | null>(null),
     hierarchyMenuElement = ref<HTMLElement | null>(null),
+    queryHelpButton = ref<HTMLElement | null>(null),
+    queryHelpElement = ref<HTMLElement | null>(null),
+    sortButton = ref<HTMLElement | null>(null),
+    sortMenuElement = ref<HTMLElement | null>(null),
+    groupingButton = ref<HTMLElement | null>(null),
+    groupingMenuElement = ref<HTMLElement | null>(null),
     filterButton = ref<HTMLElement | null>(null),
     filterMenu = ref<HTMLElement | null>(null),
     viewsButton = ref<HTMLElement | null>(null),
@@ -526,6 +544,8 @@ const hierarchyButton = ref<HTMLElement | null>(null),
     dependencyPickerMenuElement = ref<HTMLElement | null>(null),
     quickPriorityMenuElement = ref<HTMLElement | null>(null),
     editorPriorityWrap = ref<HTMLElement | null>(null);
+const sortMenu = ref(false);
+const groupingMenu = ref(false);
 const quickAssigneeMenu = ref<{
     taskId: string;
     top: number;
@@ -1572,6 +1592,24 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
     )
         hierarchyMenu.value = false;
     if (
+        queryHelpPanel.value &&
+        !queryHelpButton.value?.contains(target) &&
+        !queryHelpElement.value?.contains(target)
+    )
+        queryHelpPanel.value = false;
+    if (
+        sortMenu.value &&
+        !sortButton.value?.contains(target) &&
+        !sortMenuElement.value?.contains(target)
+    )
+        sortMenu.value = false;
+    if (
+        groupingMenu.value &&
+        !groupingButton.value?.contains(target) &&
+        !groupingMenuElement.value?.contains(target)
+    )
+        groupingMenu.value = false;
+    if (
         filters.value &&
         !filterButton.value?.contains(target) &&
         !filterMenu.value?.contains(target)
@@ -1942,6 +1980,14 @@ function focusTaskSearchFromShortcut(event: KeyboardEvent) {
 function clearTaskFilters() {
     store.clearTaskFilters();
     filters.value = false;
+}
+function updateSortBy(value: string) {
+    store.sortBy = value as typeof store.sortBy;
+    if (store.sortBy === "manual") store.subsortBy = "manual";
+}
+function updateGroupBy(value: string) {
+    store.groupBy = value as typeof store.groupBy;
+    if (store.groupBy === "none") store.subgroupBy = "none";
 }
 function applyHierarchyAction(action: "collapse" | "expand" | "intermediate") {
     if (action === "collapse") store.collapseAllGroups();
@@ -2898,6 +2944,7 @@ function handleViewportResize() {
     dependencyContextMenu.value = null;
     dependencyPickerMenu.value = null;
     viewActionsMenu.value = null;
+    viewsMenu.value = false;
     measureGantt();
 }
 function toggleEditorPinned() {
@@ -4041,14 +4088,10 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         <small v-if="store.searchError" id="task-search-error" class="search-query-error" role="alert">
                             {{ store.searchError }} A busca anterior continua aplicada.
                         </small>
-                        <small v-else-if="store.search" id="task-search-result" class="search-query-error search-query-result" role="status">
-                            {{ store.queryResultCount }} {{ store.queryResultCount === 1 ? "tarefa encontrada" : "tarefas encontradas" }}
-                            <template v-if="store.queryWarnings.length"> · {{ store.queryWarnings.join(" ") }}</template>
-                        </small>
                         </div>
                         <div class="query-assistance">
-                        <button type="button" class="soft-btn query-help-trigger" aria-label="Ajuda da sintaxe de busca" title="Ajuda da sintaxe de busca" :aria-expanded="queryHelpPanel" aria-haspopup="dialog" @click="queryHelpPanel = !queryHelpPanel">?</button>
-                        <div v-if="queryHelpPanel" class="hierarchy-menu query-help" role="dialog" aria-label="Ajuda da consulta">
+                        <button ref="queryHelpButton" type="button" class="soft-btn query-help-trigger" aria-label="Ajuda da sintaxe de busca" title="Ajuda da sintaxe de busca" :aria-expanded="queryHelpPanel" aria-haspopup="dialog" @click="queryHelpPanel = !queryHelpPanel">?</button>
+                        <div v-if="queryHelpPanel" ref="queryHelpElement" class="hierarchy-menu query-help" role="dialog" aria-label="Ajuda da consulta">
                             <header><b>Sintaxe da busca</b><small>Combine palavras livres e critérios no mesmo campo.</small></header>
                             <section aria-labelledby="query-help-fields"><b id="query-help-fields">Campos</b><dl><dt><code>status:</code></dt><dd>aberta, em-andamento, agendada, atrasada, bloqueada, concluida</dd><dt><code>responsavel:</code></dt><dd>eu, sem, outros ou um nome entre aspas</dd><dt><code>data:</code></dt><dd>hoje, amanha, proximos-7-dias, AAAA-MM-DD ou início..fim</dd><dt><code>prioridade:</code></dt><dd>alta, media ou baixa</dd><dt><code>secao:</code></dt><dd>sem ou um nome entre aspas</dd></dl></section>
                             <section aria-labelledby="query-help-operators"><b id="query-help-operators">Operadores</b><p><code>&amp;</code> e · <code>|</code> ou · <code>!</code> não · <code>()</code> agrupa · <code>*</code> curinga</p></section>
@@ -4080,10 +4123,10 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         </div>
                     </div>
                     <div class="saved-views-control">
-                        <button ref="viewsButton" type="button" class="soft-btn views-trigger" aria-label="Abrir views" title="Views" :aria-expanded="viewsMenu" aria-haspopup="dialog" @click="viewsMenu = !viewsMenu; viewActionsMenu = null">
+                        <button ref="viewsButton" type="button" class="soft-btn views-trigger" aria-label="Abrir views" title="Views" :aria-expanded="viewsMenu" aria-haspopup="dialog" @click="toggleViewsMenu">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="15.5" rx="2" /><path d="M8 4v15.5M11 8h5.5M11 12h5.5M11 16h3" /></svg>
                         </button>
-                        <div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" @keydown.esc="viewsMenu = false; viewActionsMenu = null; viewsButton?.focus()">
+                        <Teleport to="body"><div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" :style="viewsMenuPosition" @keydown.esc="viewsMenu = false; viewActionsMenu = null; viewsButton?.focus()">
                             <header>
                                 <div><b>Views</b><small>Configurações privadas deste projeto.</small></div>
                                 <div class="saved-views-header-actions">
@@ -4106,7 +4149,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                     </div>
                                 </div>
                             </div>
-                        </div>
+                        </div></Teleport>
                         <Teleport to="body">
                             <div v-if="viewActionsMenu" ref="viewActionsMenuElement" class="saved-view-actions-menu" role="menu" :aria-label="`Ações da view ${viewActionsMenu.view.name}`" :style="{ top: `${viewActionsMenu.top}px`, left: `${viewActionsMenu.left}px` }" @keydown.esc="viewActionsMenu = null">
                                 <button type="button" role="menuitem" @click="overwriteSavedView(viewActionsMenu.view); viewActionsMenu = null">Salvar alterações</button>
@@ -4118,19 +4161,23 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         </Teleport>
                         <input ref="viewImportInput" class="sr-only" type="file" accept="application/json,.json" @change="importSavedView" />
                     </div>
-                    <div class="view-control" aria-label="Ordenação">
-                        <label class="sr-only" for="task-sort">Ordenar tarefas</label>
-                        <select id="task-sort" v-model="store.sortBy">
-                            <option value="manual">Ordem manual</option><option value="title">Título</option><option value="start">Data inicial</option><option value="finish">Data final</option><option value="status">Status</option><option value="priority">Prioridade</option>
-                        </select>
-                        <button type="button" class="soft-btn" :disabled="store.sortBy === 'manual'" :aria-label="store.sortDirection === 'asc' ? 'Ordem crescente' : 'Ordem decrescente'" @click="store.sortDirection = store.sortDirection === 'asc' ? 'desc' : 'asc'">{{ store.sortDirection === "asc" ? "↑" : "↓" }}</button>
-                        <label class="sr-only" for="task-subsort">Subordenação</label><select id="task-subsort" v-model="store.subsortBy"><option value="manual">Sem subordenação</option><option value="title">Subordem: título</option><option value="start">Subordem: início</option><option value="finish">Subordem: fim</option><option value="status">Subordem: status</option><option value="priority">Subordem: prioridade</option></select>
+                    <div class="command-popover-control">
+                        <button ref="sortButton" type="button" class="soft-btn command-popover-trigger" :aria-expanded="sortMenu" aria-haspopup="dialog" title="Ordenação" @click="sortMenu = !sortMenu; groupingMenu = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h11M8 12h8M8 19h5M4.5 4v16m0 0-2.5-2.5M4.5 20 7 17.5" /></svg><span>Ordenar</span></button>
+                        <section v-if="sortMenu" ref="sortMenuElement" class="command-popover" role="dialog" aria-label="Ordenação" @keydown.esc="sortMenu = false; sortButton?.focus()">
+                            <label>Ordenar por<select :value="store.sortBy" @change="updateSortBy(($event.target as HTMLSelectElement).value)"><option value="manual">Ordem manual</option><option value="title">Título</option><option value="start">Data inicial</option><option value="finish">Data final</option><option value="status">Status</option><option value="priority">Prioridade</option></select></label>
+                            <label>Direção<select v-model="store.sortDirection" :disabled="store.sortBy === 'manual'"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select></label>
+                            <hr />
+                            <label>Subordenação<select v-model="store.subsortBy" :disabled="store.sortBy === 'manual'"><option value="manual">Sem subordenação</option><option value="title">Título</option><option value="start">Data inicial</option><option value="finish">Data final</option><option value="status">Status</option><option value="priority">Prioridade</option></select></label>
+                            <label>Subdireção<select v-model="store.subsortDirection" :disabled="store.sortBy === 'manual' || store.subsortBy === 'manual'"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select></label>
+                        </section>
                     </div>
-                    <div class="view-control" aria-label="Agrupamento">
-                        <label class="sr-only" for="task-group">Agrupar tarefas</label>
-                        <select id="task-group" v-model="store.groupBy"><option value="none">Sem agrupamento</option><option value="status">Agrupar por status</option><option value="assignee">Agrupar por responsável</option><option value="priority">Agrupar por prioridade</option></select>
-                        <label class="sr-only" for="task-subgroup">Subagrupar tarefas</label>
-                        <select id="task-subgroup" v-model="store.subgroupBy"><option value="none">Sem subgrupo</option><option value="status">Subgrupo: status</option><option value="assignee">Subgrupo: responsável</option><option value="priority">Subgrupo: prioridade</option></select>
+                    <div class="command-popover-control">
+                        <button ref="groupingButton" type="button" class="soft-btn command-popover-trigger" :aria-expanded="groupingMenu" aria-haspopup="dialog" title="Agrupamento" @click="groupingMenu = !groupingMenu; sortMenu = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h6M17 9v6m-3-3h6" /></svg><span>Agrupar</span></button>
+                        <section v-if="groupingMenu" ref="groupingMenuElement" class="command-popover" role="dialog" aria-label="Agrupamento" @keydown.esc="groupingMenu = false; groupingButton?.focus()">
+                            <label>Agrupar por<select :value="store.groupBy" @change="updateGroupBy(($event.target as HTMLSelectElement).value)"><option value="none">Sem agrupamento</option><option value="status">Status</option><option value="assignee">Responsável</option><option value="priority">Prioridade</option><option value="date">Data</option></select></label>
+                            <hr />
+                            <label>Subagrupar por<select v-model="store.subgroupBy" :disabled="store.groupBy === 'none'"><option value="none">Sem subgrupo</option><option value="status">Status</option><option value="assignee">Responsável</option><option value="priority">Prioridade</option><option value="date">Data</option></select></label>
+                        </section>
                     </div>
                     <div v-if="activeView === 'gantt'" class="segmented">
                         <button
@@ -4189,6 +4236,9 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                     </div>
                 </div>
             </section>
+            <p v-if="store.search" id="task-search-result" class="task-search-result-inline" role="status">
+                {{ store.queryResultCount }} {{ store.queryResultCount === 1 ? "tarefa encontrada" : "tarefas encontradas" }}<template v-if="store.queryWarnings.length"> · {{ store.queryWarnings.join(" ") }}</template>
+            </p>
             <div v-if="store.stale" class="workspace-state" role="status">
                 <span
                     >Exibindo o último estado conhecido; a atualização remota
