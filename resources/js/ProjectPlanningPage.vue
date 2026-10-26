@@ -41,6 +41,7 @@ import {
 } from "./utils/timeblock-gesture";
 import { dependencyPath, dependencyStub } from "./utils/dependency-path";
 import { dependencyHighlight } from "./utils/dependency-highlight";
+import { floatingPosition, type FloatingPlacement } from "./utils/floating-position";
 import { parseTaskQuery, replaceTaskQueryField, type TaskQueryField } from "./utils/task-query";
 import { apiErrorMessage } from "./utils/api-error";
 import { parseSavedTaskView, parseViewsResponse } from "./contracts/task-views-contract";
@@ -333,6 +334,20 @@ const viewImportInput = ref<HTMLInputElement | null>(null);
 const viewNameInput = ref<HTMLInputElement | null>(null);
 type ImportedTaskView = { name: string; query: string; visualState: SavedTaskView["visualState"]; formatVersion: 1 };
 const viewImportDialog = ref<{ file: ImportedTaskView; existing: SavedTaskView | null } | null>(null);
+
+function positionedMenu(element: HTMLElement | null, anchor: DOMRect, placement: FloatingPlacement = "bottom-start") {
+    if (!element) return { top: Math.round(anchor.bottom + 8), left: Math.round(anchor.left) };
+    const bounds = element.getBoundingClientRect();
+    return floatingPosition(anchor, bounds, {
+        width: document.documentElement.clientWidth,
+        height: document.documentElement.clientHeight,
+    }, { placement });
+}
+
+function repositionColumnPicker(anchor = columnPickerButton.value?.getBoundingClientRect()) {
+    if (!anchor) return;
+    columnPickerPosition.value = positionedMenu(columnPickerMenu.value, anchor);
+}
 const querySuggestions = computed(() => [
     "status:aberta", "status:em-andamento", "status:atrasada", "status:bloqueada", "status:concluida",
     "responsavel:eu", "responsavel:sem", "responsavel:outros", "data:hoje", "data:amanha", "data:proximos-7-dias",
@@ -374,12 +389,16 @@ function toggleViewActions(event: MouseEvent, view: SavedTaskView) {
     }
     const trigger = event.currentTarget as HTMLElement;
     const bounds = trigger.getBoundingClientRect();
-    const width = 164;
     viewActionsMenu.value = {
         view,
-        top: Math.min(bounds.bottom + 4, window.innerHeight - 196),
-        left: Math.max(8, Math.min(bounds.right - width, window.innerWidth - width - 8)),
+        top: Math.round(bounds.bottom + 4),
+        left: Math.round(bounds.right - 164),
     };
+    void nextTick(() => {
+        if (!viewActionsMenu.value) return;
+        const position = positionedMenu(viewActionsMenuElement.value, bounds, "bottom-end");
+        viewActionsMenu.value = { ...viewActionsMenu.value, ...position };
+    });
 }
 function applySavedView(view: SavedTaskView) {
     store.search = view.query;
@@ -1434,11 +1453,12 @@ function toggleColumnsMenu(event: MouseEvent) {
             top: Math.round(rect.bottom + 6),
             left: Math.round(rect.left),
         };
-        void nextTick(() =>
+        void nextTick(() => {
+            repositionColumnPicker(rect);
             columnPickerMenu.value
                 ?.querySelector<HTMLElement>("input:not(:disabled)")
-                ?.focus(),
-        );
+                ?.focus();
+        });
     }
 }
 function workspaceColumnPosition(id: WorkspaceColumnId) {
@@ -1492,9 +1512,14 @@ function openChecklistPreview(task: Task, event: MouseEvent) {
     const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
     checklistPreview.value = {
         task,
-        top: Math.min(rect.bottom + 8, globalThis.innerHeight - 310),
-        left: Math.max(8, Math.min(rect.left - 112, globalThis.innerWidth - 320)),
+        top: Math.round(rect.bottom + 8),
+        left: Math.round(rect.left - 112),
     };
+    void nextTick(() => {
+        if (!checklistPreview.value) return;
+        const position = positionedMenu(checklistPreviewElement.value, rect, "bottom-start");
+        checklistPreview.value = { ...checklistPreview.value, ...position };
+    });
 }
 function keepChecklistPreviewOpen() {
     if (checklistPreviewCloseTimer === null) return;
@@ -1599,8 +1624,13 @@ function toggleQuickAssigneeMenu(task: Task, event: MouseEvent) {
     quickAssigneeMenu.value = {
         taskId: task.id,
         top: Math.round(rect.bottom + 6),
-        left: Math.round(Math.min(rect.left, globalThis.innerWidth - 226)),
+        left: Math.round(rect.left),
     };
+    void nextTick(() => {
+        if (!quickAssigneeMenu.value) return;
+        const position = positionedMenu(quickAssigneeMenuElement.value, rect);
+        quickAssigneeMenu.value = { ...quickAssigneeMenu.value, ...position };
+    });
 }
 async function assignQuickAssignee(assigneeId: string | null) {
     const menu = quickAssigneeMenu.value;
@@ -1878,12 +1908,17 @@ function isRowContextTarget(target: EventTarget | null) {
     );
 }
 function openTaskContextMenu(task: Task, x: number, y: number) {
-    const recurringOccurrence = task.kind === "task" && task.recurrence && task.occurrence;
     taskContextMenu.value = {
         task,
-        x: Math.max(8, Math.min(x, globalThis.innerWidth - 228)),
-        y: Math.max(8, Math.min(y, globalThis.innerHeight - (recurringOccurrence ? 270 : 188))),
+        x,
+        y,
     };
+    const anchor = { left: x, right: x, top: y, bottom: y } as DOMRect;
+    void nextTick(() => {
+        if (!taskContextMenu.value) return;
+        const position = positionedMenu(taskContextMenuElement.value, anchor);
+        taskContextMenu.value = { ...taskContextMenu.value, x: position.left, y: position.top };
+    });
 }
 function openTaskContextMenuFromMouse(task: Task, event: MouseEvent) {
     if (!isRowContextTarget(event.target)) return;
@@ -2799,12 +2834,16 @@ function handleViewportResize() {
         persistColumnPreferences();
     }
     if (columnsMenu.value && columnPickerButton.value) {
-        const rect = columnPickerButton.value.getBoundingClientRect();
-        columnPickerPosition.value = {
-            top: Math.round(rect.bottom + 6),
-            left: Math.round(rect.left),
-        };
+        repositionColumnPicker();
     }
+    // These menus are tied to a pointer or row. Closing them on resize avoids
+    // leaving a stale anchor outside the resized visual viewport.
+    checklistPreview.value = null;
+    quickAssigneeMenu.value = null;
+    taskContextMenu.value = null;
+    dependencyContextMenu.value = null;
+    dependencyPickerMenu.value = null;
+    viewActionsMenu.value = null;
     measureGantt();
 }
 function toggleEditorPinned() {
@@ -3024,12 +3063,6 @@ async function removeDependency(id: string) {
     }
     setTimeout(() => (toast.value = ""), 4000);
 }
-function dependencyMenuPosition(event: MouseEvent, width: number, height: number) {
-    return {
-        x: Math.max(8, Math.min(event.clientX, globalThis.innerWidth - width)),
-        y: Math.max(8, Math.min(event.clientY, globalThis.innerHeight - height)),
-    };
-}
 function overlappingDependencies(event: MouseEvent, fallback: Dependency): Dependency[] {
     const svg = (event.currentTarget as SVGPathElement).ownerSVGElement;
     const matrix = svg?.getScreenCTM();
@@ -3051,16 +3084,27 @@ function openDependencyContextMenu(dependency: Dependency, event: MouseEvent) {
     taskContextMenu.value = null;
     const candidates = overlappingDependencies(event, dependency);
     if (candidates.length > 1) {
-        const position = dependencyMenuPosition(event, 500, 260);
-        dependencyPickerMenu.value = { dependencies: candidates, ...position };
+        dependencyPickerMenu.value = { dependencies: candidates, x: event.clientX, y: event.clientY };
         dependencyContextMenu.value = null;
+        const anchor = { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY } as DOMRect;
+        void nextTick(() => {
+            if (!dependencyPickerMenu.value) return;
+            const position = positionedMenu(dependencyPickerMenuElement.value, anchor);
+            dependencyPickerMenu.value = { ...dependencyPickerMenu.value, x: position.left, y: position.top };
+        });
         return;
     }
-    const position = dependencyMenuPosition(event, 236, 188);
     dependencyContextMenu.value = {
         dependency,
-        ...position,
+        x: event.clientX,
+        y: event.clientY,
     };
+    const anchor = { left: event.clientX, right: event.clientX, top: event.clientY, bottom: event.clientY } as DOMRect;
+    void nextTick(() => {
+        if (!dependencyContextMenu.value) return;
+        const position = positionedMenu(dependencyContextMenuElement.value, anchor);
+        dependencyContextMenu.value = { ...dependencyContextMenu.value, x: position.left, y: position.top };
+    });
 }
 function selectDependencyFromPicker(dependency: Dependency) {
     const picker = dependencyPickerMenu.value;
@@ -3069,9 +3113,15 @@ function selectDependencyFromPicker(dependency: Dependency) {
     dependencyPickerHoverId.value = null;
     dependencyContextMenu.value = {
         dependency,
-        x: Math.min(picker.x, globalThis.innerWidth - 236),
-        y: Math.min(picker.y, globalThis.innerHeight - 188),
+        x: picker.x,
+        y: picker.y,
     };
+    const anchor = { left: picker.x, right: picker.x, top: picker.y, bottom: picker.y } as DOMRect;
+    void nextTick(() => {
+        if (!dependencyContextMenu.value) return;
+        const position = positionedMenu(dependencyContextMenuElement.value, anchor);
+        dependencyContextMenu.value = { ...dependencyContextMenu.value, x: position.left, y: position.top };
+    });
 }
 async function setDependencyTypeFromContext(type: RelationType) {
     const menu = dependencyContextMenu.value;

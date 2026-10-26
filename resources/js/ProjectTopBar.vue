@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { features } from './lib/features'
 import { apiFetch } from './lib/api'
@@ -7,6 +7,7 @@ import { connectivity } from './lib/api'
 import { initializeAppearancePreferences, spacing, textScale, updateSpacing, updateTextScale, type Spacing, type TextScale } from './composables/useAppearancePreferences'
 import { useAuthStore } from './stores/auth'
 import { useWorkspaceStore } from './stores/workspace'
+import { floatingPosition, type FloatingPlacement } from './utils/floating-position'
 
 type ProjectArea = 'planning' | 'documents'
 type PlanningView = 'tasks' | 'gantt'
@@ -35,16 +36,44 @@ const appearance = ref(false)
 const settingsMenu = ref(false)
 const appearanceWrap = ref<HTMLElement | null>(null)
 const settingsWrap = ref<HTMLElement | null>(null)
+const projectTrigger = ref<HTMLElement | null>(null)
+const appearanceTrigger = ref<HTMLElement | null>(null)
+const settingsTrigger = ref<HTMLElement | null>(null)
+const projectMenuElement = ref<HTMLElement | null>(null)
+const appearanceMenuElement = ref<HTMLElement | null>(null)
+const settingsMenuElement = ref<HTMLElement | null>(null)
+const projectMenuPosition = ref({ top: 0, left: 0 })
+const appearanceMenuPosition = ref({ top: 0, left: 0 })
+const settingsMenuPosition = ref({ top: 0, left: 0 })
+
+function positionMenu(trigger: HTMLElement | null, menu: HTMLElement | null, placement: FloatingPlacement) {
+  if (!trigger || !menu) return { top: 0, left: 0 }
+  return floatingPosition(trigger.getBoundingClientRect(), menu.getBoundingClientRect(), {
+    width: document.documentElement.clientWidth,
+    height: document.documentElement.clientHeight,
+  }, { placement, gap: 10 })
+}
+
+function toggleAppearance(): void {
+  appearance.value = !appearance.value
+  if (appearance.value) void nextTick(() => { appearanceMenuPosition.value = positionMenu(appearanceTrigger.value, appearanceMenuElement.value, 'bottom-end') })
+}
+
+function toggleSettingsMenu(): void {
+  settingsMenu.value = !settingsMenu.value
+  if (settingsMenu.value) void nextTick(() => { settingsMenuPosition.value = positionMenu(settingsTrigger.value, settingsMenuElement.value, 'bottom-end') })
+}
 
 function closeProjectMenuOnOutside(event: PointerEvent): void {
   const target = event.target as Node
-  if (projectMenu.value && !projectSwitcher.value?.contains(target)) projectMenu.value = false
-  if (appearance.value && !appearanceWrap.value?.contains(target)) appearance.value = false
-  if (settingsMenu.value && !settingsWrap.value?.contains(target)) settingsMenu.value = false
+  if (projectMenu.value && !projectSwitcher.value?.contains(target) && !projectMenuElement.value?.contains(target)) projectMenu.value = false
+  if (appearance.value && !appearanceWrap.value?.contains(target) && !appearanceMenuElement.value?.contains(target)) appearance.value = false
+  if (settingsMenu.value && !settingsWrap.value?.contains(target) && !settingsMenuElement.value?.contains(target)) settingsMenu.value = false
 }
 
 async function toggleProjectMenu(): Promise<void> {
   projectMenu.value = !projectMenu.value
+  if (projectMenu.value) void nextTick(() => { projectMenuPosition.value = positionMenu(projectTrigger.value, projectMenuElement.value, 'bottom-start') })
   if (!projectMenu.value || projects.value.length) return
 
   projectLoading.value = true
@@ -57,6 +86,8 @@ async function toggleProjectMenu(): Promise<void> {
     emit('notice', error instanceof Error ? error.message : 'Não foi possível carregar projetos.', 'error')
   } finally {
     projectLoading.value = false
+    await nextTick()
+    projectMenuPosition.value = positionMenu(projectTrigger.value, projectMenuElement.value, 'bottom-start')
   }
 }
 
@@ -78,11 +109,21 @@ function navigate(area: ProjectArea): void {
   void router.push(`/projects/${projectId}/${area === 'documents' ? 'documents' : props.planningView}`)
 }
 
+function handleViewportResize(): void {
+  if (projectMenu.value) projectMenuPosition.value = positionMenu(projectTrigger.value, projectMenuElement.value, 'bottom-start')
+  if (appearance.value) appearanceMenuPosition.value = positionMenu(appearanceTrigger.value, appearanceMenuElement.value, 'bottom-end')
+  if (settingsMenu.value) settingsMenuPosition.value = positionMenu(settingsTrigger.value, settingsMenuElement.value, 'bottom-end')
+}
+
 onMounted(() => {
   initializeAppearancePreferences()
   document.addEventListener('pointerdown', closeProjectMenuOnOutside)
+  window.addEventListener('resize', handleViewportResize)
 })
-onBeforeUnmount(() => document.removeEventListener('pointerdown', closeProjectMenuOnOutside))
+onBeforeUnmount(() => {
+  document.removeEventListener('pointerdown', closeProjectMenuOnOutside)
+  window.removeEventListener('resize', handleViewportResize)
+})
 </script>
 
 <template>
@@ -96,13 +137,13 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeProjectMe
     </button>
     <div ref="projectSwitcher" class="project-switcher">
       <span class="eyebrow">PROJETO</span>
-      <button :aria-expanded="projectMenu" aria-haspopup="listbox" @click="toggleProjectMenu">
+      <button ref="projectTrigger" :aria-expanded="projectMenu" aria-haspopup="listbox" @click="toggleProjectMenu">
         <span class="project-dot"></span>{{ workspace.workspace?.project.name || 'Carregando…' }}<span class="chevron">⌄</span>
       </button>
-      <div v-if="projectMenu" class="project-menu" role="listbox" aria-label="Projetos">
+      <Teleport to="body"><div v-if="projectMenu" ref="projectMenuElement" class="project-menu" role="listbox" aria-label="Projetos" :style="projectMenuPosition">
         <span v-if="projectLoading">Carregando projetos…</span>
         <button v-for="project in projects" :key="project.id" role="option" :aria-selected="project.id === workspace.workspace?.project.id" @click="switchProject(project)">{{ project.name }}</button>
-      </div>
+      </div></Teleport>
     </div>
     <nav class="project-view-nav" aria-label="Áreas do projeto">
       <button :class="{ active: activeArea === 'planning' }" @click="navigate('planning')">Planejamento</button>
@@ -110,16 +151,16 @@ onBeforeUnmount(() => document.removeEventListener('pointerdown', closeProjectMe
     </nav>
     <div class="top-actions">
       <div ref="appearanceWrap" class="appearance-wrap">
-        <button class="icon-btn appearance-btn" aria-label="Aparência" title="Aparência" @click="appearance = !appearance">A<span>a</span></button>
-        <div v-if="appearance" class="appearance-menu">
+        <button ref="appearanceTrigger" class="icon-btn appearance-btn" aria-label="Aparência" title="Aparência" @click="toggleAppearance">A<span>a</span></button>
+        <Teleport to="body"><div v-if="appearance" ref="appearanceMenuElement" class="appearance-menu" :style="appearanceMenuPosition">
           <b>Aparência</b>
           <label>Tamanho do texto<select :value="textScale" @change="updateTextScale(($event.target as HTMLSelectElement).value as TextScale)"><option value="compact">Menor</option><option value="comfortable">Confortável</option><option value="large">Maior</option></select></label>
           <label>Espaçamento<select :value="spacing" @change="updateSpacing(($event.target as HTMLSelectElement).value as Spacing)"><option value="compact">Compacto</option><option value="comfortable">Confortável</option><option value="spacious">Espaçoso</option></select></label>
-        </div>
+        </div></Teleport>
       </div>
       <div ref="settingsWrap" class="settings-wrap">
-        <button class="icon-btn settings-trigger" aria-label="Abrir configurações do projeto" title="Configurações" aria-haspopup="menu" :aria-expanded="settingsMenu" @click="settingsMenu = !settingsMenu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" /><path d="M19.4 13.15c.05-.38.05-.77 0-1.15l1.74-1.35-1.8-3.12-2.04.82a8.2 8.2 0 0 0-1-.58L16 5.6h-3.6l-.3 2.17c-.35.16-.68.35-1 .58l-2.04-.82-1.8 3.12L9 12c-.05.38-.05.77 0 1.15L7.26 14.5l1.8 3.12 2.04-.82c.32.23.65.42 1 .58l.3 2.17H16l.3-2.17c.35-.16.68-.35 1-.58l2.04.82 1.8-3.12-1.74-1.35Z" /></svg></button>
-        <div v-if="settingsMenu" class="settings-menu" role="menu" aria-label="Configurações do projeto"><button role="menuitem" :disabled="!connectivity.online.value" @click="settingsMenu = false; emit('manageMembers')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg><span>Responsáveis</span></button></div>
+        <button ref="settingsTrigger" class="icon-btn settings-trigger" aria-label="Abrir configurações do projeto" title="Configurações" aria-haspopup="menu" :aria-expanded="settingsMenu" @click="toggleSettingsMenu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.25a3.25 3.25 0 1 0 0-6.5 3.25 3.25 0 0 0 0 6.5Z" /><path d="M19.4 13.15c.05-.38.05-.77 0-1.15l1.74-1.35-1.8-3.12-2.04.82a8.2 8.2 0 0 0-1-.58L16 5.6h-3.6l-.3 2.17c-.35.16-.68.35-1 .58l-2.04-.82-1.8 3.12L9 12c-.05.38-.05.77 0 1.15L7.26 14.5l1.8 3.12-2.04.82c.32.23.65.42 1 .58l.3 2.17H16l.3-2.17c.35-.16.68-.35 1-.58l2.04.82 1.8-3.12-1.74-1.35Z" /></svg></button>
+        <Teleport to="body"><div v-if="settingsMenu" ref="settingsMenuElement" class="settings-menu" role="menu" aria-label="Configurações do projeto" :style="settingsMenuPosition"><button role="menuitem" :disabled="!connectivity.online.value" @click="settingsMenu = false; emit('manageMembers')"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg><span>Responsáveis</span></button></div></Teleport>
       </div>
       <button class="avatar" aria-label="Abrir sessões e configurações da conta" @click="emit('account')">{{ (auth.user?.name || auth.user?.email || '').slice(0, 2).toUpperCase() }}</button>
     </div>

@@ -2727,6 +2727,36 @@ body.resizing-task-column * {
   height: 25px;
 }
 
+/* Menus que permanecem ancorados no fluxo nunca podem vazar a viewport. */
+.column-picker-popover,
+.checklist-preview-popover,
+.quick-assignee-popover,
+.task-context-menu,
+.dependency-picker-menu {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+}
+
+.task-context-menu { min-width: min(220px, calc(100vw - 16px)); }
+
+.hierarchy-menu,
+.creation-menu,
+.editor-priority-menu,
+.comments-window-layout-menu {
+  max-width: calc(100vw - 16px);
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+
+/* The filter panel is not teleported; keeping it against the viewport edge
+   avoids its old fixed right offset overflowing medium-width layouts. */
+.filter-popover {
+  right: 12px;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100dvh - 96px);
+  overflow: auto;
+}
+
 .workspace-view-control {
   display: flex;
   align-items: center;
