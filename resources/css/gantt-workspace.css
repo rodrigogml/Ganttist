@@ -2831,7 +2831,7 @@ body.resizing-task-column * {
 
 .task-list-card {
   display: grid;
-  grid-template-columns: 28px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 3px 8px;
   padding: 13px 14px;
   border: 1px solid #e1e3eb;
@@ -2934,9 +2934,80 @@ body.resizing-task-column * {
   width: 26px;
   height: 26px;
   place-items: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 
 .task-list-assignee--empty { color: #abb2bf; }
+
+.task-list-assignee:hover:not(:disabled),
+.task-list-assignee:focus-visible,
+.task-list-priority-control:hover:not(:disabled),
+.task-list-priority-control:focus-visible {
+  background: var(--button-accent-surface);
+  color: var(--button-accent-text);
+  outline: none;
+}
+
+.task-list-assignee:disabled,
+.task-list-priority-control:disabled { cursor: default; opacity: .55; }
+
+.task-list-priority-control {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 0;
+  border-radius: 7px;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.task-list-priority-control .priority-flag-icon { width: 18px; height: 24px; }
+
+.quick-priority-popover {
+  position: fixed;
+  z-index: 110;
+  display: grid;
+  width: min(178px, calc(100vw - 16px));
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+  padding: 7px;
+  border: 1px solid #dddfea;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 16px 38px #18203426;
+  color: var(--ink);
+}
+
+.quick-priority-popover > b { padding: 5px 6px 8px; border-bottom: 1px solid #eceef3; font-size: 11px; }
+
+.quick-priority-popover button {
+  display: flex;
+  min-height: 35px;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: transparent;
+  color: #3f4658;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.quick-priority-popover button:hover:not(:disabled),
+.quick-priority-popover button:focus-visible,
+.quick-priority-popover button.active { background: var(--button-accent-surface); outline: none; }
+.quick-priority-popover button:disabled { opacity: .55; cursor: wait; }
+.quick-priority-popover .priority-flag-icon { width: 18px; height: 24px; }
 
 .task-list-comments {
   display: inline-flex;

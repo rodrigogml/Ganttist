@@ -524,6 +524,7 @@ const hierarchyButton = ref<HTMLElement | null>(null),
     taskContextMenuElement = ref<HTMLElement | null>(null),
     dependencyContextMenuElement = ref<HTMLElement | null>(null),
     dependencyPickerMenuElement = ref<HTMLElement | null>(null),
+    quickPriorityMenuElement = ref<HTMLElement | null>(null),
     editorPriorityWrap = ref<HTMLElement | null>(null);
 const quickAssigneeMenu = ref<{
     taskId: string;
@@ -531,6 +532,12 @@ const quickAssigneeMenu = ref<{
     left: number;
 } | null>(null);
 const quickAssigneeBusy = ref(false);
+const quickPriorityMenu = ref<{
+    taskId: string;
+    top: number;
+    left: number;
+} | null>(null);
+const quickPriorityBusy = ref(false);
 const taskContextMenu = ref<{ task: Task; x: number; y: number } | null>(null),
     taskContextBusy = ref(false),
     dependencyContextMenu = ref<{ dependency: Dependency; x: number; y: number } | null>(null),
@@ -575,6 +582,7 @@ watch(canMutateProject, (allowed) => {
     taskContextMenu.value = null;
     dependencyContextMenu.value = null;
     dependencyPickerMenu.value = null;
+    quickPriorityMenu.value = null;
     sectionDeleteDialog.value = null;
     relationModal.value = null;
     dependencyConfirmation.value = null;
@@ -1603,6 +1611,12 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
     )
         quickAssigneeMenu.value = null;
     if (
+        quickPriorityMenu.value &&
+        !quickPriorityMenuElement.value?.contains(target) &&
+        !(target instanceof Element && target.closest("[data-quick-priority-trigger]"))
+    )
+        quickPriorityMenu.value = null;
+    if (
         editorPriorityMenu.value &&
         !editorPriorityWrap.value?.contains(target)
     )
@@ -1630,6 +1644,24 @@ function toggleQuickAssigneeMenu(task: Task, event: MouseEvent) {
         if (!quickAssigneeMenu.value) return;
         const position = positionedMenu(quickAssigneeMenuElement.value, rect);
         quickAssigneeMenu.value = { ...quickAssigneeMenu.value, ...position };
+    });
+}
+function toggleQuickPriorityMenu(task: Task, event: MouseEvent) {
+    if (!canMutateProject.value) return;
+    if (quickPriorityMenu.value?.taskId === task.id) {
+        quickPriorityMenu.value = null;
+        return;
+    }
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    quickPriorityMenu.value = {
+        taskId: task.id,
+        top: Math.round(rect.bottom + 6),
+        left: Math.round(rect.left),
+    };
+    void nextTick(() => {
+        if (!quickPriorityMenu.value) return;
+        const position = positionedMenu(quickPriorityMenuElement.value, rect);
+        quickPriorityMenu.value = { ...quickPriorityMenu.value, ...position };
     });
 }
 async function assignQuickAssignee(assigneeId: string | null) {
@@ -1669,6 +1701,27 @@ async function assignQuickAssignee(assigneeId: string | null) {
         );
     } finally {
         quickAssigneeBusy.value = false;
+    }
+}
+async function setQuickPriority(priority: 1 | 2 | 3 | 4) {
+    const menu = quickPriorityMenu.value;
+    const task = store.workspace?.tasks.find((item) => item.id === menu?.taskId);
+    if (!canMutateProject.value || !menu || !task || task.kind !== "task" || quickPriorityBusy.value) return;
+    if ((task.priority ?? 1) === priority) {
+        quickPriorityMenu.value = null;
+        return;
+    }
+    quickPriorityBusy.value = true;
+    try {
+        await persistTask({ ...task, priority });
+        await store.load();
+        quickPriorityMenu.value = null;
+        showToast("Prioridade atualizada", "success");
+    } catch (error) {
+        showToast(error instanceof Error ? error.message : "Não foi possível atualizar a prioridade.", "error");
+    } finally {
+        quickPriorityBusy.value = false;
+        setTimeout(() => (toast.value = ""), 3500);
     }
 }
 function structureDescendsFrom(task: Task, ancestorId: string) {
@@ -2840,6 +2893,7 @@ function handleViewportResize() {
     // leaving a stale anchor outside the resized visual viewport.
     checklistPreview.value = null;
     quickAssigneeMenu.value = null;
+    quickPriorityMenu.value = null;
     taskContextMenu.value = null;
     dependencyContextMenu.value = null;
     dependencyPickerMenu.value = null;
@@ -4404,6 +4458,33 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                 </section>
             </Teleport>
 
+            <Teleport to="body">
+                <section
+                    v-if="quickPriorityMenu"
+                    ref="quickPriorityMenuElement"
+                    class="quick-priority-popover"
+                    role="menu"
+                    aria-label="Definir prioridade"
+                    :style="{
+                        top: quickPriorityMenu.top + 'px',
+                        left: quickPriorityMenu.left + 'px',
+                    }"
+                    @keydown.esc="quickPriorityMenu = null"
+                >
+                    <b>Definir prioridade</b>
+                    <button
+                        v-for="option in taskPriorityOptions"
+                        :key="option.priority"
+                        type="button"
+                        role="menuitemradio"
+                        :class="[option.flag, { active: (store.workspace?.tasks.find((task) => task.id === quickPriorityMenu?.taskId)?.priority ?? 1) === option.priority }]"
+                        :aria-checked="(store.workspace?.tasks.find((task) => task.id === quickPriorityMenu?.taskId)?.priority ?? 1) === option.priority"
+                        :disabled="quickPriorityBusy"
+                        @click="setQuickPriority(option.priority)"
+                    ><svg class="priority-flag-icon" :class="option.flag" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg><span>{{ option.label }}</span></button>
+                </section>
+            </Teleport>
+
             <Teleport to="body"
                 ><section
                     v-if="taskContextMenu"
@@ -4560,21 +4641,10 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         :class="['task-list-card', task.status]"
                         tabindex="0"
                         @click="openTask(task)"
+                        @contextmenu="openTaskContextMenuFromMouse(task, $event)"
                         @keydown.enter.prevent="openTask(task)"
                     >
-                        <svg
-                            v-if="taskListPriorityLevel(task)"
-                            class="task-list-priority priority-flag-icon"
-                            :class="`p${taskListPriorityLevel(task)}`"
-                            viewBox="0 0 18 28"
-                            role="img"
-                            :aria-label="`Prioridade P${taskListPriorityLevel(task)}`"
-                        >
-                            <title>Prioridade P{{ taskListPriorityLevel(task) }}</title>
-                            <path class="flag-pole" d="M4 2.5 V25.5" />
-                            <path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z" />
-                        </svg>
-                        <div :class="['task-list-copy', { 'without-priority': !taskListPriorityLevel(task) }]">
+                        <div class="task-list-copy">
                             <b :title="task.title">{{ task.title }}</b>
                             <p v-if="task.description" :title="task.description">{{ task.description }}</p>
                             <p v-else class="task-list-description-empty" aria-hidden="true"></p>
@@ -4588,8 +4658,8 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                                 </span>
                             </div>
                             <div class="task-list-meta-right">
-                                <span v-if="task.assignee" class="task-list-assignee" :title="`Responsável: ${task.assignee}`" :aria-label="`Responsável: ${task.assignee}`"><span class="mini-avatar">{{ assigneeInitials(task.assignee) }}</span></span>
-                                <span v-else class="task-list-assignee task-list-assignee--empty" title="Sem responsável" aria-label="Sem responsável"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg></span>
+                                <button type="button" class="task-list-priority-control" data-quick-priority-trigger :disabled="!canMutateProject" :aria-expanded="quickPriorityMenu?.taskId === task.id" aria-haspopup="menu" :aria-label="`Prioridade: ${taskPriorityOptions.find((option) => option.priority === (task.priority ?? 1))?.label ?? 'Prioridade 4'}. Alterar prioridade`" :title="`Alterar prioridade`" @click.stop="toggleQuickPriorityMenu(task, $event)"><svg class="priority-flag-icon" :class="taskPriorityOptions.find((option) => option.priority === (task.priority ?? 1))?.flag ?? 'p4'" viewBox="0 0 18 28" aria-hidden="true"><path class="flag-pole" d="M4 2.5 V25.5"></path><path class="flag-cloth" d="M5 4 H16 L13 8.5 L16 13 H5 Z"></path></svg></button>
+                                <button type="button" class="task-list-assignee" data-quick-assignee-trigger :disabled="!canQuickAssign" :aria-expanded="quickAssigneeMenu?.taskId === task.id" aria-haspopup="menu" :title="task.assignee ? `Responsável: ${task.assignee}` : 'Sem responsável'" :aria-label="task.assignee ? `Responsável: ${task.assignee}. Alterar responsável` : 'Sem responsável. Definir responsável'" @click.stop="toggleQuickAssigneeMenu(task, $event)"><span v-if="task.assignee" class="mini-avatar">{{ assigneeInitials(task.assignee) }}</span><svg v-else viewBox="0 0 24 24" aria-hidden="true"><path d="M20 21a8 8 0 0 0-16 0M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z" /></svg></button>
                                 <button v-if="(task.comment_count ?? 0) > 0" type="button" class="task-list-comments task-list-comments--count" :aria-label="`Abrir ${task.comment_count} comentário(s)`" :title="`${task.comment_count} comentário(s)`" @click.stop="openComments(task)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg>{{ task.comment_count }}</button>
                                 <button v-else type="button" class="task-list-comments" aria-label="Abrir comentários: nenhum comentário" title="Sem comentários" @click.stop="openComments(task)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18.5 3.5 21l4.1-1.35A8.8 8.8 0 1 0 5 18.5Z" /><path d="M8 12h.01M12 12h.01M16 12h.01" /></svg></button>
                             </div>
