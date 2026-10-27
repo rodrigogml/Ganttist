@@ -327,6 +327,8 @@ type SavedTaskView = {
 const savedViews = ref<SavedTaskView[]>([]);
 const activeSavedViewId = ref<string | null>(null);
 const viewsMenuPosition = ref({ top: 0, left: 0 });
+const sortMenuPosition = ref({ top: 0, left: 0 });
+const groupingMenuPosition = ref({ top: 0, left: 0 });
 const viewActionsMenu = ref<{ view: SavedTaskView; top: number; left: number } | null>(null);
 const loadingViews = ref(false);
 const viewDialog = ref<{ mode: "create" | "duplicate" | "rename"; name: string; source: SavedTaskView | null } | null>(null);
@@ -401,15 +403,69 @@ function toggleViewActions(event: MouseEvent, view: SavedTaskView) {
         viewActionsMenu.value = { ...viewActionsMenu.value, ...position };
     });
 }
-function toggleViewsMenu() {
-    viewsMenu.value = !viewsMenu.value;
+function closeViewsMenu() {
+    viewsMenu.value = false;
     viewActionsMenu.value = null;
-    if (!viewsMenu.value) return;
+}
+function openViewsMenu() {
     const anchor = viewsButton.value?.getBoundingClientRect();
     if (!anchor) return;
+    const viewport = {
+        width: document.documentElement.clientWidth,
+        height: document.documentElement.clientHeight,
+    };
+    // The teleported menu is not measurable until Vue has rendered it. Give it
+    // an anchored, viewport-safe position first so it never flashes at (0, 0).
+    viewsMenuPosition.value = floatingPosition(anchor, {
+        width: Math.min(400, viewport.width - 24),
+        height: Math.min(560, viewport.height - 32),
+    }, viewport, { placement: "bottom-end" });
+    viewsMenu.value = true;
     void nextTick(() => {
         if (!viewsMenu.value) return;
         viewsMenuPosition.value = positionedMenu(viewsMenuElement.value, anchor, "bottom-end");
+    });
+}
+function toggleViewsMenu() {
+    if (viewsMenu.value) closeViewsMenu();
+    else openViewsMenu();
+}
+function initialCommandMenuPosition(anchor: DOMRect) {
+    const viewport = {
+        width: document.documentElement.clientWidth,
+        height: document.documentElement.clientHeight,
+    };
+    return floatingPosition(anchor, {
+        width: Math.min(280, viewport.width - 24),
+        height: Math.min(320, viewport.height - 32),
+    }, viewport, { placement: "bottom-end" });
+}
+function toggleSortMenu() {
+    if (sortMenu.value) {
+        sortMenu.value = false;
+        return;
+    }
+    groupingMenu.value = false;
+    const anchor = sortButton.value?.getBoundingClientRect();
+    if (!anchor) return;
+    sortMenuPosition.value = initialCommandMenuPosition(anchor);
+    sortMenu.value = true;
+    void nextTick(() => {
+        if (sortMenu.value) sortMenuPosition.value = positionedMenu(sortMenuElement.value, anchor, "bottom-end");
+    });
+}
+function toggleGroupingMenu() {
+    if (groupingMenu.value) {
+        groupingMenu.value = false;
+        return;
+    }
+    sortMenu.value = false;
+    const anchor = groupingButton.value?.getBoundingClientRect();
+    if (!anchor) return;
+    groupingMenuPosition.value = initialCommandMenuPosition(anchor);
+    groupingMenu.value = true;
+    void nextTick(() => {
+        if (groupingMenu.value) groupingMenuPosition.value = positionedMenu(groupingMenuElement.value, anchor, "bottom-end");
     });
 }
 function applySavedView(view: SavedTaskView) {
@@ -1622,8 +1678,7 @@ function closeFloatingMenusOnOutside(event: PointerEvent) {
         !viewActionsMenuElement.value?.contains(target)
     )
     {
-        viewsMenu.value = false;
-        viewActionsMenu.value = null;
+        closeViewsMenu();
     }
     if (
         taskContextMenu.value &&
@@ -1884,7 +1939,7 @@ function stopStructureDrag() {
     structureDrag.value = null;
 }
 function startStructureDrag(task: Task, event: PointerEvent) {
-    if (!canMoveStructure.value || event.button !== 0) return;
+    if (!canMoveStructure.value || event.button !== 0 || event.pointerType === "touch") return;
     event.preventDefault();
     event.stopPropagation();
     cancelTaskContextLongPress();
@@ -2945,6 +3000,8 @@ function handleViewportResize() {
     dependencyPickerMenu.value = null;
     viewActionsMenu.value = null;
     viewsMenu.value = false;
+    sortMenu.value = false;
+    groupingMenu.value = false;
     measureGantt();
 }
 function toggleEditorPinned() {
@@ -3470,6 +3527,7 @@ function gestureKeydown(event: KeyboardEvent) {
     }
 }
 function startDrag(task: Task, event: PointerEvent) {
+    if (event.pointerType === "touch") return;
     if (!canMoveTask(task)) {
         if (isDeadlineAnchoredTask(task))
             showToast(
@@ -3497,6 +3555,7 @@ function startDrag(task: Task, event: PointerEvent) {
         installGestureListeners();
 }
 function startResize(task: Task, edge: TimeEndpoint, event?: PointerEvent) {
+    if (event?.pointerType === "touch") return;
     if (!canResizeTask(task)) return;
     event?.preventDefault();
     event?.stopPropagation();
@@ -3653,6 +3712,7 @@ function startConnection(
     endpoint: TimeEndpoint,
     event?: PointerEvent,
 ) {
+    if (event?.pointerType === "touch") return;
     if (!canConnectFrom(task)) return;
     event?.preventDefault();
     event?.stopPropagation();
@@ -4126,7 +4186,7 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         <button ref="viewsButton" type="button" class="soft-btn views-trigger" aria-label="Abrir views" title="Views" :aria-expanded="viewsMenu" aria-haspopup="dialog" @click="toggleViewsMenu">
                             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="4" width="17" height="15.5" rx="2" /><path d="M8 4v15.5M11 8h5.5M11 12h5.5M11 16h3" /></svg>
                         </button>
-                        <Teleport to="body"><div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" :style="viewsMenuPosition" @keydown.esc="viewsMenu = false; viewActionsMenu = null; viewsButton?.focus()">
+                        <Teleport to="body"><div v-if="viewsMenu" ref="viewsMenuElement" class="hierarchy-menu saved-views-menu" role="dialog" aria-label="Views salvas" :style="{ top: `${viewsMenuPosition.top}px`, left: `${viewsMenuPosition.left}px` }" @keydown.esc="closeViewsMenu(); viewsButton?.focus()">
                             <header>
                                 <div><b>Views</b><small>Configurações privadas deste projeto.</small></div>
                                 <div class="saved-views-header-actions">
@@ -4161,23 +4221,21 @@ function showTopBarNotice(message: string, kind: ToastKind) {
                         </Teleport>
                         <input ref="viewImportInput" class="sr-only" type="file" accept="application/json,.json" @change="importSavedView" />
                     </div>
-                    <div class="command-popover-control">
-                        <button ref="sortButton" type="button" class="soft-btn command-popover-trigger" :aria-expanded="sortMenu" aria-haspopup="dialog" title="Ordenação" @click="sortMenu = !sortMenu; groupingMenu = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h11M8 12h8M8 19h5M4.5 4v16m0 0-2.5-2.5M4.5 20 7 17.5" /></svg><span>Ordenar</span></button>
-                        <section v-if="sortMenu" ref="sortMenuElement" class="command-popover" role="dialog" aria-label="Ordenação" @keydown.esc="sortMenu = false; sortButton?.focus()">
+                    <div class="command-popover-bar" aria-label="Organização das tarefas">
+                        <button ref="sortButton" type="button" class="soft-btn command-popover-trigger" :aria-expanded="sortMenu" aria-haspopup="dialog" aria-label="Ordenar tarefas" title="Ordenar tarefas" @click="toggleSortMenu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h11M8 12h8M8 19h5M4.5 4v16m0 0-2.5-2.5M4.5 20 7 17.5" /></svg></button>
+                        <button ref="groupingButton" type="button" class="soft-btn command-popover-trigger" :aria-expanded="groupingMenu" aria-haspopup="dialog" aria-label="Agrupar tarefas" title="Agrupar tarefas" @click="toggleGroupingMenu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h6M17 9v6m-3-3h6" /></svg></button>
+                        <Teleport to="body"><section v-if="sortMenu" ref="sortMenuElement" class="command-popover" role="dialog" aria-label="Ordenação" :style="{ top: `${sortMenuPosition.top}px`, left: `${sortMenuPosition.left}px` }" @keydown.esc="sortMenu = false; sortButton?.focus()">
                             <label>Ordenar por<select :value="store.sortBy" @change="updateSortBy(($event.target as HTMLSelectElement).value)"><option value="manual">Ordem manual</option><option value="title">Título</option><option value="start">Data inicial</option><option value="finish">Data final</option><option value="status">Status</option><option value="priority">Prioridade</option></select></label>
                             <label>Direção<select v-model="store.sortDirection" :disabled="store.sortBy === 'manual'"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select></label>
                             <hr />
                             <label>Subordenação<select v-model="store.subsortBy" :disabled="store.sortBy === 'manual'"><option value="manual">Sem subordenação</option><option value="title">Título</option><option value="start">Data inicial</option><option value="finish">Data final</option><option value="status">Status</option><option value="priority">Prioridade</option></select></label>
                             <label>Subdireção<select v-model="store.subsortDirection" :disabled="store.sortBy === 'manual' || store.subsortBy === 'manual'"><option value="asc">Crescente</option><option value="desc">Decrescente</option></select></label>
-                        </section>
-                    </div>
-                    <div class="command-popover-control">
-                        <button ref="groupingButton" type="button" class="soft-btn command-popover-trigger" :aria-expanded="groupingMenu" aria-haspopup="dialog" title="Agrupamento" @click="groupingMenu = !groupingMenu; sortMenu = false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h10M4 19h6M17 9v6m-3-3h6" /></svg><span>Agrupar</span></button>
-                        <section v-if="groupingMenu" ref="groupingMenuElement" class="command-popover" role="dialog" aria-label="Agrupamento" @keydown.esc="groupingMenu = false; groupingButton?.focus()">
+                        </section></Teleport>
+                        <Teleport to="body"><section v-if="groupingMenu" ref="groupingMenuElement" class="command-popover" role="dialog" aria-label="Agrupamento" :style="{ top: `${groupingMenuPosition.top}px`, left: `${groupingMenuPosition.left}px` }" @keydown.esc="groupingMenu = false; groupingButton?.focus()">
                             <label>Agrupar por<select :value="store.groupBy" @change="updateGroupBy(($event.target as HTMLSelectElement).value)"><option value="none">Sem agrupamento</option><option value="status">Status</option><option value="assignee">Responsável</option><option value="priority">Prioridade</option><option value="date">Data</option></select></label>
                             <hr />
                             <label>Subagrupar por<select v-model="store.subgroupBy" :disabled="store.groupBy === 'none'"><option value="none">Sem subgrupo</option><option value="status">Status</option><option value="assignee">Responsável</option><option value="priority">Prioridade</option><option value="date">Data</option></select></label>
-                        </section>
+                        </section></Teleport>
                     </div>
                     <div v-if="activeView === 'gantt'" class="segmented">
                         <button

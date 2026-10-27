@@ -2094,16 +2094,18 @@ body.resizing-task-column * {
   white-space: nowrap;
 }
 
-.command-popover-control { position: relative; }
-.command-popover-trigger { display: inline-flex; align-items: center; gap: 6px; }
+.command-popover-bar { display: flex; align-items: center; }
+.command-popover-trigger { display: inline-grid; width: 38px; min-width: 38px; place-items: center; padding: 0; }
+.command-popover-bar .command-popover-trigger { border-radius: 0; }
+.command-popover-bar .command-popover-trigger + .command-popover-trigger { border-left: 0; }
+.command-popover-bar .command-popover-trigger:first-child { border-radius: 9px 0 0 9px; }
+.command-popover-bar .command-popover-trigger:last-child { border-radius: 0 9px 9px 0; }
 .command-popover-trigger svg { width: 17px; height: 17px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .command-popover-trigger[aria-expanded="true"] { border-color: var(--button-accent-border); background: var(--button-accent-surface); color: var(--button-accent-text); }
 
 .command-popover {
-  position: absolute;
+  position: fixed;
   z-index: 75;
-  top: calc(100% + 7px);
-  right: 0;
   display: grid;
   width: min(280px, calc(100vw - 24px));
   max-height: calc(100dvh - 32px);
